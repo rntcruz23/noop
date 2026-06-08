@@ -17,6 +17,23 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 1.28 — Health Connect: correct source label + workout types (Android)
+
+- **Fixed (Android): Health Connect data showed under the "Apple Health" pill on Today** (issue #53,
+  follow-up to #34). The Today provenance footer unioned `apple-health` + `health-connect` into one
+  "Apple Health" row. It now keeps them separate — a dedicated **Health Connect** row (its own counts +
+  tint) alongside Apple Health — matching the Data Sources screen. `TodayFooterState` gained
+  `hcDays`/`hcWorkouts`; the construction splits the two sources; the recent-workouts feed still unions all.
+
+- **Fixed (Android): Health Connect workout types were mislabelled** (issue #53) — e.g. a **walking**
+  session showed as **swimming**. The `EXERCISE_TYPE_NAMES` map had **wrong hardcoded integers**: `79`
+  was mapped to "Swimming" but `79` is actually `WALKING`; `80` ("Swimming") is `WATER_POLO`; `82`
+  ("Walking") is `WHEELCHAIR`; and yoga/HIIT/boxing/hiking/weightlifting were wrong too. The map now
+  references `ExerciseSessionRecord.EXERCISE_TYPE_*` **constants** directly, so the int↔label mapping is
+  resolved by the library and a renamed/removed constant is a compile error rather than a silent
+  mismatch. New imports are correct immediately; **re-import Health Connect data to relabel** sessions
+  imported before this fix (the sport name is stored at import time).
+
 ## 1.27 — Wrist alerts work on Android
 
 - **Fixed (Android): wrist alerts couldn't be enabled — NOOP didn't appear in Notification Access**

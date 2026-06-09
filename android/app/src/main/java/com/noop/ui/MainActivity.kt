@@ -167,6 +167,16 @@ object NoopPrefs {
         of(context).edit().putLong(KEY_HC_LAST_SYNC, epochMs).apply()
     }
 
+    /** Health Connect writeback (NOOP's computed metrics → HC, for other apps). Default OFF. */
+    const val KEY_HC_WRITEBACK = "noop.hcWriteback"
+
+    fun hcWriteback(context: Context): Boolean =
+        of(context).getBoolean(KEY_HC_WRITEBACK, false)
+
+    fun setHcWriteback(context: Context, enabled: Boolean) {
+        of(context).edit().putBoolean(KEY_HC_WRITEBACK, enabled).apply()
+    }
+
     /** Smart alarm: arm the strap's firmware alarm to buzz at a wake time. Default off; default time 07:00. */
     const val KEY_SMART_ALARM = "noop.smartAlarmEnabled"
     const val KEY_SMART_ALARM_MINUTES = "noop.smartAlarmMinutes"

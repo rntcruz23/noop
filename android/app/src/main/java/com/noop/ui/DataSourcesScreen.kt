@@ -50,6 +50,7 @@ import com.noop.data.DataBackup
 import com.noop.data.ImportSummary
 import com.noop.ingest.AppleHealthImporter
 import com.noop.ingest.HealthConnectImporter
+import com.noop.ingest.HealthConnectWriter
 import com.noop.ingest.WhoopCsvImporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -87,6 +88,7 @@ fun DataSourcesScreen(vm: AppViewModel) {
     val hcAutoSync by vm.hcAutoSync.collectAsStateWithLifecycle()
     val hcSyncHours by vm.hcSyncHours.collectAsStateWithLifecycle()
     val hcLastSync by vm.hcLastSync.collectAsStateWithLifecycle()
+    val hcWriteback by vm.hcWriteback.collectAsStateWithLifecycle()
 
     // Cached-store counts, loaded once from the repo (newest data is fine to recount).
     var whoopDays by remember { mutableStateOf<Int?>(null) }
@@ -214,6 +216,33 @@ fun DataSourcesScreen(vm: AppViewModel) {
         }
     }
 
+    // Writeback (computed metrics → Health Connect): WRITE permissions, requested only when the
+    // user opts in. Denial flips the toggle back off so the UI never claims it's writing.
+    val hcWritePermissionLauncher = rememberLauncherForActivityResult(
+        PermissionController.createRequestPermissionResultContract(),
+    ) { granted ->
+        if (granted.containsAll(HealthConnectWriter.PERMISSIONS)) {
+            vm.writebackHealthConnectNow()
+        } else {
+            vm.setHcWriteback(false)
+            Toast.makeText(context, "Health Connect write access not granted.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Write immediately if the write permissions are already granted, otherwise request them first.
+    fun startWriteback() {
+        scope.launch {
+            val granted = runCatching {
+                HealthConnectImporter.client(context).permissionController.getGrantedPermissions()
+            }.getOrDefault(emptySet())
+            if (granted.containsAll(HealthConnectWriter.PERMISSIONS)) {
+                vm.writebackHealthConnectNow()
+            } else {
+                hcWritePermissionLauncher.launch(HealthConnectWriter.PERMISSIONS)
+            }
+        }
+    }
+
     ScreenScaffold(
         title = "Data Sources",
         subtitle = "Everything stays on this phone. Bring your history in once, then it's yours.",
@@ -274,8 +303,8 @@ fun DataSourcesScreen(vm: AppViewModel) {
             title = "Health Connect",
             icon = Icons.Filled.MonitorHeart,
             subtitle = "Pull steps, heart rate, HRV, sleep, SpO₂, weight and workouts straight from " +
-                "Android's Health Connect — no file needed. Read-only, on-device; it never overwrites " +
-                "richer WHOOP data.",
+                "Android's Health Connect — no file needed. On-device; it never overwrites richer " +
+                "WHOOP data, and writes nothing unless you opt in to sharing back below.",
         ) {
             val hasHc = (hcDays ?: 0) > 0 || (hcWorkouts ?: 0) > 0
             if (hasHc) {
@@ -349,6 +378,43 @@ fun DataSourcesScreen(vm: AppViewModel) {
                         else DateUtils.getRelativeTimeSpanString(hcLastSync).toString(),
                         style = NoopType.footnote,
                         color = Palette.textTertiary,
+                    )
+                }
+
+                // Writeback: the inverse direction. Opt-in, default OFF, computed metrics only.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Share back to Health Connect", style = NoopType.subhead, color = Palette.textPrimary)
+                        Text(
+                            "Write the nightly metrics NOOP computes from your strap (resting HR, " +
+                                "HRV, SpO₂, respiratory rate) into Health Connect so other apps can " +
+                                "use them. Only NOOP's own computed values — imported data is never " +
+                                "echoed back.",
+                            style = NoopType.footnote,
+                            color = Palette.textTertiary,
+                        )
+                    }
+                    Switch(
+                        checked = hcWriteback,
+                        onCheckedChange = { on ->
+                            vm.setHcWriteback(on)
+                            // Ensure write permissions (and an immediate first write) when turning on.
+                            if (on) startWriteback()
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Palette.surfaceBase,
+                            checkedTrackColor = Palette.accent,
+                            uncheckedThumbColor = Palette.textSecondary,
+                            uncheckedTrackColor = Palette.surfaceInset,
+                            uncheckedBorderColor = Palette.hairline,
+                        ),
+                        modifier = Modifier.semantics {
+                            contentDescription = "Share computed metrics back to Health Connect"
+                        },
                     )
                 }
             } else {

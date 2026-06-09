@@ -14,6 +14,7 @@ import androidx.health.connect.client.HealthConnectClient
 import com.noop.data.DailyMetric
 import com.noop.data.WhoopRepository
 import com.noop.ingest.HealthConnectImporter
+import com.noop.ingest.HealthConnectWriter
 import com.noop.protocol.CommandNumber
 import com.noop.widget.WidgetSnapshot
 import com.noop.widget.WidgetSnapshotStore
@@ -169,6 +170,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             .takeIf { it > 0 }?.toDouble(),
                     )
                 }
+                // Opt-in writeback: push the freshly computed nights into Health Connect so other
+                // apps see them. Idempotent (clientRecordId per metric+day), so re-running every
+                // cycle just upserts. Never let an HC hiccup (perm revoked mid-flight, provider
+                // update) break the analysis loop.
+                if (_hcWriteback.value) {
+                    runCatching { HealthConnectWriter.write(appContext, repository) }
+                }
                 delay(ANALYZE_INTERVAL_MS) // 15 min, matches the offload cadence
             }
         }
@@ -286,6 +294,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val hcSyncHours: StateFlow<Int> = _hcSyncHours.asStateFlow()
     private val _hcLastSync = MutableStateFlow(NoopPrefs.hcLastSync(appContext))
     val hcLastSync: StateFlow<Long> = _hcLastSync.asStateFlow()
+    private val _hcWriteback = MutableStateFlow(NoopPrefs.hcWriteback(appContext))
+    val hcWriteback: StateFlow<Boolean> = _hcWriteback.asStateFlow()
 
     init {
         // On app open, catch up the Health Connect sync if it's overdue. This on-open import is the
@@ -307,6 +317,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setHcSyncHours(hours: Int) {
         _hcSyncHours.value = hours
         NoopPrefs.setHcSyncHours(appContext, hours)
+    }
+
+    /** Flip Health Connect writeback (computed metrics → HC). Persists; the UI requests the write
+     *  permissions and kicks the first write via [writebackHealthConnectNow]. While on, every 15-min
+     *  recompute re-writes (idempotent — clientRecordId upserts). Default OFF. */
+    fun setHcWriteback(enabled: Boolean) {
+        _hcWriteback.value = enabled
+        NoopPrefs.setHcWriteback(appContext, enabled)
+    }
+
+    /** One immediate writeback (permissions assumed granted — the UI gates on that). */
+    fun writebackHealthConnectNow() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching { HealthConnectWriter.write(appContext, repository) }
+            }
+        }
     }
 
     /**

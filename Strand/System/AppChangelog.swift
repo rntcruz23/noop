@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "1.58"
+    static let currentVersion = "1.59"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,13 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "1.59",
+            title: "Android: share back to Health Connect",
+            date: "June 2026",
+            items: [
+                "New (Android, opt-in): NOOP can now write the nightly metrics it computes from your strap — resting heart rate, HRV, SpO₂ and respiratory rate — into Health Connect, so other apps can use them. Off by default; flip \"Share back to Health Connect\" in Data Sources and grant the write permissions. Only NOOP's own computed values are written (imported data is never echoed back), and re-writes update in place rather than stacking duplicates. Mac: version bump only.",
+            ]),
         Release(
             version: "1.58",
             title: "Android: bottom tab bar",

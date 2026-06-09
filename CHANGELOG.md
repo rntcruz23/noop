@@ -17,6 +17,20 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## 1.59 — Android: share back to Health Connect (opt-in)
+
+- **New (Android): Health Connect writeback** — new `HealthConnectWriter` pushes NOOP's **computed**
+  nightly metrics (resting HR, HRV RMSSD, SpO₂, respiratory rate; last 60 days) into Health Connect.
+  Two deliberate scope limits: **computed days only** (`repo.days(computedDeviceId)` — imported
+  WHOOP-export/HC rows are never echoed back, which would duplicate another app's data or loop our own
+  import), and **idempotent by `clientRecordId`** (`noop-<metric>-<day>` + write-time
+  `clientRecordVersion`, because HC does NOT auto-dedupe re-inserts the way HealthKit does — the
+  latest computation always wins, no stacking). Four `WRITE_*` permissions added to the manifest,
+  requested only when the user opts in; denial flips the toggle back off. **Default OFF** — "Share
+  back to Health Connect" toggle in Data Sources; while on, every 15-min recompute re-writes
+  (runCatching-guarded so an HC hiccup never breaks the analysis loop).
+- macOS: **version bump only.**
+
 ## 1.58 — Android: bottom tab bar
 
 - **New (Android): bottom `NavigationBar`** — Today / Trends / Live / Sleep as permanent tabs, plus a

@@ -31,6 +31,9 @@ object ExerciseTypes {
         EX.EXERCISE_TYPE_SOCCER to "Soccer",
         EX.EXERCISE_TYPE_BASEBALL to "Baseball",
         EX.EXERCISE_TYPE_BADMINTON to "Badminton",
+        EX.EXERCISE_TYPE_TENNIS to "Tennis",
+        EX.EXERCISE_TYPE_SQUASH to "Squash",
+        EX.EXERCISE_TYPE_TABLE_TENNIS to "Table tennis",
         EX.EXERCISE_TYPE_OTHER_WORKOUT to "Other",
     )
 

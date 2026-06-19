@@ -207,7 +207,7 @@ unit-tested with Swift↔Kotlin parity locked across macOS, iOS and Android.
 - **Homebrew install fixed (macOS).** `brew install` works again — the tap command now points at the
   project's self-hosted home. The old `brew install --cask noopapp/noop/noop` shorthand resolved to a
   host that no longer serves the tap; use `brew tap noopapp/noop https://noop.fans/NoopApp/homebrew-noop
-  && brew install --cask noop`. (Thanks @tonyjacked — #44.)
+  && brew trust noopapp/noop && brew install --cask noop`. (Thanks @tonyjacked — #44.)
 
 ---
 

@@ -186,11 +186,15 @@ public struct StatTile<Accessory: View>: View {
                     // Trend chip — the delta as a tinted pill with a direction arrow.
                     if let delta { TrendChip(text: delta, color: deltaColor) }
                 }
+                // Sparkline isn't available on watchOS (it relies on chart-hover helpers); the watch
+                // doesn't use StatTile, but guard the reference so the file still compiles there.
+                #if !os(watchOS)
                 if let sparkline, sparkline.count > 1 {
                     Sparkline(values: sparkline, gradient: Gradient(colors: [sparkColor.opacity(0.5), sparkColor]))
                         .frame(height: 22).padding(.top, 4)
                         .accessibilityHidden(true)
                 }
+                #endif
                 if let caption {
                     Text(caption).font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary).lineLimit(1)
                         .padding(.top, 2)

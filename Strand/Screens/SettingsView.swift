@@ -134,6 +134,11 @@ struct SettingsView: View {
     /// recording means, and where the provenance badges come from.
     @State private var showHowNoopWorks = false
 
+    /// "Set up Apple Watch" sheet: the honest watch onboarding flow (what it's great at, where
+    /// it's lighter, then the Health permission request). Presented from the About page's primary
+    /// action. iOS does the real HealthKit request; macOS reads as an iPhone-only step.
+    @State private var showAppleWatchSetup = false
+
     /// Steps-estimate calibration sheet (WHOOP 4.0). Reached from the Profile card's "Steps estimate"
     /// tap-through; explains the estimate, shows the current fit + a recent estimated-vs-phone table,
     /// and offers a manual coefficient override. See [StepsCalibrationSheet].
@@ -183,6 +188,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showHowNoopWorks) {
             HowNoopWorksView(onClose: { showHowNoopWorks = false })
+        }
+        .sheet(isPresented: $showAppleWatchSetup) {
+            AppleWatchSetupView(onClose: { showAppleWatchSetup = false })
         }
         .sheet(isPresented: $showStepsCalibration) {
             StepsCalibrationSheet(repo: model.repo, onClose: { showStepsCalibration = false })
@@ -1597,6 +1605,38 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("How your scores work")
+
+                // About Apple Watch data: the honest capability/confidence page for running NOOP off
+                // just an Apple Watch (what it's great at, where it's lighter than a strap, why recovery
+                // calibrates, the SpO₂ caveat). Its primary action opens the watch setup + Health
+                // permission flow. Renders the same on macOS and iOS (pure reference content); the setup
+                // sheet itself does the iOS-only HealthKit request.
+                NavigationLink {
+                    AppleWatchAboutView(onStartSetup: { showAppleWatchSetup = true })
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "applewatch")
+                            .foregroundStyle(StrandPalette.accent)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("About Apple Watch data")
+                                .font(StrandFont.body)
+                                .foregroundStyle(StrandPalette.textPrimary)
+                            Text("Use NOOP with just an Apple Watch. What it's great at, and where it's lighter than a strap.")
+                                .font(StrandFont.footnote)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(StrandPalette.textTertiary)
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("About Apple Watch data")
 
                 // Storage (#590) — on-device space breakdown (database, leftover import Inbox, stranded
                 // temp files) plus a one-tap clean-up. iOS is where "Documents & Data" can balloon after

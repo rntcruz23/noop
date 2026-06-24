@@ -89,6 +89,10 @@ final class IntelligenceEngine: ObservableObject {
         /// the By-Day badge is honest. Defaults to `.computed` (the engine always writes a computed row);
         /// set per day from the imported day-key sets resolved in `analyzeRecent`.
         var source: DaySource = .computed
+        /// Charge (recovery) confidence for the day. Defaults `.solid` for a strap-scored night (the gauge
+        /// already gates on the HRV baseline being usable); the Apple-Watch fold below sets this to the
+        /// `WatchRecovery` confidence so a watch-only recovery reads "calibrating" until it has enough nights.
+        var confidence: ScoreConfidence = .solid
         var id: String { day }
     }
 
@@ -548,9 +552,13 @@ final class IntelligenceEngine: ObservableObject {
         // and nothing about the imported numbers is exposed. WHOOP wins over Apple, matching the merge's
         // source priority (whoopImport 0 < appleHealth 2 in DailyMetricSource.vitalPriority).
         let importedWhoopDays = Set(hist.map { $0.day })
-        let appleHealthDays = Set(((try? await store.dailyMetrics(deviceId: Repository.appleHealthSource,
-                                                                  from: "0000-01-01", to: "9999-12-31")) ?? [])
-            .map { $0.day })
+        // The WHOLE apple-health daily history, chronological. Used both as a key-presence set for the
+        // By-Day badge AND as the SDNN+RHR input for the Apple-Watch recovery fold below (a watch-only user
+        // has these daily aggregates but no raw stream, so the raw-HR scoring loop never touched them).
+        let appleRows = ((try? await store.dailyMetrics(deviceId: Repository.appleHealthSource,
+                                                        from: "0000-01-01", to: "9999-12-31")) ?? [])
+            .sorted { $0.day < $1.day }
+        let appleHealthDays = Set(appleRows.map { $0.day })
 
         for night in scoredNights {
             let daily = sleepEditedDaily(night.daily, detected: night.cachedSleep, editsByStart: editsByStart,
@@ -589,6 +597,34 @@ final class IntelligenceEngine: ObservableObject {
                                               strain: s.strain, distanceM: nil,
                                               zonesJSON: nil, notes: nil))
             }
+        }
+
+        // ── Apple-Watch recovery fold (M1 "Watch as a device") ──────────────────────────────────────
+        // A watch-only user has apple-health DAILY aggregates (SDNN HRV + resting HR) but no raw stream, so
+        // the raw-HR scoring loop above never touched their days and the import left `recovery: nil`. Fill
+        // that one gap from the daily aggregate vs the person's own baseline (the cross-lane `WatchRecovery`
+        // engine, which mirrors our Charge recovery shape). WHOOP/computed recovery MUST keep winning where
+        // both exist, so we skip any day a strap already OWNS: every day the raw-HR loop scored (in `out`,
+        // even a cold-start nil-recovery night — that day belongs to the strap, not the watch) plus every
+        // WHOOP-imported day (the export carries its own recovery). The result is written back onto the
+        // apple-health rows so the source-aware dashboard reads it, and the watch-only days are appended to
+        // `out` so the By-Day list shows them with their honest confidence.
+        let strapRecoveryDays = Set(out.map { $0.day }).union(importedWhoopDays)
+        let watchScored = Self.watchRecoveries(appleRows: appleRows, strapRecoveryDays: strapRecoveryDays)
+        // Persist the recovery onto each apple-health row that gained one (nil-recovery days are left as-is,
+        // never fabricated). Rebuild the row with the new recovery; every other field is unchanged.
+        var appleRecoveryRows: [DailyMetric] = []
+        let appleByDay = Dictionary(appleRows.map { ($0.day, $0) }, uniquingKeysWith: { a, _ in a })
+        for w in watchScored {
+            guard let recovery = w.recovery, let row = appleByDay[w.day] else { continue }
+            appleRecoveryRows.append(row.with(recovery: recovery, skinTempDevC: row.skinTempDevC))
+            // Surface the watch-only day in the By-Day list with its watch provenance + confidence.
+            out.append(Computed(day: w.day, recovery: recovery, strain: row.strain,
+                                sleepMin: row.totalSleepMin, hrv: row.avgHrv, rhr: row.restingHr,
+                                source: .appleHealth, confidence: w.confidence))
+        }
+        if !appleRecoveryRows.isEmpty {
+            _ = try? await store.upsertDailyMetrics(appleRecoveryRows, deviceId: Repository.appleHealthSource)
         }
 
         // #277 migration: the loop now keys days by the LOCAL calendar day. A prior run (before this
@@ -913,6 +949,45 @@ final class IntelligenceEngine: ObservableObject {
                                        hrvBaseline: hrvBase, rhrBaseline: baselines.restingHR,
                                        respBaseline: baselines.resp, sleepPerf: restQuality,
                                        skinTempDev: daily.skinTempDevC)
+    }
+
+    /// One day's watch-derived recovery output, keyed by day.
+    struct WatchScoredDay: Equatable {
+        let day: String
+        let recovery: Double?
+        let confidence: ScoreConfidence
+    }
+
+    /// Compute Apple-Watch recovery (Charge) for the apple-health days that lack a strap recovery.
+    ///
+    /// The Apple Watch gives DAILY aggregates (an SDNN HRV reading + a resting HR), not a WHOOP-density raw
+    /// stream, so the normal `analyzeRecent` raw-HR path (`hr.count >= 200`) never scores these days and the
+    /// import leaves `recovery: nil`. This fills that one gap: for each apple-health day it folds the TRAILING
+    /// SDNN + RHR history (every earlier apple-health day's `avgHrv` / `restingHr`) into the cross-lane
+    /// `WatchRecovery` engine, which mirrors our Charge recovery shape but reads Apple's daily values. It stays
+    /// nil + `.calibrating` until there are enough usable nights of HRV baseline, so we never fabricate a number.
+    ///
+    /// `strapRecoveryDays` are the days a strap (WHOOP / computed) already scored a recovery — those are SKIPPED
+    /// so the strap keeps winning (matching the source precedence; we never overwrite a strap recovery with a
+    /// lower-density watch one). Pure (no store) so it's unit-tested directly and is the SAME logic
+    /// `analyzeRecent` ships. `appleRows` must be chronological (oldest first).
+    nonisolated static func watchRecoveries(appleRows: [DailyMetric],
+                                strapRecoveryDays: Set<String> = []) -> [WatchScoredDay] {
+        let rows = appleRows.sorted { $0.day < $1.day }
+        var out: [WatchScoredDay] = []
+        for (i, row) in rows.enumerated() where !strapRecoveryDays.contains(row.day) {
+            // Trailing baseline history = every earlier apple-health day with a usable value. Today is the
+            // current row; the baseline is built from the days BEFORE it so it can't see its own value.
+            let prior = rows[..<i]
+            let sdnnHistory = prior.compactMap { $0.avgHrv }
+            let rhrHistory = prior.compactMap { $0.restingHr.map(Double.init) }
+            let res = WatchRecovery.compute(todaySDNN: row.avgHrv,
+                                            todayRHR: row.restingHr,
+                                            sdnnHistory: sdnnHistory,
+                                            rhrHistory: rhrHistory)
+            out.append(WatchScoredDay(day: row.day, recovery: res.recovery, confidence: res.confidence))
+        }
+        return out
     }
 
     /// Override a day's detected sleep aggregates with the user's hand-corrected window when one of the

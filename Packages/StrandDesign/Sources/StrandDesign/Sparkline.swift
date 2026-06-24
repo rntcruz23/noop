@@ -1,3 +1,6 @@
+#if !os(watchOS)
+// Sparkline uses .onContinuousHover + ChartHover helpers (unavailable on watchOS); the watch
+// doesn't draw sparklines, so the whole view is excluded there. iOS/macOS unchanged.
 import SwiftUI
 
 // MARK: - Sparkline (§9.4 Today / Live HR tile)
@@ -224,4 +227,5 @@ private func sampleHR() -> [Double] {
     .background(StrandPalette.surfaceRaised)
     .preferredColorScheme(.dark)
 }
+#endif
 #endif

@@ -369,6 +369,80 @@ struct TodayView: View {
         }
     }
 
+    // MARK: Apple Watch provenance (M1): "the watch is the sensor, NOOP is the brain"
+
+    /// True when the selected day's value for `metricKey` was supplied by the Apple-Health source (a
+    /// watch-only user's Charge/Rest). The store source stays `apple-health` so the engines and the
+    /// multi-source resolver are unchanged; the friendlier "Apple Watch" label + its confidence are a
+    /// Today-only presentation layer over that source. We don't touch the cross-lane
+    /// `provenanceDisplayLabel` (it's Kotlin-mirrored and feeds the Data Sources footer's "Apple Health").
+    private func isWatchSourced(_ metricKey: String) -> Bool {
+        Self.isWatchSource(provenanceByMetric[metricKey], appleHealthSource: Repository.appleHealthSource)
+    }
+
+    /// PURE (unit-testable) — whether a resolved raw source id is the Apple-Health/watch source. Kept
+    /// separate from the cross-lane `provenanceDisplayLabel` so the Today-only "Apple Watch" relabel never
+    /// leaks into the Kotlin-mirrored footer mapping.
+    static func isWatchSource(_ rawSource: String?, appleHealthSource: String) -> Bool {
+        rawSource == appleHealthSource
+    }
+
+    /// PURE (unit-testable) — the Today chip label for a resolved source, relabelling the Apple-Health
+    /// source as "Apple Watch" (the device the audience knows) and otherwise deferring to the shared
+    /// provenance label so Whoop / on-device read identically to the footer.
+    static func todayProvenanceChipLabel(rawSource: String, deviceId: String, appleHealthSource: String) -> String {
+        if rawSource == appleHealthSource { return "Apple Watch" }
+        return provenanceDisplayLabel(rawSource: rawSource, deviceId: deviceId)
+    }
+
+    /// True for a watch-context user with no strap supplying scores (Apple-Health days present and no WHOOP
+    /// recovery banked anywhere). Used for the calibrating case, where there's no value yet so the resolver
+    /// returns no winning source for `provenanceByMetric` — `isWatchSourced` can only fire once a number
+    /// lands. Robust watch-only detection is the onboarding lane's job; this is the minimal Today-side gate
+    /// so the "Needs more data" affordance shows for the obvious watch-only case without claiming a strap.
+    private var isWatchOnlyContext: Bool {
+        !appleDays.isEmpty && !repo.days.contains { $0.recovery != nil }
+    }
+
+    /// The Today chip label for a watch-sourced score: the audience knows the device, not the framework,
+    /// so a watch-derived number reads "Apple Watch" rather than the generic "Apple Health" the footer uses.
+    /// Delegates to the pure `todayProvenanceChipLabel` so the relabel logic is unit-tested.
+    private func watchProvenanceLabel(_ metricKey: String) -> String {
+        let raw = provenanceByMetric[metricKey] ?? Repository.appleHealthSource
+        return Self.todayProvenanceChipLabel(rawSource: raw, deviceId: repo.deviceId,
+                                             appleHealthSource: Repository.appleHealthSource)
+    }
+
+    /// The watch chip's confidence tier for the selected day, bound to the SAME `ScoreState` affordance the
+    /// rest of the app uses (`ScoreStatePill`'s dot+label). Charge rides the HRV baseline exactly like the
+    /// strap path — `.calibrating` until ~a week of nights, then `.building`, then `.solid` once trusted —
+    /// so an honest watch week reads differently from a thin one, never a blind number. Rest follows whether
+    /// the night actually has a score; any other key falls back to `.building`.
+    private func watchScoreState(_ metricKey: String) -> ScoreState {
+        let conf: ScoreConfidence
+        switch metricKey {
+        case "recovery":
+            // Same HRV-baseline gate the Charge engine uses, fed by the loaded nightly SDNN history.
+            let hrvBase = Baselines.foldHistory(repo.days.map(\.avgHrv), cfg: Baselines.hrvCfg)
+            conf = ScoreConfidence.charge(recovery: displayDay?.recovery, hrvBaseline: hrvBase)
+        case "sleep_performance":
+            // A watch night with a Rest score reads as built; without one it's still calibrating.
+            conf = restScore != nil ? .building : .calibrating
+        default:
+            conf = .building
+        }
+        return InsightsHubView.scoreState(conf)
+    }
+
+    /// Whether a watch-context score is still calibrating for the selected day, so the chip area shows an
+    /// honest "Needs more data" rather than a bare dash/number. Only meaningful on today (a past day with no
+    /// value is missing data, not mid-calibration), mirroring `recoveryCalibration`'s today-only gate, and
+    /// only when the value itself is absent (a scored watch day shows its "Apple Watch" chip + confidence).
+    private func watchNeedsMoreData(_ metricKey: String) -> Bool {
+        guard selectedDayOffset == 0, isWatchOnlyContext, !ringHasValue(metricKey) else { return false }
+        return watchScoreState(metricKey) == .calibrating
+    }
+
     /// Parses a stored `yyyy-MM-dd` day key in the device-local zone (matching how DailyMetric.day
     /// is written) — local so a key never shifts a day under timezone conversion.
     private static let dayKeyParser: DateFormatter = {
@@ -1754,9 +1828,24 @@ struct TodayView: View {
             .accessibilityLabel(Self.domainGuideAccessibilityLabel(domain))
             // Component 4 — the real per-day source under the ring (only when this score has a value for
             // the day AND we resolved its winner; a calibrating / empty ring shows no provenance badge).
-            if let key = provenanceKey, ringHasValue(key), let label = provenanceLabel(key) {
-                SourceBadge("\(label)", tint: provenanceTint(key))
-                    .accessibilityLabel("Source: \(label)")
+            // Apple Watch (M1): a watch-sourced score reads "Apple Watch" with its confidence bound to the
+            // shared ScoreStatePill dot/label, and a calibrating watch score shows "Needs more data" rather
+            // than a bare ring — the honest "the watch can't support this yet" state, never a fake number.
+            if let key = provenanceKey {
+                if ringHasValue(key), isWatchSourced(key) {
+                    VStack(spacing: 4) {
+                        SourceBadge("\(watchProvenanceLabel(key))", tint: StrandPalette.metricCyan)
+                        ScoreStatePill(watchScoreState(key))
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Source: Apple Watch")
+                } else if watchNeedsMoreData(key) {
+                    SourceBadge("Needs more data", tint: StrandPalette.textTertiary)
+                        .accessibilityLabel("Apple Watch. Needs more data to score this yet.")
+                } else if ringHasValue(key), let label = provenanceLabel(key) {
+                    SourceBadge("\(label)", tint: provenanceTint(key))
+                        .accessibilityLabel("Source: \(label)")
+                }
             }
         }
     }

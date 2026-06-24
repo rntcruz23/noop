@@ -1,3 +1,6 @@
+#if !os(watchOS)
+// The watch never draws the hypnogram (uses .onContinuousHover + ChartHover helpers, unavailable
+// on watchOS); excluded there, iOS/macOS unchanged.
 import SwiftUI
 
 // MARK: - Hypnogram (§9.4 Sleep)
@@ -351,4 +354,5 @@ private func sampleNight() -> [SleepInterval] {
     .background(StrandPalette.surfaceBase)
     .preferredColorScheme(.dark)
 }
+#endif
 #endif

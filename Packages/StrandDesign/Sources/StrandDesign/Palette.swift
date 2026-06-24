@@ -31,7 +31,11 @@ public extension Color {
     /// at every one of its call sites when the colour scheme flips — no per-view environment plumbing.
     /// This is the whole light-theme strategy: only the token definitions change, never the call sites.
     init(light: String, dark: String) {
-        #if canImport(UIKit)
+        #if os(watchOS)
+        // watchOS has no UITraitCollection / dynamic-provider UIColor, and our watch app is effectively
+        // always dark, so a token resolves straight to its dark hex. No per-scheme plumbing on the wrist.
+        self.init(hex: dark)
+        #elseif canImport(UIKit)
         self.init(UIColor { trait in
             let c = Color.sRGBComponents(hex: trait.userInterfaceStyle == .dark ? dark : light)
             return UIColor(red: CGFloat(c.r), green: CGFloat(c.g), blue: CGFloat(c.b), alpha: CGFloat(c.a))
@@ -409,7 +413,10 @@ enum ColorComponentCache {
     /// A small integer identifying the current resolved appearance (light vs dark), matching the trait
     /// that `UIColor(color)` / `NSColor(color)` resolves against at this call site.
     private static var appearanceToken: Int {
-        #if canImport(UIKit)
+        #if os(watchOS)
+        // No UITraitCollection on watchOS; the watch app is always dark, so the cache key is constant.
+        return 1
+        #elseif canImport(UIKit)
         return UITraitCollection.current.userInterfaceStyle == .dark ? 1 : 0
         #elseif canImport(AppKit)
         let match = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua])

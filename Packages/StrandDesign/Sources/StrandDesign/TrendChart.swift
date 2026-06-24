@@ -1,3 +1,6 @@
+#if !os(watchOS)
+// TrendChart is a Swift Charts view with .onContinuousHover (unavailable on watchOS); the watch
+// never shows it, so the whole file is excluded there. iOS/macOS unchanged.
 import SwiftUI
 import Charts
 
@@ -408,4 +411,5 @@ private func sampleTrend(days: Int, base: Double, swing: Double) -> [TrendPoint]
     .background(StrandPalette.surfaceBase)
     .preferredColorScheme(.dark)
 }
+#endif
 #endif

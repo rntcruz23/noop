@@ -200,6 +200,9 @@ object AnalyticsEngine {
         // instead of V1. Default false keeps V1 the byte-identical default for pure-function callers/tests;
         // IntelligenceEngine threads PuffinExperiment.from(context).experimentalSleepV2. Mirrors Swift. (V7 / #690)
         useSleepStagerV2: Boolean = false,
+        // Sleep & Rest test-mode trace sink (E11). null = byte-identical default. When non-null the gate
+        // trace from detectSleep and the Rest sub-score line are forwarded line-by-line. Mirrors Swift.
+        traceSink: ((String) -> Unit)? = null,
     ): DayResult {
 
         // ── Sleep detection + staging ─────────────────────────────────────────
@@ -207,6 +210,7 @@ object AnalyticsEngine {
             hr = hr, rr = rr, resp = resp, gravity = gravity, tzOffsetSeconds = tzOffsetSeconds,
             wristOff = wristOff, bandSleepState = bandSleepState,
             useSleepStagerV2 = useSleepStagerV2,
+            traceSink = traceSink,
         )
         // Sessions attributed to `day` = those whose end falls on `day` (LOCAL day, #277). `day` is
         // the caller's local-day key; attribute by the same offset so the bucket and the key agree.
@@ -322,6 +326,17 @@ object AnalyticsEngine {
             sleepNeedHours = sleepNeedHours,
             consistency = sleepConsistency,
         )
+        // Sleep & Rest test mode (E11): emit the Rest sub-score breakdown for this night, reusing the
+        // IDENTICAL inputs `rest` consumed above so the trace can never disagree with the score. Emitted
+        // only when a trace is requested and this day scored a night. Mirrors Swift.
+        if (traceSink != null && matched.isNotEmpty()) {
+            traceSink(RestScorer.subScoreLine(
+                tstSeconds = tstS, inBedSeconds = inBedS, efficiency = efficiency,
+                restorativeSeconds = deepS + remS,
+                needHours = sleepNeedHours ?: RestScorer.defaultSleepNeedHours,
+                consistency = sleepConsistency, deepSeconds = deepS,
+                groupFragments = mainGroup.size, groupInBedSeconds = inBedS))
+        }
 
         // ── Recovery / Charge ─────────────────────────────────────────────────
         var recovery: Double? = null
@@ -633,6 +648,46 @@ object RestScorer {
             wRestorative * restorativeScore +
             wConsistency * consistencyScore
         return (weighted * 100.0).roundToInt() / 100.0
+    }
+
+    /**
+     * Sleep & Rest test-mode (E11) diagnostic line for the Rest composite. Recomputes the four weighted
+     * sub-scores from the SAME inputs `rest()` reads (on the 0..1 scale, byte-aligned with the Swift
+     * `Rest.subScoreLine`), and reuses `rest()` for the final `composite=` value so the trace can never
+     * disagree with the score. `groupFragments` / `groupInBedSeconds` describe the main-night GROUP
+     * composition (#525/#561). Pure, side-effect-free, no em-dashes. Mirrors Swift exactly.
+     */
+    fun subScoreLine(
+        tstSeconds: Double, inBedSeconds: Double, efficiency: Double, restorativeSeconds: Double,
+        needHours: Double, consistency: Double?, deepSeconds: Double?,
+        groupFragments: Int, groupInBedSeconds: Double,
+    ): String {
+        fun clamp01(x: Double) = maxOf(0.0, minOf(1.0, x))
+        fun r2(x: Double) = Math.round(x * 100.0) / 100.0
+        val needSeconds = maxOf(needHours, 0.1) * 3600.0
+        val durationScore = clamp01(tstSeconds / needSeconds)
+        val efficiencyScore = clamp01(efficiency)
+        val deepFactor = if (deepSeconds != null && tstSeconds > 0 && deepShareTarget > 0) {
+            val adequacy = clamp01((deepSeconds / tstSeconds) / deepShareTarget)
+            deepFloorFactor + (1.0 - deepFloorFactor) * adequacy
+        } else 1.0
+        val restorativeScore = if (tstSeconds > 0)
+            clamp01((restorativeSeconds / tstSeconds) / restorativeTargetShare) * deepFactor else 0.0
+        val consistencyScore = clamp01(consistency ?: NEUTRAL_CONSISTENCY)
+        // Reuse the real scorer for the composite (cannot diverge). `rest()` takes deep + REM separately;
+        // restorative = deep + REM, so REM = restorative - deep. null deep -> 0 deep (no-adequacy path).
+        val composite = rest(
+            asleepSeconds = tstSeconds, efficiency = efficiency,
+            deepSeconds = deepSeconds ?: 0.0,
+            remSeconds = restorativeSeconds - (deepSeconds ?: 0.0),
+            sleepNeedHours = needHours, consistency = consistency,
+        ) ?: 0.0
+        return "rest composite=${r2(composite)} " +
+            "dur=${r2(durationScore)}*wDur=$wDuration " +
+            "eff=${r2(efficiencyScore)}*wEff=$wEfficiency " +
+            "restor=${r2(restorativeScore)}*wRestor=$wRestorative deepFactor=${r2(deepFactor)} " +
+            "consist=${r2(consistencyScore)}*wConsist=$wConsistency " +
+            "group=$groupFragments groupInBedMin=${(groupInBedSeconds / 60).toInt()}"
     }
 
     /**

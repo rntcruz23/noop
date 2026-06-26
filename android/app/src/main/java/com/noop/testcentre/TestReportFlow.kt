@@ -36,12 +36,18 @@ object TestReportFlow {
             platform.lowercase() == "android" || platform.lowercase() == "ios"
     }
 
+    /** The review gate is mandatory and not skippable (spec section 12). */
+    fun shouldProceed(gate: ReportReviewGate): Boolean = gate.isCleared
+
     /** Share the already-redacted bundle, open the prefilled issue, toast, and prime the copy fallback.
-     *  `entries` is the redacted, capped bundle the caller assembled. */
+     *  `entries` is the redacted, capped bundle the caller assembled. Review-before-share is mandatory:
+     *  nothing is shared until the gate is cleared (spec section 12). */
     fun run(context: Context, profile: TestDomain, title: String,
             version: String, platform: String, osVersion: String,
+            gate: ReportReviewGate,
             entries: List<Pair<String, ByteArray>>) {
         runCatching {
+            if (!shouldProceed(gate)) return@runCatching
             val name = Plan.bundleName(profile, platform, version)
             LogExport.exportBundle(context, entries, name)              // existing ACTION_SEND chooser
             TestReportLink.openReport(context, profile, title, version, platform, osVersion)

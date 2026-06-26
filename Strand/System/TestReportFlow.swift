@@ -39,16 +39,24 @@ enum TestReportFlow {
         }
     }
 
+    /// The review gate is mandatory and not skippable (spec section 12): the flow only proceeds once
+    /// the user has explicitly confirmed the review.
+    static func shouldProceed(gate: ReportReviewGate) -> Bool { gate.isCleared }
+
     /// Save/share the already-redacted bundle, open the prefilled issue, and toast. `entries` is the
     /// redacted, capped bundle the caller assembled (the Group D orchestrator builds it from
     /// TestBundleAssembler.redactEntries + capEntries + meta.json). `showToast` and `copyToPasteboard`
-    /// are injected so the call site supplies the platform presenters.
+    /// are injected so the call site supplies the platform presenters. Review-before-share is mandatory:
+    /// nothing is shared, no URL opened and no toast shown until the gate is cleared (spec section 12).
     @MainActor
     static func run(profile: TestDomain, title: String,
                     version: String, platform: String, osVersion: String,
+                    gate: ReportReviewGate,
                     entries: [FileExport.BundleEntry],
                     showToast: @escaping (String) -> Void,
                     copyToPasteboard: @escaping (String) -> Void) {
+        // Review-before-share is mandatory: do nothing until the user has confirmed.
+        guard shouldProceed(gate: gate) else { return }
         let name = Plan.bundleName(profile: profile, platform: platform, version: version)
         _ = FileExport.exportBundle(entries: entries, suggestedName: name)
         if let url = TestReportLink.reportURL(profile: profile, title: title,

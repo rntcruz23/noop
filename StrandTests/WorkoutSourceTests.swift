@@ -171,6 +171,35 @@ final class WorkoutSourceTests: XCTestCase {
         XCTAssertEqual(out[1].sport, "Strength Training")
     }
 
+    // MARK: - trace privacy (L5) + dedup label (L8)
+
+    func testTraceSportKeyWhitelistsCatalogAndFoldsFreeTextToCustom() {
+        // L5 PRIVACY: a catalogue sport passes through as its key; a user-named free-text sport never
+        // reaches the export and folds to "custom"; the detector's "Activity" token stays "activity".
+        XCTAssertEqual(WorkoutSource.traceSportKey("Running"), "running")
+        XCTAssertEqual(WorkoutSource.traceSportKey("Open-water swim"), WorkoutSource.sportKey("Open-water swim"))
+        XCTAssertEqual(WorkoutSource.traceSportKey("detected"), "activity")
+        // A free-typed name (#519 free text) MUST NOT surface verbatim.
+        XCTAssertEqual(WorkoutSource.traceSportKey("Johns Birthday 5k"), "custom")
+        XCTAssertNotEqual(WorkoutSource.traceSportKey("Johns Birthday 5k"), WorkoutSource.sportKey("Johns Birthday 5k"))
+        // An off-catalogue WHOOP token also folds to custom (privacy-conservative).
+        XCTAssertEqual(WorkoutSource.traceSportKey("TraditionalStrengthTraining"), "custom")
+    }
+
+    func testDedupTraceLabelsKeptDroppedOnSameStartSameSourcePair() {
+        // L8: two rows sharing startTs AND source but differing in richness. The OLD (startTs, source)
+        // tuple check could not tell which won; the label must follow the REAL keep rule (richer kept).
+        let rich = richRow(start: 1000, end: 4600, sport: "Running", source: "whoop")        // richness high
+        let thin = thinImport(start: 1000, end: 4600, sport: "Running", source: "whoop")      // same start+source, poorer
+        // The richer row wins; the thinner same-start same-source row is the dropped one.
+        let (_, trace) = WorkoutSource.dedupCrossSourceTrace([thin, rich])
+        XCTAssertEqual(trace.count, 1)
+        let keptRich = WorkoutSource.richness(rich), droppedRich = WorkoutSource.richness(thin)
+        XCTAssertGreaterThan(keptRich, droppedRich)
+        XCTAssertTrue(trace[0].contains("kept=strap(richness=\(keptRich))"), "got \(trace[0])")
+        XCTAssertTrue(trace[0].contains("dropped=strap(richness=\(droppedRich))"), "got \(trace[0])")
+    }
+
     // MARK: - buildManualRow validation
 
     func testBuildManualRowHappyPath() {

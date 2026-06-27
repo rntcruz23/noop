@@ -463,7 +463,7 @@ final class AppModel: ObservableObject {
         // Workouts & GPS test mode (Test Centre): one session-start line tagged `.workouts`. Zero-cost when
         // off (the gate is one UserDefaults bool read), so the lifecycle of a missing workout is visible.
         emitWorkoutsTrace(WorkoutsTrace.sessionLine(
-            event: "start", sportKey: WorkoutSource.sportKey(resolved), hrSamples: 0))
+            event: "start", sportKey: WorkoutSource.traceSportKey(resolved), hrSamples: 0))
         buzz(loops: 1)
     }
 
@@ -559,7 +559,7 @@ final class AppModel: ObservableObject {
         guard samples.count >= 2 || route != nil else {
             // Workouts & GPS test mode: record WHY a session vanished (too short / no route), tagged `.workouts`.
             emitWorkoutsTrace(WorkoutsTrace.sessionLine(
-                event: "discarded", sportKey: WorkoutSource.sportKey(w.sport),
+                event: "discarded", sportKey: WorkoutSource.traceSportKey(w.sport),
                 hrSamples: samples.count, gpsPoints: route == nil ? 0 : nil))
             lastWorkout = nil
             return
@@ -595,7 +595,7 @@ final class AppModel: ObservableObject {
         // lifecycle of a saved session is visible end to end. `pointCount` is the recorder's accepted-fix tally
         // (not reset by stop), 0 for a non-GPS session. Zero-cost when off.
         emitWorkoutsTrace(WorkoutsTrace.sessionLine(
-            event: "end", sportKey: WorkoutSource.sportKey(w.sport), hrSamples: samples.count,
+            event: "end", sportKey: WorkoutSource.traceSportKey(w.sport), hrSamples: samples.count,
             durationSec: Int(end.timeIntervalSince(w.start)),
             gpsPoints: wasGps ? gpsRecorder.pointCount : nil))
         buzz(loops: 2)

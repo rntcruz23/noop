@@ -200,6 +200,41 @@ class WorkoutEditingTest {
         assertEquals("Strength Training", out[1].sport)
     }
 
+    // MARK: - trace privacy (L5) + dedup label (L8)
+
+    @Test
+    fun traceSportKey_whitelistsCatalogAndFoldsFreeTextToCustom() {
+        // L5 PRIVACY: a catalogue sport passes through as its key; a user-named free-text sport never reaches
+        // the export and folds to "custom"; the detector's "Activity" token stays "activity".
+        assertEquals("running", WorkoutEditing.traceSportKey("Running"))
+        assertEquals(WorkoutEditing.sportKey("Open-water swim"), WorkoutEditing.traceSportKey("Open-water swim"))
+        assertEquals("activity", WorkoutEditing.traceSportKey("detected"))
+        // A free-typed name (#519 free text) MUST NOT surface verbatim.
+        assertEquals("custom", WorkoutEditing.traceSportKey("Johns Birthday 5k"))
+        assertNotEquals(WorkoutEditing.sportKey("Johns Birthday 5k"), WorkoutEditing.traceSportKey("Johns Birthday 5k"))
+        // An off-catalogue WHOOP token also folds to custom (privacy-conservative).
+        assertEquals("custom", WorkoutEditing.traceSportKey("TraditionalStrengthTraining"))
+    }
+
+    @Test
+    fun dedupTrace_labelsKeptDroppedOnSameStartSameSourcePair() {
+        // L8: two rows sharing startTs AND source but differing in richness. The OLD (startTs, source) tuple
+        // check could not tell which won; the label must follow the REAL keep rule (richer kept).
+        val rich = richRow(1000, 4600, "Running", "whoop") // richness high
+        // Same start AND source as `rich`, but poorer (energy only) - forces the tuple-collision case.
+        val thin = WorkoutRow(
+            deviceId = "my-whoop", startTs = 1000, endTs = 4600, sport = "Running", source = "whoop",
+            durationS = 3600.0, energyKcal = 590.0,
+        )
+        val (_, trace) = WorkoutEditing.dedupCrossSourceTrace(listOf(thin, rich))
+        assertEquals(1, trace.size)
+        val keptRich = WorkoutEditing.richness(rich)
+        val droppedRich = WorkoutEditing.richness(thin)
+        assertTrue(keptRich > droppedRich)
+        assertTrue(trace[0], trace[0].contains("kept=strap(richness=$keptRich)"))
+        assertTrue(trace[0], trace[0].contains("dropped=strap(richness=$droppedRich)"))
+    }
+
     // MARK: - buildManualRow validation
 
     @Test

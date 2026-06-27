@@ -99,6 +99,26 @@ object WorkoutEditing {
     fun sportKey(sport: String): String =
         displaySport(sport).lowercase().filter { !it.isWhitespace() }
 
+    /** The set of [sportKey]s for the named catalogue (Running, Cycling, … Padel, Other). Used ONLY by the
+     *  TRACE path to decide whether a key is a known, non-PII catalogue sport. Mirrors Swift catalogSportKeys. */
+    private val catalogSportKeys: Set<String> =
+        com.noop.analytics.WorkoutSport.all.map { sportKey(it.name) }.toSet()
+
+    /**
+     * PRIVACY (TRACE PATH ONLY): a redaction-safe sport key for the Workouts test-mode trace. [sportKey]
+     * returns a free-typed name verbatim (folded), so a user-named sport like "Johns Birthday 5k" would
+     * otherwise surface as `sport=johnsbirthday5k` in the export, which redactStrapLogPii cannot catch. Here
+     * we emit the key ONLY when it matches the named catalogue; any off-catalogue / free-text sport folds to
+     * the generic "custom" so genuine user text can never enter a shared bundle. The user-facing
+     * [displaySport] is unchanged. "detected"/"Activity" fold to "activity" (a catalogue-independent known
+     * token) and are allowed through. Mirrors Swift WorkoutSource.traceSportKey.
+     */
+    fun traceSportKey(sport: String): String {
+        val key = sportKey(sport)
+        if (key == "activity") return key // the detector's neutral token, never user text
+        return if (key in catalogSportKeys) key else "custom"
+    }
+
     /**
      * How many "rich" captured signals a row carries — the tiebreak for which duplicate to keep. A
      * live-tracked strap session scores high (HR trace, peak, strain, zones, distance); a thin import
@@ -187,11 +207,17 @@ object WorkoutEditing {
         outer@ for (row in rows) {
             for (i in kept.indices) {
                 if (sameActivity(kept[i], row)) {
-                    val winner = preferred(kept[i], row)
-                    val loser = if (winner.startTs == kept[i].startTs && winner.source == kept[i].source) row else kept[i]
+                    // L8: identify kept-vs-dropped by the REAL keep decision, not by a (startTs, source)
+                    // tuple that collides when row and kept[i] share both fields (e.g. a same-start same-
+                    // source pair differing only in richness). preferred() returns one of the two rows; a
+                    // full-row == against kept[i] tells us which side won. When the two rows are byte-
+                    // identical the label is interchangeable, so == is correct in every case.
+                    val keptWins = preferred(kept[i], row) == kept[i]
+                    val winner = if (keptWins) kept[i] else row
+                    val loser = if (keptWins) row else kept[i]
                     lines.add(
                         WorkoutsTrace.dedupLine(
-                            sportKey = sportKey(row.sport),
+                            sportKey = traceSportKey(row.sport), // PRIVACY: catalogue key or "custom", never free text
                             keptSource = sourceLabel(winner), droppedSource = sourceLabel(loser),
                             keptRichness = richness(winner), droppedRichness = richness(loser),
                         ),

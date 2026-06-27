@@ -798,7 +798,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // Workouts & GPS test mode (Test Centre): one session-start line tagged .workouts. Zero-cost when off.
         emitWorkoutsTrace {
             com.noop.analytics.WorkoutsTrace.sessionLine(
-                event = "start", sportKey = WorkoutEditing.sportKey(sport.name), hrSamples = 0,
+                event = "start", sportKey = WorkoutEditing.traceSportKey(sport.name), hrSamples = 0,
             )
         }
         if (gpsEnabled) {
@@ -909,7 +909,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // Workouts & GPS test mode: record WHY a session vanished (too short / no track), tagged .workouts.
             emitWorkoutsTrace {
                 com.noop.analytics.WorkoutsTrace.sessionLine(
-                    event = "discarded", sportKey = WorkoutEditing.sportKey(w.sport.name),
+                    event = "discarded", sportKey = WorkoutEditing.traceSportKey(w.sport.name),
                     hrSamples = samples.size, gpsPoints = if (w.gpsEnabled) track.size else null,
                 )
             }
@@ -941,7 +941,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // final track), so the lifecycle of a saved session is visible end to end. Zero-cost when off.
         emitWorkoutsTrace {
             com.noop.analytics.WorkoutsTrace.sessionLine(
-                event = "end", sportKey = WorkoutEditing.sportKey(w.sport.name), hrSamples = samples.size,
+                event = "end", sportKey = WorkoutEditing.traceSportKey(w.sport.name), hrSamples = samples.size,
                 durationSec = ((endMs - w.startMs) / 1000L).toInt(),
                 gpsPoints = if (w.gpsEnabled) track.size else null,
             )

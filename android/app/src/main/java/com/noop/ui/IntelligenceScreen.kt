@@ -284,8 +284,12 @@ private fun EmptyNote() {
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                "No scored days yet. Sync your strap to collect raw streams — charge, " +
-                    "effort and rest are scored once a day's data is in.",
+                "No scored days yet. Sync your strap to collect raw streams. Effort and Rest are " +
+                    "scored once a day's data is in. Charge needs about four nights of sleep to learn your " +
+                    "baseline (you'll see \"Calibrating\" until then), and keeps sharpening over your first " +
+                    "couple of weeks. On a WHOOP 5 or MG the strap banks little history, so that night count " +
+                    "can climb slowly or sit at 0 of 4 until you have worn it across a few nights. That's " +
+                    "its sync limit, not a fault. Import your WHOOP export to skip the wait.",
                 style = NoopType.subhead,
                 color = Palette.textSecondary,
             )

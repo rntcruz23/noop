@@ -28,9 +28,14 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pool
 import androidx.compose.material.icons.filled.Rowing
 import androidx.compose.material.icons.filled.SelfImprovement
+import androidx.compose.material.icons.filled.DownhillSkiing
+import androidx.compose.material.icons.filled.Snowboarding
 import androidx.compose.material.icons.filled.SportsBasketball
+import androidx.compose.material.icons.filled.SportsGolf
 import androidx.compose.material.icons.filled.SportsGymnastics
 import androidx.compose.material.icons.filled.SportsMartialArts
+import androidx.compose.material.icons.filled.SportsVolleyball
+import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.SportsSoccer
 import androidx.compose.material.icons.filled.SportsTennis
@@ -1413,11 +1418,17 @@ internal fun sportIcon(sport: String): ImageVector {
         s.contains("cycl") || s.contains("bike") || s.contains("ride") -> Icons.Filled.DirectionsBike
         s.contains("swim") -> Icons.Filled.Pool
         s.contains("row") -> Icons.Filled.Rowing
-        s.contains("yoga") || s.contains("pilates") || s.contains("meditat") -> Icons.Filled.SelfImprovement
+        s.contains("yoga") || s.contains("pilates") || s.contains("meditat") || s.contains("stretch") -> Icons.Filled.SelfImprovement
         s.contains("strength") || s.contains("weight") || s.contains("lift") -> Icons.Filled.FitnessCenter
-        s.contains("box") || s.contains("martial") -> Icons.Filled.SportsMartialArts
+        s.contains("box") || s.contains("martial") || s.contains("jiu") || s.contains("judo") || s.contains("karate") -> Icons.Filled.SportsMartialArts
         s.contains("hiit") || s.contains("functional") || s.contains("gymnast") -> Icons.Filled.SportsGymnastics
-        s.contains("tennis") -> Icons.Filled.SportsTennis
+        s.contains("snowboard") -> Icons.Filled.Snowboarding
+        s.contains("ski") -> Icons.Filled.DownhillSkiing
+        // All racquet sports share the tennis glyph (no dedicated icon for padel/pickleball/squash etc.).
+        s.contains("tennis") || s.contains("padel") || s.contains("pickle") || s.contains("squash") || s.contains("racquet") || s.contains("badminton") -> Icons.Filled.SportsTennis
+        s.contains("volleyball") -> Icons.Filled.SportsVolleyball
+        s.contains("golf") -> Icons.Filled.SportsGolf
+        s.contains("climb") -> Icons.Filled.Terrain
         s.contains("soccer") || s.contains("football") -> Icons.Filled.SportsSoccer
         s.contains("basketball") -> Icons.Filled.SportsBasketball
         else -> Icons.Filled.FitnessCenter

@@ -10,25 +10,34 @@ public enum WhoopStoreInfo {
 }
 
 /// WhoopStore is an `actor`: its public API is `async`, and all GRDB work runs on the
-/// actor's serial executor rather than the caller's (the main actor). DatabaseQueue calls
-/// are synchronous-blocking; the actor moves them off the main thread (it does not make them
-/// non-blocking). That is the intended off-main win — DatabaseQueue kept, not DatabasePool.
+/// actor's serial executor rather than the caller's (the main actor).
+///
+/// The connection is a GRDB `DatabasePool` (WAL): reads (`.read`) run CONCURRENTLY with the
+/// backfill's bulk writes (`.write`) instead of serializing behind them (#755). A `DatabaseQueue`
+/// funnels every read AND write through one serial executor, so the dashboard's ~40-55 reads
+/// queued behind a multi-thousand-row import and froze Today for seconds. A Pool keeps a single
+/// writer (writes still serialize, exactly as before, so every read-modify-write inside one
+/// `.write` stays atomic) but serves reads from WAL snapshots in parallel (committed data only,
+/// never a partial write). The actor still moves the synchronous-blocking GRDB calls off the
+/// caller's (main) thread; what changed is read/write CONCURRENCY at the SQLite layer, not the
+/// data or the query results.
 public actor WhoopStore {
-    let dbQueue: DatabaseQueue
+    let dbWriter: any DatabaseWriter
 
-    /// Read-only handle to the underlying GRDB queue for the synchronous `DeviceRegistryStore`.
-    /// `nonisolated` because `DatabaseQueue` is `Sendable` and internally serialized — concurrent
-    /// access alongside the actor's own DB work is safe (GRDB queues calls onto one serial executor).
-    public nonisolated var registryQueue: DatabaseQueue { dbQueue }
+    /// Read-only handle to the underlying GRDB writer for the synchronous `DeviceRegistryStore`.
+    /// `nonisolated` because a GRDB `DatabaseWriter` (here a `DatabasePool`) is `Sendable` and
+    /// manages its own concurrency, so concurrent access alongside the actor's own DB work is safe
+    /// (the Pool serializes writes and runs reads in parallel under WAL).
+    public nonisolated var registryWriter: any DatabaseWriter { dbWriter }
 
-    private init(dbQueue: DatabaseQueue) throws {
-        self.dbQueue = dbQueue
-        try WhoopStore.makeMigrator().migrate(dbQueue)
+    private init(dbWriter: any DatabaseWriter) throws {
+        self.dbWriter = dbWriter
+        try WhoopStore.makeMigrator().migrate(dbWriter)
     }
 
     /// Open (creating if needed) a database at `path` and run migrations.
-    /// Enables WAL journal mode and a 5-second busy timeout so two handles to the same
-    /// file (BLEManager + MetricsRepository) don't deadlock on write contention.
+    /// Uses a `DatabasePool`, which enables WAL automatically, plus a 5-second busy timeout so two
+    /// handles to the same file (BLEManager + MetricsRepository) don't deadlock on write contention.
     public init(path: String) async throws {
         // Self-heal a foreign DB left in place by a bad cross-platform restore (#222): an Android
         // (Room) backup that slipped past the import guard replaces our file with one that has our
@@ -40,7 +49,8 @@ public actor WhoopStore {
 
         var config = Configuration()
         config.prepareDatabase { db in
-            try db.execute(sql: "PRAGMA journal_mode = WAL")
+            // `DatabasePool` puts the database in WAL mode itself (reads run as concurrent snapshots
+            // alongside the single writer, #755), so there is no explicit `PRAGMA journal_mode = WAL`.
             // Bulk-write/read tuning. NORMAL is the durable, recommended pairing with WAL (only an
             // OS crash/power loss can lose the last transaction — acceptable here). Bigger page cache
             // + mmap + in-memory temp tables speed the multi-thousand-row import/backfill writes.
@@ -50,7 +60,7 @@ public actor WhoopStore {
             try db.execute(sql: "PRAGMA temp_store = MEMORY")
         }
         config.busyMode = .timeout(5)
-        try self.init(dbQueue: try DatabaseQueue(path: path, configuration: config))
+        try self.init(dbWriter: try DatabasePool(path: path, configuration: config))
     }
 
     /// Move aside a database file that has our data tables but no GRDB migration bookkeeping — the
@@ -83,8 +93,15 @@ public actor WhoopStore {
     }
 
     /// An in-memory store (migrations applied). For tests.
+    ///
+    /// Backed by a `DatabaseQueue`, not a `DatabasePool`: GRDB has no in-memory `DatabasePool`
+    /// (a Pool needs a real file so its reader connections can open WAL snapshots of it). A
+    /// `DatabaseQueue` is also a `DatabaseWriter`, so this is API-identical; only the concurrency
+    /// differs, which an in-memory test store doesn't exercise. The production `init(path:)` path
+    /// is the one that gets the Pool (#755). Tests that need real read/write concurrency open a
+    /// file-backed Pool directly.
     public static func inMemory() async throws -> WhoopStore {
-        try WhoopStore(dbQueue: try DatabaseQueue())
+        try WhoopStore(dbWriter: try DatabaseQueue())
     }
 
     // MARK: - Synchronous GRDB helpers
@@ -95,12 +112,12 @@ public actor WhoopStore {
 
     @inline(__always)
     func syncRead<T>(_ block: (Database) throws -> T) throws -> T {
-        try dbQueue.read(block)
+        try dbWriter.read(block)
     }
 
     @inline(__always)
     func syncWrite<T>(_ block: (Database) throws -> T) throws -> T {
-        try dbQueue.write(block)
+        try dbWriter.write(block)
     }
 
     // MARK: - Maintenance
@@ -116,7 +133,7 @@ public actor WhoopStore {
     /// Non-async so GRDB's synchronous `writeWithoutTransaction` overload is chosen (mirrors the
     /// syncRead/syncWrite pattern). Runs on the actor's executor, off the main thread.
     private func checkpointWALImpl() throws {
-        try dbQueue.writeWithoutTransaction { db in
+        try dbWriter.writeWithoutTransaction { db in
             try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
         }
     }
@@ -125,7 +142,7 @@ public actor WhoopStore {
     /// Drives the iOS Storage diagnostics screen (#590). `nil` for an in-memory store (no path). Runs
     /// on the actor's executor, off the main thread.
     public func databaseFileSizeBytes() async -> Int64? {
-        let base = dbQueue.path
+        let base = dbWriter.path
         guard base != ":memory:", !base.isEmpty else { return nil }
         let fm = FileManager.default
         var total: Int64 = 0

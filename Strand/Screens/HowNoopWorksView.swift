@@ -46,7 +46,7 @@ struct HowNoopWorksView: View {
             case .sleepSorting:
                 return "NOOP picks your main sleep as your longest real block, and (once it has learned your usual hours) the one nearest your normal sleep time. Everything else that day is a nap. You can always edit bed and wake times."
             case .scores:
-                return "Charge, Effort and Rest are scored on your own device from your strap data. They get personal after about two weeks of your nights (that's \"Calibrating\"). Before that NOOP shows what it can without faking a number."
+                return "Charge, Effort and Rest are scored on your own device from your strap data. Charge needs about four nights of sleep to learn your baseline (that's \"Calibrating\", counted as nights of 4 on the ring), and keeps sharpening over your first couple of weeks. On a WHOOP 5 or MG the strap banks little history, so that count can sit at 0 of 4 until you have worn it across a few nights. That's the strap's sync limit, not a fault. Before there's a number, NOOP shows what it can without faking one."
             case .recording:
                 return "When your strap is connected NOOP is saving data live. \"Last synced\" tells you how fresh it is. If it says \"Not recording\", reconnect."
             case .provenance:

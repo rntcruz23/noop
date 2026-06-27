@@ -302,7 +302,7 @@ final class IntelligenceEngine: ObservableObject {
         // stable for the run. With only the seeded 'my-whoop' row paired (the default and every
         // single-WHOOP install) the active strap is `deviceId`, so `resolveDayOwner` below returns
         // `deviceId` for every day and the per-day reads are byte-identical to the pre-I2 behaviour.
-        let registry = DeviceRegistryStore(dbQueue: store.registryQueue)
+        let registry = DeviceRegistryStore(dbQueue: store.registryWriter)
         let regDevices = (try? registry.all()) ?? []
         let regActiveId = (try? registry.activeDeviceId()) ?? deviceId
 

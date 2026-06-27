@@ -317,8 +317,18 @@ fun TodayScreen(
         // reads COMPUTED_SOURCE = "my-whoop-noop"). The earlier resolvedSeries("…","my-whoop") read resolved
         // empty in the demo because those two scores never live under the imported "my-whoop" source. Take
         // the latest value (series are day-ascending), null → the card shows a dash, never a fabricated number.
+        // #753: build the SAME StressModel the detail screen (StressScreen) shows and take `model.score`,
+        // rather than the stress series' last banked row. StressModel.build prefers today's stored stress row
+        // but otherwise DERIVES today's score from the live `days` RHR/HRV baseline; the old `.lastOrNull()`
+        // read returned the latest *banked* day, so on a day with no stored stress row the pinned card sat on
+        // yesterday's number (e.g. "2") while the detail page moved on. Reading the stored series the same way
+        // StressScreen does (day → value, clamped 0–3) and feeding the same `days` ties the two together; both
+        // recompute off `days`, so the pinned card stays in sync. null (no usable signal) keeps the honest
+        // "Calibrating" placeholder, matching StressScreen's empty state.
         stressToday = runCatching {
-            viewModel.repo.metricSeries("my-whoop", "stress", "0000-01-01", "9999-12-31").lastOrNull()?.value
+            val stored = viewModel.repo.metricSeries("my-whoop", "stress", "0000-01-01", "9999-12-31")
+                .associate { it.day to it.value.coerceIn(0.0, 3.0) }
+            StressModel.build(days, stored)?.score
         }.getOrNull()
         fitnessAgeToday = runCatching {
             viewModel.repo.metricSeries("my-whoop-noop", "fitness_age", "0000-01-01", "9999-12-31").lastOrNull()?.value
@@ -994,7 +1004,11 @@ fun TodayScreen(
         if (selectedDayOffset == 0) item { ReadinessSection(days, carriedDay = lastScoredRecoveryDay) }
 
         // METRICS — uniform tile grid (two columns), each tile with a 14-day sparkline.
-        item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
+        // #765: no ad-hoc Spacer row before this header. The lone `selectorTopUp` spacer here (a device the
+        // Health/Sleep screens use to tug a SEGMENTED SELECTOR up toward the section above) had no selector
+        // to tug on Today; it just injected an extra gap that, on top of the scaffold's per-row spacing on
+        // both sides of the spacer item, made the gap before Key Metrics visibly larger than every other
+        // inter-card gap. Removing it lets Key Metrics sit on the SAME shared screenRowSpacing as the rest.
         // Section header + an Edit affordance to open the local layout editor (#251). No new nav
         // destination — a dialog over Today. The Box lets the SectionHeader keep its trailing label while
         // the Edit control sits to its right.
@@ -3363,7 +3377,27 @@ private fun OverviewHRChart(
             .onSizeChanged { plotW = it.width.toFloat(); plotH = it.height.toFloat() }
             .semantics { contentDescription = markerDescription },
     ) {
-        // 1) The HR line — unchanged shared component, tap-to-inspect intact.
+        // #765 (z-order / background layering): the sleep band must sit BEHIND the HR curve, matching the
+        // iOS OverviewHRChart whose RectangleMark is "drawn first so the HR line/area sit on top". Android
+        // previously drew the band in the SAME Canvas as the dashed rules, AFTER the LineChart, so the
+        // translucent indigo region washed OVER the HR line + its value markers (the reported "text behind
+        // the chart" / muddied curve). Splitting the band into its OWN Canvas placed BEFORE the LineChart
+        // puts it under the curve, exactly like iOS; the wake divider, Charge/Effort rules and glow end-cap
+        // stay in the Canvas AFTER the line (iOS draws those marks after the LineMark too, so they read on
+        // top). Only the fill moved; same geometry, same colours.
+        if (plotW > 0f && plotH > 0f &&
+            sleepStartX != null && sleepEndX != null && sleepEndX > sleepStartX) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawRect(
+                    color = Palette.sleepDeep.copy(alpha = 0.30f),
+                    topLeft = Offset(sleepStartX, 0f),
+                    size = Size(sleepEndX - sleepStartX, size.height),
+                )
+            }
+        }
+
+        // 1) The HR line (unchanged shared component, tap-to-inspect intact). Sits OVER the sleep band
+        // (above) and UNDER the dashed rules + glow end-cap + marker pills (below), mirroring iOS.
         LineChart(
             values = bpm,
             modifier = Modifier.fillMaxSize(),
@@ -3372,28 +3406,22 @@ private fun OverviewHRChart(
             selectionEnabled = true,
         )
 
-        // 2) Band + dashed rules, drawn in one Canvas above the line.
+        // 2) Wake divider + dashed rules + glow end-cap, drawn in one Canvas ON TOP of the line.
         if (plotW > 0f && plotH > 0f) {
             val dash = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
             val wakeDash = remember { PathEffect.dashPathEffect(floatArrayOf(3f, 3f), 0f) }
             Canvas(modifier = Modifier.fillMaxSize()) {
-                // Sleep band — a translucent indigo region across the sleep span.
-                if (sleepStartX != null && sleepEndX != null && sleepEndX > sleepStartX) {
-                    drawRect(
-                        color = Palette.sleepDeep.copy(alpha = 0.30f),
-                        topLeft = Offset(sleepStartX, 0f),
-                        size = Size(sleepEndX - sleepStartX, size.height),
+                // Wake divider: the sleep-to-day boundary, so the band reads even before Charge calibrates.
+                // On top of the line (matching iOS's wake RuleMark after the LineMark).
+                if (sleepStartX != null && sleepEndX != null && sleepEndX > sleepStartX &&
+                    sleepEndX > 0f && sleepEndX < size.width) {
+                    drawLine(
+                        color = Palette.sleepLight.copy(alpha = 0.5f),
+                        start = Offset(sleepEndX, 0f),
+                        end = Offset(sleepEndX, size.height),
+                        strokeWidth = 1f,
+                        pathEffect = wakeDash,
                     )
-                    // Wake divider — the sleep→day boundary, so the band reads even before Charge calibrates.
-                    if (sleepEndX > 0f && sleepEndX < size.width) {
-                        drawLine(
-                            color = Palette.sleepLight.copy(alpha = 0.5f),
-                            start = Offset(sleepEndX, 0f),
-                            end = Offset(sleepEndX, size.height),
-                            strokeWidth = 1f,
-                            pathEffect = wakeDash,
-                        )
-                    }
                 }
                 // Charge rule at wake.
                 if (chargeX != null && recovery != null) {

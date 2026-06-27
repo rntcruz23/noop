@@ -1143,7 +1143,9 @@ fun ScreenScaffold(
             modifier = columnModifier
                 .verticalScroll(rememberScrollState())
                 .padding(start = 28.dp, end = 28.dp, top = topPadding, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            // #765: one shared inter-card spacing token (was a bare `20.dp`), so the eager + lazy scaffolds
+            // and every screen through them keep the SAME uniform gap between top-level cards.
+            verticalArrangement = Arrangement.spacedBy(Metrics.screenRowSpacing),
         ) {
             // Compact top bar: an optional LEADING action (e.g. the Today profile avatar, mirroring iOS's
             // avatar-leading header), the screen title/subtitle, then an optional trailing action (e.g. the
@@ -1218,7 +1220,7 @@ fun ScreenScaffold(
 // The content slot is a [LazyListScope] (item { } / items(...)) rather than a ColumnScope,
 // so callers stay explicit about what is a one-off header vs the lazily-built list — and
 // every existing ScreenScaffold caller is untouched. The header, 28dp screen padding and
-// 20dp inter-item spacing match ScreenScaffold so the two read identically.
+// the shared Metrics.screenRowSpacing inter-item gap match ScreenScaffold so the two read identically.
 
 @Composable
 fun LazyScreenScaffold(
@@ -1268,7 +1270,7 @@ fun LazyScreenScaffold(
         }
 
     // The lazy list itself. Its background + the contentPadding differ by path so the scene-backed list
-    // is transparent (scene shows through) while keeping the SAME 28dp screen inset + 20dp row spacing as
+    // is transparent (scene shows through) while keeping the SAME 28dp screen inset + shared row spacing as
     // the eager ScreenScaffold. The top inset honours [topPadding] (so a custom-header screen can tighten
     // the gap above the first row, exactly like ScreenScaffold's `padding(top = topPadding)`).
     val listModifier: Modifier =
@@ -1281,7 +1283,9 @@ fun LazyScreenScaffold(
         LazyColumn(
             modifier = listModifier,
             contentPadding = PaddingValues(start = 28.dp, top = topPadding, end = 28.dp, bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            // #765: the SAME shared inter-card spacing token as the eager ScreenScaffold, so Today/Explore
+            // (both lazy) and the eager screens share one uniform card rhythm.
+            verticalArrangement = Arrangement.spacedBy(Metrics.screenRowSpacing),
         ) {
             if (header != null) {
                 item { header() }

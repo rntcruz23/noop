@@ -20,6 +20,12 @@
             "state": "translated",
             "value": "—"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "—"
+          }
         }
       }
     },
@@ -38,6 +44,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "·"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "·"
@@ -64,6 +76,12 @@
             "state": "translated",
             "value": "· %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "· %@"
+          }
         }
       }
     },
@@ -82,6 +100,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "/ %lld"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "/ %lld"
@@ -108,6 +132,12 @@
             "state": "translated",
             "value": "% от макс."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "% Max"
+          }
         }
       }
     },
@@ -126,6 +156,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "%@"
@@ -152,6 +188,12 @@
             "state": "translated",
             "value": "%@ – %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ – %@"
+          }
         }
       }
     },
@@ -170,6 +212,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · %@"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "%@ · %@"
@@ -196,6 +244,12 @@
             "state": "translated",
             "value": "%@ · n = %lld"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · n = %lld"
+          }
         }
       }
     },
@@ -214,6 +268,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ / %@"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "%@ / %@"
@@ -240,6 +300,12 @@
             "state": "translated",
             "value": "%@ %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ %@"
+          }
         }
       }
     },
@@ -258,6 +324,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ↔ %@"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "%@ ↔ %@"
@@ -284,6 +356,12 @@
             "state": "translated",
             "value": "%@ бесплатен и всегда таким останется. Если он вам полезен, вы можете поддержать разработку и покрытие расходов на тестирование. Это полностью по желанию."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ est gratuit et le sera toujours. S'il vous est utile, vous pouvez contribuer aux coûts de développement et de test. Totalement facultatif."
+          }
         }
       }
     },
@@ -306,6 +384,12 @@
             "state": "translated",
             "value": "%@ против %@, r равно %@, %lld дн."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ versus %@, r = %@, %lld jours"
+          }
         }
       }
     },
@@ -326,7 +410,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Уведомления на запястье — %@"
+            "value": "Уведомления на запястье , %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ alertes au poignet"
           }
         }
       }
@@ -346,6 +436,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, %@%@"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "%@, %@%@"
@@ -372,6 +468,12 @@
             "state": "translated",
             "value": "%@, корреляция %@, %lld дн."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, corrélation %@, %lld jours"
+          }
         }
       }
     },
@@ -393,6 +495,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@, диапазон от %@ до %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, plage %@ à %@"
           }
         }
       }
@@ -416,6 +524,12 @@
             "state": "translated",
             "value": "%@: %@ прошлой ночью%@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ : %@ la nuit dernière%@"
+          }
         }
       }
     },
@@ -434,6 +548,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@%@"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "%@%@"
@@ -460,6 +580,12 @@
             "state": "translated",
             "value": "%lld"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld"
+          }
         }
       }
     },
@@ -478,6 +604,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld / %lld"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "%lld / %lld"
@@ -504,6 +636,12 @@
             "state": "translated",
             "value": "Включено приложений: %lld"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld app%@ sur"
+          }
         }
       }
     },
@@ -525,6 +663,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld вдохов"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld respirations"
           }
         }
       }
@@ -548,6 +692,12 @@
             "state": "translated",
             "value": "%lld дн. · сохранено снов: %lld"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld jours · %lld nuits stockées"
+          }
         }
       }
     },
@@ -569,6 +719,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "За эту сессию записано измерений: %lld."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld trame%@ capturée cette séance."
           }
         }
       }
@@ -592,6 +748,12 @@
             "state": "translated",
             "value": "%lld мин."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld min"
+          }
         }
       }
     },
@@ -613,6 +775,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld из %lld ночей"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld de %lld nuits"
           }
         }
       }
@@ -636,6 +804,12 @@
             "state": "translated",
             "value": "Совпадающих дней: %lld · корреляция %@ %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld jours chevauchants · corrélation %@ %@"
+          }
         }
       }
     },
@@ -658,6 +832,12 @@
             "state": "translated",
             "value": "%lld–%lld%@ · шаг %lld"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld–%lld%@ · étape %lld"
+          }
         }
       }
     },
@@ -676,6 +856,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "•"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "•"
@@ -702,49 +888,67 @@
             "state": "translated",
             "value": "✓"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "✓"
+          }
         }
       }
     },
-    "A private window into your recovery, sleep and strain — read straight from your strap, kept only on this Mac.": {
+    "A private window into your recovery, sleep and strain , read straight from your strap, kept only on this Mac.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A private window into your recovery, sleep and strain — read straight from your strap, kept only on this Mac."
+            "value": "A private window into your recovery, sleep and strain , read straight from your strap, kept only on this Mac."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ein privater Blick auf deine Erholung, deinen Schlaf und deine Belastung — direkt vom Strap gelesen und nur auf diesem Mac gespeichert."
+            "value": "Ein privater Blick auf deine Erholung, deinen Schlaf und deine Belastung , direkt vom Strap gelesen und nur auf diesem Mac gespeichert."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Личное окно с вашими показателями восстановления, сна и нагрузки — данные поступают напрямую с браслета и хранятся только на этом Mac"
+            "value": "Личное окно с вашими показателями восстановления, сна и нагрузки , данные поступают напрямую с браслета и хранятся только на этом Mac"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une fenêtre privée sur votre récupération, sommeil et effort , lu directement depuis votre bracelet, conservé uniquement sur ce Mac."
           }
         }
       }
     },
-    "A standalone companion for your WHOOP. Everything stays on this device — your history, your live stream, your numbers. Nothing is uploaded. NOOP is an independent, experimental project, not the WHOOP app.": {
+    "A standalone companion for your WHOOP. Everything stays on this device , your history, your live stream, your numbers. Nothing is uploaded. NOOP is an independent, experimental project, not the WHOOP app.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A standalone companion for your WHOOP. Everything stays on this device — your history, your live stream, your numbers. Nothing is uploaded. NOOP is an independent, experimental project, not the WHOOP app."
+            "value": "A standalone companion for your WHOOP. Everything stays on this device , your history, your live stream, your numbers. Nothing is uploaded. NOOP is an independent, experimental project, not the WHOOP app."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ein eigenständiger Begleiter für dein WHOOP. Alles bleibt auf diesem Gerät — deine Historie, dein Live-Stream, deine Werte. Nichts wird hochgeladen. NOOP ist ein unabhängiges, experimentelles Projekt, nicht die WHOOP-App."
+            "value": "Ein eigenständiger Begleiter für dein WHOOP. Alles bleibt auf diesem Gerät , deine Historie, dein Live-Stream, deine Werte. Nichts wird hochgeladen. NOOP ist ein unabhängiges, experimentelles Projekt, nicht die WHOOP-App."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Это отдельное приложение-компаньон для вашего браслета Whoop. Все данные — история, поток измерений в реальном времени, показатели — хранятся только на этом устройстве, ничего не отправляется в облако. NOOP — независимый экспериментальный проект, и это не официальное приложение Whoop."
+            "value": "Это отдельное приложение-компаньон для вашего браслета Whoop. Все данные , история, поток измерений в реальном времени, показатели , хранятся только на этом устройстве, ничего не отправляется в облако. NOOP , независимый экспериментальный проект, и это не официальное приложение Whoop."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un compagnon autonome pour votre WHOOP. Tout reste sur cet appareil , votre historique, votre flux en direct, vos chiffres. Rien n'est téléchargé. NOOP est un projet indépendant et expérimental, pas l'application WHOOP."
           }
         }
       }
@@ -767,6 +971,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "О приложении"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "À propos"
           }
         }
       }
@@ -796,6 +1006,12 @@
             "state": "translated",
             "value": "Energía activa"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Énergie active"
+          }
         }
       }
     },
@@ -824,6 +1040,12 @@
             "state": "translated",
             "value": "Активность"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activité"
+          }
         }
       }
     },
@@ -845,6 +1067,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Активность и энергия"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activité et énergie"
           }
         }
       }
@@ -868,6 +1096,12 @@
             "state": "translated",
             "value": "Структура активности"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Répartition de l'activité"
+          }
         }
       }
     },
@@ -888,7 +1122,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Соотношение острой (7-дневной) и хронической (28-дневной) тренировочной нагрузки. Оптимальный коэффициент — 0,8–1,3."
+            "value": "Соотношение острой (7-дневной) и хронической (28-дневной) тренировочной нагрузки. Оптимальный коэффициент , 0,8–1,3."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Charge d'entraînement aiguë (7 jours) vs chronique (28 jours). 0,8–1,3 est la zone idéale."
           }
         }
       }
@@ -912,6 +1152,12 @@
             "state": "translated",
             "value": "Добавьте метрику для сравнения"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajouter une métrique à comparer"
+          }
         }
       }
     },
@@ -933,6 +1179,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Добавить метрику"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ajouter une métrique"
           }
         }
       }
@@ -956,6 +1208,12 @@
             "state": "translated",
             "value": "Возраст"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Âge"
+          }
         }
       }
     },
@@ -977,6 +1235,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Возраст, %lld лет"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Âge, %lld ans"
           }
         }
       }
@@ -1000,6 +1264,12 @@
             "state": "translated",
             "value": "Все сессии"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toutes les séances"
+          }
         }
       }
     },
@@ -1021,6 +1291,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "ВСЕ ВАШИ ДАННЫЕ · НИКАКИХ ОБЛАЧНЫХ СЕРВИСОВ"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TOUTES VOS DONNÉES · SANS LE CLOUD"
           }
         }
       }
@@ -1044,27 +1320,39 @@
             "state": "translated",
             "value": "все ваши данные, никаких облачных сервисов"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "toutes vos données, sans le cloud"
+          }
         }
       }
     },
-    "Any amount helps. Thank you — genuinely.": {
+    "Any amount helps. Thank you , genuinely.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Any amount helps. Thank you — genuinely."
+            "value": "Any amount helps. Thank you , genuinely."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Jeder Betrag hilft. Danke — wirklich."
+            "value": "Jeder Betrag hilft. Danke , wirklich."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Любая сумма поможет. Спасибо — искренне."
+            "value": "Любая сумма поможет. Спасибо , искренне."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tout montant est utile. Merci , sincèrement."
           }
         }
       }
@@ -1088,6 +1376,12 @@
             "state": "translated",
             "value": "API-ключ"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé API"
+          }
         }
       }
     },
@@ -1106,6 +1400,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "Apple"
@@ -1132,27 +1432,39 @@
             "state": "translated",
             "value": "Apple Здоровье"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Santé"
+          }
         }
       }
     },
-    "Ask about your recovery, strain, sleep and workouts — grounded in your own numbers.": {
+    "Ask about your recovery, strain, sleep and workouts , grounded in your own numbers.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ask about your recovery, strain, sleep and workouts — grounded in your own numbers."
+            "value": "Ask about your recovery, strain, sleep and workouts , grounded in your own numbers."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Frage nach deiner Erholung, Belastung, deinem Schlaf und deinen Workouts — basierend auf deinen eigenen Werten."
+            "value": "Frage nach deiner Erholung, Belastung, deinem Schlaf und deinen Workouts , basierend auf deinen eigenen Werten."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Спрашивайте о восстановлении, нагрузке, сне и тренировках — на основе ваших собственных данных."
+            "value": "Спрашивайте о восстановлении, нагрузке, сне и тренировках , на основе ваших собственных данных."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Posez des questions sur votre récupération, effort, sommeil et entraînements , basées sur vos propres chiffres."
           }
         }
       }
@@ -1176,6 +1488,12 @@
             "state": "translated",
             "value": "Спросите ИИ-тренера о ваших данных…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demandez à Coach à propos de vos données…"
+          }
         }
       }
     },
@@ -1197,6 +1515,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Задайте первый вопрос"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Posez votre première question"
           }
         }
       }
@@ -1220,6 +1544,12 @@
             "state": "translated",
             "value": "Сон"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Endormi"
+          }
         }
       }
     },
@@ -1241,6 +1571,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сон, среднее"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moy. endormi"
           }
         }
       }
@@ -1264,6 +1600,12 @@
             "state": "translated",
             "value": "Длительность сна"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durée de sommeil"
+          }
         }
       }
     },
@@ -1285,6 +1627,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Краткий обзор"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En un coup d'œil"
           }
         }
       }
@@ -1308,6 +1656,12 @@
             "state": "translated",
             "value": "Авторасчёт"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto"
+          }
         }
       }
     },
@@ -1329,6 +1683,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Авторасчёт · %lld уд/мин (Танака)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto · %lld bpm (Tanaka)"
           }
         }
       }
@@ -1352,6 +1712,12 @@
             "state": "translated",
             "value": "Автоматизации"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatisations"
+          }
         }
       }
     },
@@ -1374,6 +1740,12 @@
             "state": "translated",
             "value": "Вегетативная нагрузка по ВСР и пульсу в покое"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Charge autonome à partir de la VFC et de la FC au repos"
+          }
         }
       }
     },
@@ -1395,6 +1767,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Среднее"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moyenne"
           }
         }
       }
@@ -1424,6 +1802,12 @@
             "state": "translated",
             "value": "Сред."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moy."
+          }
         }
       }
     },
@@ -1445,6 +1829,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Бодрствование"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Éveillé"
           }
         }
       }
@@ -1468,6 +1858,12 @@
             "state": "translated",
             "value": "Назад"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retour"
+          }
         }
       }
     },
@@ -1489,6 +1885,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Резервная копия и восстановление"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sauvegarde et restauration"
           }
         }
       }
@@ -1512,6 +1914,12 @@
             "state": "translated",
             "value": "Батарея %lld%%"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Batterie %lld%%"
+          }
         }
       }
     },
@@ -1534,6 +1942,12 @@
             "state": "translated",
             "value": "Батарея %lld%% · Заряжается"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Batterie %lld%% · En charge"
+          }
         }
       }
     },
@@ -1555,6 +1969,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Влияние привычек"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effets comportementaux"
           }
         }
       }
@@ -1584,6 +2004,12 @@
             "state": "translated",
             "value": "Oxígeno en sangre"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oxygène sanguin"
+          }
         }
       }
     },
@@ -1612,6 +2038,12 @@
             "state": "translated",
             "value": "Oxígeno en sangre"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oxygène sanguin"
+          }
         }
       }
     },
@@ -1633,6 +2065,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "ИМТ"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "IMC"
           }
         }
       }
@@ -1656,6 +2094,12 @@
             "state": "translated",
             "value": "Состав тела"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Composition corporelle"
+          }
         }
       }
     },
@@ -1677,6 +2121,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Процент жира в организме"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Graisse corporelle"
           }
         }
       }
@@ -1700,6 +2150,12 @@
             "state": "translated",
             "value": "Процент жира в организме"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Graisse corporelle"
+          }
         }
       }
     },
@@ -1721,6 +2177,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подключите браслет на экране «В реальном времени», чтобы ориентироваться по вибросигналам."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associez votre bracelet sur l'écran En direct pour ressentir les transitions sans les mains."
           }
         }
       }
@@ -1744,6 +2206,12 @@
             "state": "translated",
             "value": "уд/мин"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bpm"
+          }
         }
       }
     },
@@ -1765,6 +2233,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "УД/МИН"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "BPM"
           }
         }
       }
@@ -1788,6 +2262,12 @@
             "state": "translated",
             "value": "Дыхание"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respirer"
+          }
         }
       }
     },
@@ -1809,6 +2289,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "По данным с браслета"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Construction depuis votre bracelet"
           }
         }
       }
@@ -1832,6 +2318,12 @@
             "state": "translated",
             "value": "Создано на основе"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Construit le"
+          }
         }
       }
     },
@@ -1853,6 +2345,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Вибросигналы вкл."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signaux haptiques activés"
           }
         }
       }
@@ -1876,6 +2374,12 @@
             "state": "translated",
             "value": "Вибрация браслета"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vibrer le bracelet"
+          }
         }
       }
     },
@@ -1897,6 +2401,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Браслет вибрирует, когда эти приложения присылают уведомления. Всё работает на этом Mac."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vibrez votre bracelet quand ces apps vous notifient. Tout fonctionne sur ce Mac."
           }
         }
       }
@@ -1920,6 +2430,12 @@
             "state": "translated",
             "value": "Вибрирует на запястье"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vibre à votre poignet"
+          }
         }
       }
     },
@@ -1942,6 +2458,12 @@
             "state": "translated",
             "value": "По виду спорта"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Par sport"
+          }
         }
       }
     },
@@ -1963,6 +2485,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Календарь"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calendrier"
           }
         }
       }
@@ -1992,6 +2520,12 @@
             "state": "translated",
             "value": "Калибровка"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calibration en cours"
+          }
         }
       }
     },
@@ -2013,6 +2547,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Спокойное время"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temps calme"
           }
         }
       }
@@ -2042,6 +2582,12 @@
             "state": "translated",
             "value": "Calorías"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calories"
+          }
         }
       }
     },
@@ -2063,6 +2609,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сердце"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cardiaque"
           }
         }
       }
@@ -2086,6 +2638,12 @@
             "state": "translated",
             "value": "Категория"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Catégorie"
+          }
         }
       }
     },
@@ -2107,6 +2665,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Выбрать экспорт…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir l'export…"
           }
         }
       }
@@ -2130,6 +2694,12 @@
             "state": "translated",
             "value": "Выбрать export.zip…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir export.zip…"
+          }
         }
       }
     },
@@ -2152,6 +2722,12 @@
             "state": "translated",
             "value": "Выберите шаблон вибрации для %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisir le schéma de vibration pour %@"
+          }
         }
       }
     },
@@ -2173,6 +2749,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сбросить"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effacer"
           }
         }
       }
@@ -2202,6 +2784,12 @@
             "state": "translated",
             "value": "Закрыть"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer"
+          }
         }
       }
     },
@@ -2223,6 +2811,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Закрыть поддержку"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fermer l'assistance"
           }
         }
       }
@@ -2246,6 +2840,12 @@
             "state": "translated",
             "value": "ИИ-тренер"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coach"
+          }
         }
       }
     },
@@ -2267,6 +2867,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "ИИ-тренер думает"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coach réfléchit"
           }
         }
       }
@@ -2290,6 +2896,12 @@
             "state": "translated",
             "value": "ИИ-тренер думает…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coach réfléchit…"
+          }
         }
       }
     },
@@ -2311,6 +2923,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "ИИ-тренер анализирует сводку за последние две недели, средние показатели за 30 дней и недавние тренировки, а затем отвечает понятным языком. Попробуйте один из вариантов ниже."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coach lit un résumé de vos deux dernières semaines, les moyennes sur 30 jours et vos récents entraînements, puis répond en langage clair. Essayez une suggestion ci-dessous."
           }
         }
       }
@@ -2334,6 +2952,12 @@
             "state": "translated",
             "value": "ИИ-тренер: %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coach a dit : %@"
+          }
         }
       }
     },
@@ -2355,6 +2979,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "ИИ-тренер использует ваш API-ключ. Выберите провайдера, вставьте ключ и выберите модель. Ключ надёжно хранится в «Связке ключей» macOS и отправляется только при выполнении вашего запроса."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coach utilise votre propre clé API. Choisissez un fournisseur, collez une clé et sélectionnez un modèle. Votre clé est stockée de façon sécurisée dans le trousseau macOS et ne quitte jamais votre Mac sauf pour la requête que vous effectuez."
           }
         }
       }
@@ -2378,6 +3008,12 @@
             "state": "translated",
             "value": "Оценка когерентности"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estimation de cohérence"
+          }
         }
       }
     },
@@ -2399,6 +3035,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Данные собираются"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En cours d'assemblage"
           }
         }
       }
@@ -2422,6 +3064,12 @@
             "state": "translated",
             "value": "Сравнить"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comparer"
+          }
         }
       }
     },
@@ -2443,6 +3091,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Для сравнения нужны как минимум два показателя с историей. Сначала импортируйте данные WHOOP в разделе «Источники данных»."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comparer nécessite au moins deux métriques avec un historique. Importez d'abord votre export WHOOP dans Sources de données."
           }
         }
       }
@@ -2466,6 +3120,12 @@
             "state": "translated",
             "value": "Завершено"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminé"
+          }
         }
       }
     },
@@ -2487,6 +3147,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Настроить"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configurer"
           }
         }
       }
@@ -2510,6 +3176,12 @@
             "state": "translated",
             "value": "Подключите провайдера"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecter un fournisseur"
+          }
         }
       }
     },
@@ -2532,27 +3204,39 @@
             "state": "translated",
             "value": "Подключите браслет, чтобы получать вибросигналы"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecter le bracelet pour les signaux haptiques"
+          }
         }
       }
     },
-    "Connect your strap for haptic guidance — you'll feel one pulse on the inhale, two on the exhale, so you can breathe with your eyes closed.": {
+    "Connect your strap for haptic guidance , you'll feel one pulse on the inhale, two on the exhale, so you can breathe with your eyes closed.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connect your strap for haptic guidance — you'll feel one pulse on the inhale, two on the exhale, so you can breathe with your eyes closed."
+            "value": "Connect your strap for haptic guidance , you'll feel one pulse on the inhale, two on the exhale, so you can breathe with your eyes closed."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verbinde deinen Strap für haptische Führung — du spürst einen Impuls beim Einatmen, zwei beim Ausatmen, sodass du mit geschlossenen Augen atmen kannst."
+            "value": "Verbinde deinen Strap für haptische Führung , du spürst einen Impuls beim Einatmen, zwei beim Ausatmen, sodass du mit geschlossenen Augen atmen kannst."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Подключите браслет, чтобы он подсказывал ритм вибрацией: один импульс на вдохе, два — на выдохе. Так можно дышать с закрытыми глазами."
+            "value": "Подключите браслет, чтобы он подсказывал ритм вибрацией: один импульс на вдохе, два , на выдохе. Так можно дышать с закрытыми глазами."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez votre bracelet pour un guidage haptique , vous sentirez une impulsion à l'inspiration, deux à l'expiration, pour respirer les yeux fermés."
           }
         }
       }
@@ -2576,6 +3260,12 @@
             "state": "translated",
             "value": "Подключите браслет, чтобы включить"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez votre bracelet pour activer"
+          }
         }
       }
     },
@@ -2597,6 +3287,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подключите браслет, чтобы проверить"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez votre bracelet pour tester"
           }
         }
       }
@@ -2626,6 +3322,12 @@
             "state": "translated",
             "value": "Подключено"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecté"
+          }
         }
       }
     },
@@ -2647,6 +3349,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подключается…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion en cours…"
           }
         }
       }
@@ -2670,6 +3378,12 @@
             "state": "translated",
             "value": "Регулярность"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Régularité"
+          }
         }
       }
     },
@@ -2691,6 +3405,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пункт управления"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Centre de contrôle"
           }
         }
       }
@@ -2714,6 +3434,12 @@
             "state": "translated",
             "value": "Скопировано!"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copié !"
+          }
         }
       }
     },
@@ -2735,6 +3461,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Копировать"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copier"
           }
         }
       }
@@ -2758,6 +3490,12 @@
             "state": "translated",
             "value": "Скопировать адрес %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copier l'adresse %@"
+          }
         }
       }
     },
@@ -2779,6 +3517,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Скопировать адрес"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copier l'adresse"
           }
         }
       }
@@ -2802,6 +3546,12 @@
             "state": "translated",
             "value": "Обрабатываю исходные данные…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Traitement de vos flux bruts…"
+          }
         }
       }
     },
@@ -2823,6 +3573,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пользовательский ID модели"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID de modèle personnalisé"
           }
         }
       }
@@ -2852,6 +3608,12 @@
             "state": "translated",
             "value": "Пользовательский…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personnalisé…"
+          }
         }
       }
     },
@@ -2873,6 +3635,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ежедневные показатели"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signaux quotidiens"
           }
         }
       }
@@ -2896,6 +3664,12 @@
             "state": "translated",
             "value": "Источники данных"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sources de données"
+          }
         }
       }
     },
@@ -2917,6 +3691,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Дата"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Date"
           }
         }
       }
@@ -2940,6 +3720,12 @@
             "state": "translated",
             "value": "Дневная нагрузка"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effort du jour"
+          }
         }
       }
     },
@@ -2961,6 +3747,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Дневная нагрузка"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effort du jour"
           }
         }
       }
@@ -2984,6 +3776,12 @@
             "state": "translated",
             "value": "Дни"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jours"
+          }
         }
       }
     },
@@ -3005,6 +3803,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Глубокий"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profond"
           }
         }
       }
@@ -3028,6 +3832,12 @@
             "state": "translated",
             "value": "Истощён"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Épuisé"
+          }
         }
       }
     },
@@ -3049,6 +3859,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отключить"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déconnecter"
           }
         }
       }
@@ -3072,6 +3888,12 @@
             "state": "translated",
             "value": "Не видите его? Это нормально."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous ne le voyez pas ? C'est normal."
+          }
         }
       }
     },
@@ -3093,6 +3915,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "QR-код для пожертвования"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code QR de don"
           }
         }
       }
@@ -3116,6 +3944,12 @@
             "state": "translated",
             "value": "Величина эффекта"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taille d'effet"
+          }
         }
       }
     },
@@ -3137,6 +3971,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Эффективность"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Efficacité"
           }
         }
       }
@@ -3160,6 +4000,12 @@
             "state": "translated",
             "value": "Эл. почта"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "E-mail"
+          }
         }
       }
     },
@@ -3181,6 +4027,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Написать на %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer un e-mail à %@"
           }
         }
       }
@@ -3204,6 +4056,12 @@
             "state": "translated",
             "value": "Включить уведомления на браслете"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activer les alertes au poignet"
+          }
         }
       }
     },
@@ -3225,6 +4083,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Введите ID модели"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrez un ID de modèle"
           }
         }
       }
@@ -3248,27 +4112,39 @@
             "state": "translated",
             "value": "Ошибка: %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erreur : %@"
+          }
         }
       }
     },
-    "Estimate only — a higher RMSSD while paced usually means your parasympathetic \"rest\" branch is engaging. It is not a clinical reading; trends over a session matter more than any single number.": {
+    "Estimate only , a higher RMSSD while paced usually means your parasympathetic \"rest\" branch is engaging. It is not a clinical reading; trends over a session matter more than any single number.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Estimate only — a higher RMSSD while paced usually means your parasympathetic \"rest\" branch is engaging. It is not a clinical reading; trends over a session matter more than any single number."
+            "value": "Estimate only , a higher RMSSD while paced usually means your parasympathetic \"rest\" branch is engaging. It is not a clinical reading; trends over a session matter more than any single number."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nur eine Schätzung — ein höherer RMSSD beim getakteten Atmen bedeutet meist, dass dein parasympathischer \"Ruhe\"-Zweig aktiv wird. Es ist kein klinischer Wert; Trends über eine Sitzung sind wichtiger als ein einzelner Wert."
+            "value": "Nur eine Schätzung , ein höherer RMSSD beim getakteten Atmen bedeutet meist, dass dein parasympathischer \"Ruhe\"-Zweig aktiv wird. Es ist kein klinischer Wert; Trends über eine Sitzung sind wichtiger als ein einzelner Wert."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Это только оценка: более высокий RMSSD при дыхании в заданном ритме обычно указывает на активацию парасимпатического отдела. Это не медицинское измерение; важнее динамика в течение сессии, а не отдельное значение."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estimation uniquement , un RMSSD plus élevé lors d'un rythme imposé signifie généralement que votre branche parasympathique de « repos » s'engage. Ce n'est pas une lecture clinique ; les tendances sur une séance comptent plus que chaque chiffre seul."
           }
         }
       }
@@ -3292,27 +4168,39 @@
             "state": "translated",
             "value": "Расчётный макс. пульс · %lld уд/мин"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FC max estimée · %lld bpm"
+          }
         }
       }
     },
-    "Every beat, every night, every day — woven into one quiet picture of you. Welcome to NOOP.": {
+    "Every beat, every night, every day , woven into one quiet picture of you. Welcome to NOOP.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Every beat, every night, every day — woven into one quiet picture of you. Welcome to NOOP."
+            "value": "Every beat, every night, every day , woven into one quiet picture of you. Welcome to NOOP."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Jeder Schlag, jede Nacht, jeder Tag — verwoben zu einem ruhigen Bild von dir. Willkommen bei NOOP."
+            "value": "Jeder Schlag, jede Nacht, jeder Tag , verwoben zu einem ruhigen Bild von dir. Willkommen bei NOOP."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Каждый удар сердца, каждая ночь, каждый день — всё складывается в цельную картину вашего состояния. Добро пожаловать в NOOP!"
+            "value": "Каждый удар сердца, каждая ночь, каждый день , всё складывается в цельную картину вашего состояния. Добро пожаловать в NOOP!"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chaque battement, chaque nuit, chaque jour , tissé en un portrait silencieux de vous. Bienvenue dans NOOP."
           }
         }
       }
@@ -3336,6 +4224,12 @@
             "state": "translated",
             "value": "Все сессии складываются в единую историю."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chaque séance, reliée ensemble."
+          }
         }
       }
     },
@@ -3356,7 +4250,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Каждый показатель — в одном касании."
+            "value": "Каждый показатель , в одном касании."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chaque signal, à un tap."
           }
         }
       }
@@ -3378,7 +4278,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Всё остаётся на этом Mac. Один раз импортируйте историю — и она будет у вас."
+            "value": "Всё остаётся на этом Mac. Один раз импортируйте историю , и она будет у вас."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tout reste sur ce Mac. Importez votre historique une fois, il est à vous."
           }
         }
       }
@@ -3402,6 +4308,12 @@
             "state": "translated",
             "value": "Экспериментально · WHOOP 5 / MG"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expérimental · WHOOP 5 / MG"
+          }
         }
       }
     },
@@ -3423,6 +4335,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "ЭКСПЕРИМЕНТАЛЬНО"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EXPLORATOIRE"
           }
         }
       }
@@ -3452,6 +4370,12 @@
             "state": "translated",
             "value": "Обзор"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Explorer"
+          }
         }
       }
     },
@@ -3473,6 +4397,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Экспорт данных…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exporter les trames…"
           }
         }
       }
@@ -3496,6 +4426,12 @@
             "state": "translated",
             "value": "Экспорт…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exporter…"
+          }
         }
       }
     },
@@ -3517,6 +4453,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Женский"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Féminin"
           }
         }
       }
@@ -3540,6 +4482,12 @@
             "state": "translated",
             "value": "Получить список доступных моделей от %@ с помощью сохранённого ключа"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Récupérer les modèles disponibles depuis %@ avec votre clé enregistrée"
+          }
         }
       }
     },
@@ -3561,6 +4509,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Вы найдёте это в боковой панели, в разделе «Источники данных»."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retrouvez-le dans la barre latérale sous Sources de données."
           }
         }
       }
@@ -3584,6 +4538,12 @@
             "state": "translated",
             "value": "Отправить один виброимпульс на браслет (требуется сопряжённое подключение)"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer une impulsion haptique sur le bracelet (nécessite une connexion associée)"
+          }
         }
       }
     },
@@ -3605,6 +4565,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверить вибрацию"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer une vibration test maintenant"
           }
         }
       }
@@ -3628,6 +4594,12 @@
             "state": "translated",
             "value": "Проверить вибрацию на браслете (требуется активное подключение)"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer une vibration haptique test sur le bracelet (nécessite une connexion active)"
+          }
         }
       }
     },
@@ -3649,6 +4621,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверяет вибрацию на браслете"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoie une vibration test sur votre bracelet"
           }
         }
       }
@@ -3672,6 +4650,12 @@
             "state": "translated",
             "value": "Удалить сохранённый ключ и отключиться"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oublier la clé enregistrée et déconnecter"
+          }
         }
       }
     },
@@ -3693,6 +4677,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "С"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De"
           }
         }
       }
@@ -3716,6 +4706,12 @@
             "state": "translated",
             "value": "Связаться"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nous contacter"
+          }
         }
       }
     },
@@ -3737,6 +4733,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Скачать последнюю версию"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Obtenir la dernière version"
           }
         }
       }
@@ -3766,6 +4768,12 @@
             "state": "translated",
             "value": "Понятно"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compris"
+          }
         }
       }
     },
@@ -3788,6 +4796,12 @@
             "state": "translated",
             "value": "Дыхание по вибросигналам · следите, как реагирует ВСР"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respiration rythmée haptiquement · observez votre VFC réagir"
+          }
         }
       }
     },
@@ -3809,6 +4823,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Вибрация вкл."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Haptiques activés"
           }
         }
       }
@@ -3838,6 +4858,12 @@
             "state": "translated",
             "value": "Здоровье"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Santé"
+          }
         }
       }
     },
@@ -3859,6 +4885,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Монитор здоровья"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moniteur de santé"
           }
         }
       }
@@ -3882,6 +4914,12 @@
             "state": "translated",
             "value": "Сердце и показатели"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cœur et constantes"
+          }
         }
       }
     },
@@ -3903,6 +4941,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пульс"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fréquence cardiaque"
           }
         }
       }
@@ -3926,6 +4970,12 @@
             "state": "translated",
             "value": "ПУЛЬС"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FRÉQUENCE CARDIAQUE"
+          }
         }
       }
     },
@@ -3947,6 +4997,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пульс %lld ударов в минуту"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fréquence cardiaque %lld battements par minute"
           }
         }
       }
@@ -3970,6 +5026,12 @@
             "state": "translated",
             "value": "Вариабельность сердечного ритма"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Variabilité de la fréquence cardiaque"
+          }
         }
       }
     },
@@ -3991,6 +5053,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Рост"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taille"
           }
         }
       }
@@ -4014,6 +5082,12 @@
             "state": "translated",
             "value": "высокий"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "élevé"
+          }
         }
       }
     },
@@ -4035,6 +5109,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "История"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Historique"
           }
         }
       }
@@ -4058,6 +5138,12 @@
             "state": "translated",
             "value": "История синхронизирована %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Historique synchronisé %@"
+          }
         }
       }
     },
@@ -4079,6 +5165,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Часов сна"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Heures de sommeil"
           }
         }
       }
@@ -4102,6 +5194,12 @@
             "state": "translated",
             "value": "Часы сна и потребность"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Heures vs nécessaires"
+          }
         }
       }
     },
@@ -4123,6 +5221,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Как они связаны"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment ils évoluent ensemble"
           }
         }
       }
@@ -4146,6 +5250,12 @@
             "state": "translated",
             "value": "Как это вычисляется"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment c'est calculé"
+          }
         }
       }
     },
@@ -4168,6 +5278,12 @@
             "state": "translated",
             "value": "Как это работает"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment ça fonctionne"
+          }
         }
       }
     },
@@ -4189,6 +5305,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Зоны пульса"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zones FC"
           }
         }
       }
@@ -4218,27 +5340,39 @@
             "state": "translated",
             "value": "VFC"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VFC"
+          }
         }
       }
     },
-    "I keep this project anonymous, so crypto is the only way to chip in — no Patreon, no PayPal, no name attached. Quick, global, and private for both of us.": {
+    "I keep this project anonymous, so crypto is the only way to chip in , no Patreon, no PayPal, no name attached. Quick, global, and private for both of us.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "I keep this project anonymous, so crypto is the only way to chip in — no Patreon, no PayPal, no name attached. Quick, global, and private for both of us."
+            "value": "I keep this project anonymous, so crypto is the only way to chip in , no Patreon, no PayPal, no name attached. Quick, global, and private for both of us."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ich halte dieses Projekt anonym, daher ist Krypto die einzige Möglichkeit, beizutragen — kein Patreon, kein PayPal, kein Name. Schnell, weltweit und privat für uns beide."
+            "value": "Ich halte dieses Projekt anonym, daher ist Krypto die einzige Möglichkeit, beizutragen , kein Patreon, kein PayPal, kein Name. Schnell, weltweit und privat für uns beide."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Проект остаётся анонимным, поэтому поддержать его можно только криптовалютой: без Patreon, PayPal и привязки к имени. Это быстро, доступно из любой страны и приватно для нас обоих."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je maintiens ce projet anonyme, donc la crypto est le seul moyen de contribuer , pas de Patreon, pas de PayPal, pas de nom attaché. Rapide, mondial et privé pour nous deux."
           }
         }
       }
@@ -4262,6 +5396,12 @@
             "state": "translated",
             "value": "Сначала импортируйте историю. Данные WHOOP из раздела «Источники данных» примерно за минуту заполнят все показатели, доступные для анализа здесь."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importez d'abord votre historique. Un export WHOOP dans Sources de données remplit toutes les métriques que vous pouvez explorer ici en environ une minute."
+          }
         }
       }
     },
@@ -4284,6 +5424,12 @@
             "state": "translated",
             "value": "Импортировать…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importer…"
+          }
         }
       }
     },
@@ -4305,6 +5451,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "При импорте все текущие данные на этом Mac будут перезаписаны. Старые данные на всякий случай сохранятся в отдельном файле. Чтобы импорт вступил в силу, перезапустите NOOP."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'importation écrase tout ce qui se trouve actuellement sur ce Mac. Vos anciennes données sont conservées dans un fichier annexe au cas où. NOOP doit être relancé pour qu'une importation prenne effet."
           }
         }
       }
@@ -4334,6 +5486,12 @@
             "state": "translated",
             "value": "Импортируется…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importation…"
+          }
         }
       }
     },
@@ -4355,6 +5513,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Выводы"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perspectives"
           }
         }
       }
@@ -4378,6 +5542,12 @@
             "state": "translated",
             "value": "Выводы строятся на данных из вашего журнала и результатах. Чтобы открыть их, импортируйте данные WHOOP, включая журнал, в разделе «Источники данных»."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les perspectives lisent votre journal et vos résultats. Importez votre export WHOOP, qui inclut votre journal, dans Sources de données pour les débloquer."
+          }
         }
       }
     },
@@ -4399,6 +5569,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Аналитика"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Intelligence"
           }
         }
       }
@@ -4422,6 +5598,12 @@
             "state": "translated",
             "value": "Выясните, что на что влияет."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interrogez ce qui affecte quoi."
+          }
         }
       }
     },
@@ -4443,6 +5625,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Интервальный таймер"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minuteur d'intervalle"
           }
         }
       }
@@ -4466,6 +5654,12 @@
             "state": "translated",
             "value": "Интервалы"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Intervalles"
+          }
         }
       }
     },
@@ -4487,6 +5681,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ключевые показатели"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Métriques clés"
           }
         }
       }
@@ -4516,6 +5716,12 @@
             "state": "translated",
             "value": "Anoche"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La nuit dernière"
+          }
         }
       }
     },
@@ -4536,7 +5742,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Итоги последней ночи — за две секунды."
+            "value": "Итоги последней ночи , за две секунды."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La nuit dernière, lu en deux secondes."
           }
         }
       }
@@ -4560,6 +5772,12 @@
             "state": "translated",
             "value": "Последние тренировки"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Derniers entraînements"
+          }
         }
       }
     },
@@ -4581,6 +5799,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Последнее"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dernier"
           }
         }
       }
@@ -4604,6 +5828,12 @@
             "state": "translated",
             "value": "Последнее измерение"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dernière lecture"
+          }
         }
       }
     },
@@ -4625,6 +5855,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Безжировая масса тела"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masse corporelle maigre"
           }
         }
       }
@@ -4648,27 +5884,39 @@
             "state": "translated",
             "value": "Безжировая масса"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masse maigre"
+          }
         }
       }
     },
-    "Learning your baseline — %lld of %lld nights.": {
+    "Learning your baseline , %lld of %lld nights.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Learning your baseline — %lld of %lld nights."
+            "value": "Learning your baseline , %lld of %lld nights."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Deine Baseline wird gelernt — %lld von %lld Nächten."
+            "value": "Deine Baseline wird gelernt , %lld von %lld Nächten."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Формируем вашу норму — %lld из %lld ночей."
+            "value": "Формируем вашу норму , %lld из %lld ночей."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprentissage de votre référence , %lld de %lld nuits."
           }
         }
       }
@@ -4692,6 +5940,12 @@
             "state": "translated",
             "value": "Разрешить ИИ-тренеру использовать мои данные"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Laisser le coach utiliser mes données"
+          }
         }
       }
     },
@@ -4713,6 +5967,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Лёгкий"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Léger"
           }
         }
       }
@@ -4742,27 +6002,39 @@
             "state": "translated",
             "value": "В реальном времени"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En direct"
+          }
         }
       }
     },
-    "Live heart rate already works on a WHOOP 5/MG strap. These probes go further and try to coax more out of it. They are guesses, off by default, and only ever touch a 5/MG strap — WHOOP 4.0 is never affected.": {
+    "Live heart rate already works on a WHOOP 5/MG strap. These probes go further and try to coax more out of it. They are guesses, off by default, and only ever touch a 5/MG strap , WHOOP 4.0 is never affected.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Live heart rate already works on a WHOOP 5/MG strap. These probes go further and try to coax more out of it. They are guesses, off by default, and only ever touch a 5/MG strap — WHOOP 4.0 is never affected."
+            "value": "Live heart rate already works on a WHOOP 5/MG strap. These probes go further and try to coax more out of it. They are guesses, off by default, and only ever touch a 5/MG strap , WHOOP 4.0 is never affected."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Live-Herzfrequenz funktioniert bereits an einem WHOOP 5/MG-Strap. Diese Tests gehen weiter und versuchen, mehr herauszuholen. Es sind Vermutungen, standardmäßig deaktiviert, und betreffen nur einen 5/MG-Strap — WHOOP 4.0 ist nie betroffen."
+            "value": "Die Live-Herzfrequenz funktioniert bereits an einem WHOOP 5/MG-Strap. Diese Tests gehen weiter und versuchen, mehr herauszuholen. Es sind Vermutungen, standardmäßig deaktiviert, und betreffen nur einen 5/MG-Strap , WHOOP 4.0 ist nie betroffen."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Пульс в реальном времени уже работает на браслете WHOOP 5/MG. Эти экспериментальные функции идут дальше и пытаются получить больше данных. Они основаны на предположениях, по умолчанию выключены и работают только с браслетом 5/MG — WHOOP 4.0 они никогда не затрагивают."
+            "value": "Пульс в реальном времени уже работает на браслете WHOOP 5/MG. Эти экспериментальные функции идут дальше и пытаются получить больше данных. Они основаны на предположениях, по умолчанию выключены и работают только с браслетом 5/MG , WHOOP 4.0 они никогда не затрагивают."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La fréquence cardiaque en direct fonctionne déjà sur un bracelet WHOOP 5/MG. Ces sondes vont plus loin et essaient d'en extraire davantage. Ce sont des estimations, désactivées par défaut, et elles ne touchent jamais qu'un bracelet 5/MG , le WHOOP 4.0 n'est jamais affecté."
           }
         }
       }
@@ -4786,6 +6058,12 @@
             "state": "translated",
             "value": "Данные поступают в реальном времени. Ваши показатели формируются."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En direct maintenant. Vos scores se construisent."
+          }
         }
       }
     },
@@ -4806,7 +6084,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Показатели в реальном времени — данные поступают с браслета."
+            "value": "Показатели в реальном времени , данные поступают с браслета."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Constantes en direct, diffusées depuis le bracelet."
           }
         }
       }
@@ -4830,6 +6114,12 @@
             "state": "translated",
             "value": "нагрузка %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "charge %@"
+          }
         }
       }
     },
@@ -4851,6 +6141,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Загружаю вашу историю…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chargement de votre historique…"
           }
         }
       }
@@ -4874,6 +6170,12 @@
             "state": "translated",
             "value": "Загружаю ваши сессии…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chargement de vos séances…"
+          }
         }
       }
     },
@@ -4895,6 +6197,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Загружаю историю сна…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chargement de votre historique de sommeil…"
           }
         }
       }
@@ -4918,6 +6226,12 @@
             "state": "translated",
             "value": "Журнал"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Journal"
+          }
         }
       }
     },
@@ -4939,6 +6253,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "низкий"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "faible"
           }
         }
       }
@@ -4968,27 +6288,39 @@
             "state": "translated",
             "value": "Низкий"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Faible"
+          }
         }
       }
     },
-    "Make the strap do things — tap to act, walk away to lock, train by feel.": {
+    "Make the strap do things , tap to act, walk away to lock, train by feel.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Make the strap do things — tap to act, walk away to lock, train by feel."
+            "value": "Make the strap do things , tap to act, walk away to lock, train by feel."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Lass den Strap Dinge tun — tippen zum Auslösen, weggehen zum Sperren, nach Gefühl trainieren."
+            "value": "Lass den Strap Dinge tun , tippen zum Auslösen, weggehen zum Sperren, nach Gefühl trainieren."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Настройте действия браслета: коснитесь, чтобы выполнить команду; отойдите, чтобы заблокировать; тренируйтесь, ориентируясь по сигналам."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Faites faire des choses au bracelet , tapez pour agir, éloignez-vous pour verrouiller, entraînez-vous au ressenti."
           }
         }
       }
@@ -5012,6 +6344,12 @@
             "state": "translated",
             "value": "Мужской"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masculin"
+          }
         }
       }
     },
@@ -5033,6 +6371,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Задать вручную"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remplacement manuel"
           }
         }
       }
@@ -5056,6 +6400,12 @@
             "state": "translated",
             "value": "Маркеры"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marqueurs"
+          }
         }
       }
     },
@@ -5077,6 +6427,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Макс."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Max"
           }
         }
       }
@@ -5100,6 +6456,12 @@
             "state": "translated",
             "value": "Макс. 4"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Max 4"
+          }
         }
       }
     },
@@ -5121,6 +6483,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Максимальный пульс"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fréquence cardiaque maximale"
           }
         }
       }
@@ -5144,6 +6512,12 @@
             "state": "translated",
             "value": "Переопределение макс. пульса"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remplacement FC max"
+          }
         }
       }
     },
@@ -5165,6 +6539,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Переопределение макс. пульса, %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remplacement FC max, %@"
           }
         }
       }
@@ -5188,6 +6568,12 @@
             "state": "translated",
             "value": "Макс. пульс"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FC max"
+          }
         }
       }
     },
@@ -5209,6 +6595,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Среднее %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moyenne %@"
           }
         }
       }
@@ -5232,6 +6624,12 @@
             "state": "translated",
             "value": "Метрика"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Métrique"
+          }
         }
       }
     },
@@ -5253,6 +6651,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Связи показателей"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relations entre métriques"
           }
         }
       }
@@ -5276,6 +6680,12 @@
             "state": "translated",
             "value": "Метрики"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Métriques"
+          }
         }
       }
     },
@@ -5297,6 +6707,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "средний"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "moyen"
           }
         }
       }
@@ -5320,6 +6736,12 @@
             "state": "translated",
             "value": "Мин."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Min"
+          }
         }
       }
     },
@@ -5341,6 +6763,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Модель"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modèle"
           }
         }
       }
@@ -5364,27 +6792,39 @@
             "state": "translated",
             "value": "Самый активный"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le plus actif"
+          }
         }
       }
     },
-    "Move all your NOOP data to another machine. Export saves everything — history, sleeps, workouts, settings — to a single file you can copy across; import replaces this Mac's data with a backup.": {
+    "Move all your NOOP data to another machine. Export saves everything , history, sleeps, workouts, settings , to a single file you can copy across; import replaces this Mac's data with a backup.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Move all your NOOP data to another machine. Export saves everything — history, sleeps, workouts, settings — to a single file you can copy across; import replaces this Mac's data with a backup."
+            "value": "Move all your NOOP data to another machine. Export saves everything , history, sleeps, workouts, settings , to a single file you can copy across; import replaces this Mac's data with a backup."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Übertrage alle deine NOOP-Daten auf einen anderen Rechner. Der Export speichert alles — Historie, Schlafphasen, Workouts, Einstellungen — in einer einzelnen Datei, die du kopieren kannst; der Import ersetzt die Daten dieses Macs durch eine Sicherung."
+            "value": "Übertrage alle deine NOOP-Daten auf einen anderen Rechner. Der Export speichert alles , Historie, Schlafphasen, Workouts, Einstellungen , in einer einzelnen Datei, die du kopieren kannst; der Import ersetzt die Daten dieses Macs durch eine Sicherung."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Перенесите все данные NOOP на другой компьютер. Экспорт сохраняет всё — историю, данные о сне, тренировки и настройки — в один файл, который можно скопировать на другое устройство. При импорте данные на этом Mac заменяются данными из резервной копии."
+            "value": "Перенесите все данные NOOP на другой компьютер. Экспорт сохраняет всё , историю, данные о сне, тренировки и настройки , в один файл, который можно скопировать на другое устройство. При импорте данные на этом Mac заменяются данными из резервной копии."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transférez toutes vos données NOOP vers une autre machine. L'export sauvegarde tout , historique, nuits, entraînements, paramètres , dans un seul fichier à copier ; l'import remplace les données de ce Mac par une sauvegarde."
           }
         }
       }
@@ -5408,6 +6848,12 @@
             "state": "translated",
             "value": "Движение"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mouvement"
+          }
         }
       }
     },
@@ -5429,6 +6875,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "незначимо"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "n.s."
           }
         }
       }
@@ -5452,6 +6904,12 @@
             "state": "translated",
             "value": "Подробности ночи"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Détail de nuit"
+          }
         }
       }
     },
@@ -5473,6 +6931,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ночи"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nuits"
           }
         }
       }
@@ -5496,6 +6960,12 @@
             "state": "translated",
             "value": "Пока нет биометрических данных. Импортируйте данные WHOOP, а также Apple Здоровье, если они у вас есть, в разделе «Источники данных»."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore de données biométriques. Importez votre export WHOOP (et Apple Santé si vous l'avez) dans Sources de données pour les compléter."
+          }
         }
       }
     },
@@ -5517,6 +6987,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Нет данных"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas de données"
           }
         }
       }
@@ -5540,6 +7016,12 @@
             "state": "translated",
             "value": "НЕТ ДАННЫХ"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PAS DE DONNÉES"
+          }
         }
       }
     },
@@ -5561,6 +7043,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Нет данных по этим показателям за %@. Расширьте диапазон или выберите показатели, которые уже записывались."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas de données pour ces métriques dans %@. Élargissez la plage ou choisissez des métriques que vous avez enregistrées."
           }
         }
       }
@@ -5584,6 +7072,12 @@
             "state": "translated",
             "value": "Пока нет данных о сне. Импортируйте данные WHOOP в разделе «Источники данных», чтобы сразу увидеть все ночи, стадии сна и тренды. Или откройте «Аналитику», чтобы увидеть данные за последнюю ночь после сна с браслетом."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore de nuits ici. Importez votre export WHOOP dans Sources de données pour voir chaque nuit, vos stades de sommeil et tendances immédiatement. Ou ouvrez Intelligence pour voir la nuit dernière calculée depuis le bracelet après l'avoir porté au lit."
+          }
         }
       }
     },
@@ -5605,6 +7099,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пока нет записанных измерений."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune lecture enregistrée."
           }
         }
       }
@@ -5628,6 +7128,12 @@
             "state": "translated",
             "value": "Пока нет истории стресса. Импортируйте данные WHOOP в разделе «Источники данных», чтобы увидеть её."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore d'historique de stress. Importez votre export WHOOP dans Sources de données pour le voir."
+          }
         }
       }
     },
@@ -5649,6 +7155,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Они берутся из истории WHOOP и Apple Здоровье. Импортируйте данные в разделе «Источники данных»."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore d'entraînements. Ils proviennent de votre historique WHOOP et Apple Santé. Importez dans Sources de données pour les intégrer."
           }
         }
       }
@@ -5672,6 +7184,12 @@
             "state": "translated",
             "value": "Небинарный"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non-binaire"
+          }
         }
       }
     },
@@ -5694,27 +7212,39 @@
             "state": "translated",
             "value": "NOOP"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP"
+          }
         }
       }
     },
-    "NOOP — all your data, none of the cloud.": {
+    "NOOP , all your data, none of the cloud.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP — all your data, none of the cloud."
+            "value": "NOOP , all your data, none of the cloud."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP — all deine Daten, nichts in der Cloud."
+            "value": "NOOP , all deine Daten, nichts in der Cloud."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP — все ваши данные, без облачных сервисов."
+            "value": "NOOP , все ваши данные, без облачных сервисов."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP , toutes vos données, sans le cloud."
           }
         }
       }
@@ -5738,6 +7268,12 @@
             "state": "translated",
             "value": "NOOP %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP %@"
+          }
         }
       }
     },
@@ -5752,13 +7288,19 @@
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP ist kostenlos und bleibt es, nichts ist gesperrt. Es hat echtes Geld und viele unbezahlte Stunden gekostet, und es gibt eine Windows-App, eine Android-App und eine iOS-App, die ich als Nächstes veröffentlichen möchte. Wenn es dir nützt und du bei den Entwicklungs- und Testkosten helfen möchtest, hält es schon mit ein paar Euro in Krypto wirklich am Laufen — und ehrlich gesagt motiviert es mich, weiterzubauen."
+            "value": "NOOP ist kostenlos und bleibt es, nichts ist gesperrt. Es hat echtes Geld und viele unbezahlte Stunden gekostet, und es gibt eine Windows-App, eine Android-App und eine iOS-App, die ich als Nächstes veröffentlichen möchte. Wenn es dir nützt und du bei den Entwicklungs- und Testkosten helfen möchtest, hält es schon mit ein paar Euro in Krypto wirklich am Laufen , und ehrlich gesagt motiviert es mich, weiterzubauen."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP бесплатен и всегда таким останется, все функции открыты. На его создание ушли реальные деньги и много неоплаченных часов, а впереди — приложения для Windows, Android и iOS, которые я хочу выпустить. Если NOOP вам полезен и вы хотите помочь с расходами на разработку и тестирование, даже небольшая сумма в криптовалюте действительно помогает проекту двигаться дальше и мотивирует меня продолжать."
+            "value": "NOOP бесплатен и всегда таким останется, все функции открыты. На его создание ушли реальные деньги и много неоплаченных часов, а впереди , приложения для Windows, Android и iOS, которые я хочу выпустить. Если NOOP вам полезен и вы хотите помочь с расходами на разработку и тестирование, даже небольшая сумма в криптовалюте действительно помогает проекту двигаться дальше и мотивирует меня продолжать."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP est et sera toujours gratuit, rien n'est verrouillé. Il m'a coûté de l'argent et beaucoup d'heures non rémunérées à construire, et il y a une app Windows, une app Android et une app iOS que je veux livrer ensuite. Si cela vous est utile et que vous voulez aider avec les coûts de développement et de test, même quelques euros en crypto maintient vraiment le projet en vie, et honnêtement ça me motive à continuer."
           }
         }
       }
@@ -5782,49 +7324,67 @@
             "state": "translated",
             "value": "NOOP не является медицинским устройством. Он предназначен только для информации и личного анализа и не предназначен для диагностики, лечения или профилактики каких-либо состояний. За медицинской консультацией обращайтесь к врачу."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP n'est pas un dispositif médical. Il est destiné uniquement à des fins d'information et d'introspection personnelle et n'est pas conçu pour diagnostiquer, traiter, guérir ou prévenir une condition. Consultez un clinicien pour des conseils médicaux."
+          }
         }
       }
     },
-    "NOOP pairs directly with your WHOOP over Bluetooth — no WHOOP app, no cloud.": {
+    "NOOP pairs directly with your WHOOP over Bluetooth , no WHOOP app, no cloud.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP pairs directly with your WHOOP over Bluetooth — no WHOOP app, no cloud."
+            "value": "NOOP pairs directly with your WHOOP over Bluetooth , no WHOOP app, no cloud."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP koppelt sich direkt über Bluetooth mit deinem WHOOP — keine WHOOP-App, keine Cloud."
+            "value": "NOOP koppelt sich direkt über Bluetooth mit deinem WHOOP , keine WHOOP-App, keine Cloud."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP подключается к вашему WHOOP напрямую по Bluetooth — без приложения WHOOP и без облака."
+            "value": "NOOP подключается к вашему WHOOP напрямую по Bluetooth , без приложения WHOOP и без облака."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP se connecte directement à votre WHOOP via Bluetooth , sans app WHOOP, sans cloud."
           }
         }
       }
     },
-    "NOOP scores your recovery, strain and sleep itself — on-device, no cloud.": {
+    "NOOP scores your recovery, strain and sleep itself , on-device, no cloud.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP scores your recovery, strain and sleep itself — on-device, no cloud."
+            "value": "NOOP scores your recovery, strain and sleep itself , on-device, no cloud."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP berechnet deine Erholung, Belastung und deinen Schlaf selbst — auf dem Gerät, ohne Cloud."
+            "value": "NOOP berechnet deine Erholung, Belastung und deinen Schlaf selbst , auf dem Gerät, ohne Cloud."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP сам рассчитывает восстановление, нагрузку и показатели сна — прямо на устройстве, без облака."
+            "value": "NOOP сам рассчитывает восстановление, нагрузку и показатели сна , прямо на устройстве, без облака."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NOOP calcule lui-même votre récupération, effort et sommeil , sur l'appareil, sans cloud."
           }
         }
       }
@@ -5848,6 +7408,12 @@
             "state": "translated",
             "value": "Рассчитано NOOP"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calculé par NOOP"
+          }
         }
       }
     },
@@ -5869,6 +7435,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Нормализовано"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normalisé"
           }
         }
       }
@@ -5892,6 +7464,12 @@
             "state": "translated",
             "value": "Нормализованное наложение"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Superposition normalisée"
+          }
         }
       }
     },
@@ -5913,6 +7491,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "NOOP не связан с WHOOP, не одобрен WHOOP и не аффилирован с ним. Это ПО для совместимости с вашим устройством и вашими собственными данными. Используйте его только с устройством, которым владеете, и без нарушения применимых к вам соглашений. Не является медицинским устройством."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non affilié à, approuvé par ou connecté à WHOOP. Logiciel d'interopérabilité pour le matériel que vous possédez et vos propres données. Utilisez-le uniquement avec un appareil que vous possédez et sans enfreindre aucun accord qui vous est applicable. Pas un dispositif médical."
           }
         }
       }
@@ -5936,6 +7520,12 @@
             "state": "translated",
             "value": "Недостаточно данных за выбранный период."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas assez de données pour cette fenêtre."
+          }
         }
       }
     },
@@ -5957,6 +7547,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пока недостаточно данных о сне."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore assez de nuits."
           }
         }
       }
@@ -5980,6 +7576,12 @@
             "state": "translated",
             "value": "Недостаточно совпадающих дней между этими показателями за %@. Расширьте диапазон."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas assez de jours chevauchants entre ces métriques dans %@. Élargissez la plage."
+          }
         }
       }
     },
@@ -6001,6 +7603,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пока недостаточно общей истории, чтобы рассчитать связь между показателями."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore assez d'historique chevauchant pour corréler vos métriques."
           }
         }
       }
@@ -6024,6 +7632,12 @@
             "state": "translated",
             "value": "Пока недостаточно недавних данных, чтобы построить тренд. Импортируйте историю или продолжайте носить браслет."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore assez de jours récents pour tracer une tendance. Importez un historique ou continuez à porter votre bracelet."
+          }
         }
       }
     },
@@ -6045,6 +7659,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ещё не синхронизировано"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore synchronisé"
           }
         }
       }
@@ -6068,6 +7688,12 @@
             "state": "translated",
             "value": "Пока ничего не импортировано. На iPhone откройте «Здоровье», нажмите на своё фото, выберите «Экспортировать все медданные», затем импортируйте ZIP-файл здесь, в разделе «Источники данных»."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rien d'importé encore. Sur iPhone : app Santé, tapez votre photo, Exporter toutes les données de santé, puis importez le .zip ici dans Sources de données."
+          }
         }
       }
     },
@@ -6089,6 +7715,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "За выбранный период ни один показатель явно не связан с %@. Расширьте диапазон, чтобы выявить возможные связи."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rien dans le catalogue n'évolue clairement avec %@ sur cette fenêtre. Élargissez la plage pour faire apparaître des relations."
           }
         }
       }
@@ -6112,6 +7744,12 @@
             "state": "translated",
             "value": "Пока ничего не выбрано."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rien de sélectionné encore."
+          }
         }
       }
     },
@@ -6133,6 +7771,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Уведомления"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications"
           }
         }
       }
@@ -6156,6 +7800,12 @@
             "state": "translated",
             "value": "из 3 · %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "de 3 · %@"
+          }
         }
       }
     },
@@ -6178,27 +7828,39 @@
             "state": "translated",
             "value": "Выкл."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactivé"
+          }
         }
       }
     },
-    "Off — the coach answers generally and sends none of your metrics.": {
+    "Off , the coach answers generally and sends none of your metrics.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Off — the coach answers generally and sends none of your metrics."
+            "value": "Off , the coach answers generally and sends none of your metrics."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aus — der Coach antwortet allgemein und sendet keine deiner Metriken."
+            "value": "Aus , der Coach antwortet allgemein und sendet keine deiner Metriken."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Выкл. — ИИ-тренер отвечает общими рекомендациями и не отправляет ваши показатели."
+            "value": "Выкл. , ИИ-тренер отвечает общими рекомендациями и не отправляет ваши показатели."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Désactivé , le coach répond de manière générale et n'envoie aucune de vos métriques."
           }
         }
       }
@@ -6222,27 +7884,39 @@
             "state": "translated",
             "value": "ОК"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
         }
       }
     },
-    "On — your recovery, sleep, HRV and workouts are shared with the provider for tailored coaching.": {
+    "On , your recovery, sleep, HRV and workouts are shared with the provider for tailored coaching.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "On — your recovery, sleep, HRV and workouts are shared with the provider for tailored coaching."
+            "value": "On , your recovery, sleep, HRV and workouts are shared with the provider for tailored coaching."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "An — deine Erholung, dein Schlaf, deine HRV und Workouts werden für maßgeschneidertes Coaching mit dem Anbieter geteilt."
+            "value": "An , deine Erholung, dein Schlaf, deine HRV und Workouts werden für maßgeschneidertes Coaching mit dem Anbieter geteilt."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Вкл. — ваше восстановление, сон, ВСР и тренировки передаются провайдеру для персональных рекомендаций."
+            "value": "Вкл. , ваше восстановление, сон, ВСР и тренировки передаются провайдеру для персональных рекомендаций."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activé , votre récupération, sommeil, VFC et entraînements sont partagés avec le fournisseur pour un coaching personnalisé."
           }
         }
       }
@@ -6266,6 +7940,12 @@
             "state": "translated",
             "value": "При подключении к 5/MG NOOP после установления соединения отправит запрос на поток данных puffin в реальном времени и запишет полученный ответ. Если у вас браслет 5/MG, включение этой функции и отправка журнала браслета помогут разобраться в протоколе. На WHOOP 4.0 это не влияет."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sur une connexion 5/MG, NOOP enverra une requête de flux temps réel puffin après la poignée de main et journalisera ce qui revient. Si vous avez un bracelet 5/MG, activer ceci et partager votre journal de bracelet aide à cartographier le protocole. Aucun effet sur le WHOOP 4.0."
+          }
         }
       }
     },
@@ -6288,27 +7968,39 @@
             "state": "translated",
             "value": "Открытая работа по изучению BLE-протокола. Спасибо."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Travail de rétro-ingénierie BLE open-source. Merci."
+          }
         }
       }
     },
-    "Opens the GitHub releases page in your browser. NOOP itself makes no network connections — the macOS sandbox has no network entitlement.": {
+    "Opens the GitHub releases page in your browser. NOOP itself makes no network connections , the macOS sandbox has no network entitlement.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Opens the GitHub releases page in your browser. NOOP itself makes no network connections — the macOS sandbox has no network entitlement."
+            "value": "Opens the GitHub releases page in your browser. NOOP itself makes no network connections , the macOS sandbox has no network entitlement."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Öffnet die GitHub-Releases-Seite in deinem Browser. NOOP selbst stellt keine Netzwerkverbindungen her — die macOS-Sandbox hat keine Netzwerk-Berechtigung."
+            "value": "Öffnet die GitHub-Releases-Seite in deinem Browser. NOOP selbst stellt keine Netzwerkverbindungen her , die macOS-Sandbox hat keine Netzwerk-Berechtigung."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Откроет страницу релизов GitHub в браузере. Сам NOOP не устанавливает сетевые соединения — у песочницы macOS нет разрешения на доступ к сети."
+            "value": "Откроет страницу релизов GitHub в браузере. Сам NOOP не устанавливает сетевые соединения , у песочницы macOS нет разрешения на доступ к сети."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ouvre la page des versions GitHub dans votre navigateur. NOOP lui-même n'effectue aucune connexion réseau , le bac à sable macOS n'a pas de droit réseau."
           }
         }
       }
@@ -6332,6 +8024,12 @@
             "state": "translated",
             "value": "Целевой показатель"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Métrique de résultat"
+          }
         }
       }
     },
@@ -6353,6 +8051,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Наложение"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Superposition"
           }
         }
       }
@@ -6376,6 +8080,12 @@
             "state": "translated",
             "value": "Сравнить 2–4 показателя"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Superposer 2–4 signaux"
+          }
         }
       }
     },
@@ -6398,6 +8108,12 @@
             "state": "translated",
             "value": "Сравнивайте показатели и делайте выводы."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Superposez les signaux, tirez des conclusions."
+          }
         }
       }
     },
@@ -6416,6 +8132,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "p < 0,05"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "p < 0,05"
@@ -6442,6 +8164,12 @@
             "state": "translated",
             "value": "Вставьте API-ключ %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collez votre clé API %@"
+          }
         }
       }
     },
@@ -6463,6 +8191,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пауза"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause"
           }
         }
       }
@@ -6486,6 +8220,12 @@
             "state": "translated",
             "value": "На паузе"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En pause"
+          }
         }
       }
     },
@@ -6507,6 +8247,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пик"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pic"
           }
         }
       }
@@ -6530,6 +8276,12 @@
             "state": "translated",
             "value": "На пике"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Au sommet"
+          }
         }
       }
     },
@@ -6551,6 +8303,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "r Пирсона"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pearson r"
           }
         }
       }
@@ -6574,6 +8332,12 @@
             "state": "translated",
             "value": "r Пирсона · %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pearson r · %@"
+          }
         }
       }
     },
@@ -6595,6 +8359,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "r Пирсона за видимый период · |r| ≥ 0,30, n ≥ 10"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pearson r sur la fenêtre visible · |r| ≥ 0,30, n ≥ 10"
           }
         }
       }
@@ -6624,6 +8394,12 @@
             "state": "translated",
             "value": "Точки"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Points"
+          }
         }
       }
     },
@@ -6645,6 +8421,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Профиль"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profil"
           }
         }
       }
@@ -6668,6 +8450,12 @@
             "state": "translated",
             "value": "Источник данных"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Provenance"
+          }
         }
       }
     },
@@ -6689,6 +8477,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Провайдер"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fournisseur"
           }
         }
       }
@@ -6712,27 +8506,39 @@
             "state": "translated",
             "value": "Вопрос"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question"
+          }
         }
       }
     },
-    "Questions, feedback, bugs — %@": {
+    "Questions, feedback, bugs , %@": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Questions, feedback, bugs — %@"
+            "value": "Questions, feedback, bugs , %@"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fragen, Feedback, Fehler — %@"
+            "value": "Fragen, Feedback, Fehler , %@"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Вопросы, отзывы, ошибки — %@"
+            "value": "Вопросы, отзывы, ошибки , %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questions, retours, bugs , %@"
           }
         }
       }
@@ -6756,6 +8562,12 @@
             "state": "translated",
             "value": "Конец тихих часов"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fin des heures silencieuses"
+          }
         }
       }
     },
@@ -6778,6 +8590,12 @@
             "state": "translated",
             "value": "Начало тихих часов"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Début des heures silencieuses"
+          }
         }
       }
     },
@@ -6796,6 +8614,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "r = %@"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "r = %@"
@@ -6822,6 +8646,12 @@
             "state": "translated",
             "value": "Сканировать заново"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nouveau scan"
+          }
         }
       }
     },
@@ -6843,6 +8673,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Готовность"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Préparation"
           }
         }
       }
@@ -6866,6 +8702,12 @@
             "state": "translated",
             "value": "Загружаю %@…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture de votre %@…"
+          }
         }
       }
     },
@@ -6887,6 +8729,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Загружаю историю из Apple Здоровье…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture de votre historique Apple Santé…"
           }
         }
       }
@@ -6910,6 +8758,12 @@
             "state": "translated",
             "value": "Загружаю ВСР и пульс в покое…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture de votre variabilité de la fréquence cardiaque et FC au repos…"
+          }
         }
       }
     },
@@ -6931,6 +8785,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Загружаю вашу историю…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture de votre historique…"
           }
         }
       }
@@ -6954,6 +8814,12 @@
             "state": "translated",
             "value": "Анализирую журнал и результаты…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture de votre journal et résultats…"
+          }
         }
       }
     },
@@ -6975,6 +8841,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Готово"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prêt"
           }
         }
       }
@@ -6998,6 +8870,12 @@
             "state": "translated",
             "value": "Готов к сканированию"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prêt à scanner"
+          }
         }
       }
     },
@@ -7019,6 +8897,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Недавние моменты"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moments récents"
           }
         }
       }
@@ -7042,6 +8926,12 @@
             "state": "translated",
             "value": "Пересчитать"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recalculer"
+          }
         }
       }
     },
@@ -7063,6 +8953,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Записывать пакеты данных puffin в файл"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer les trames puffin dans un fichier"
           }
         }
       }
@@ -7086,27 +8982,39 @@
             "state": "translated",
             "value": "Восстановление"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Récupération"
+          }
         }
       }
     },
-    "Recovery weighs your HRV against your personal baseline (~60%), resting heart rate (~20%), sleep performance (~15%) and respiration (~5%). Day strain is a 0–21 cardiovascular load from time in heart-rate zones. Sleep is staged from movement and heart rate. Everything is computed here from the strap's raw data — it works for any day NOOP collected raw streams.": {
+    "Recovery weighs your HRV against your personal baseline (~60%), resting heart rate (~20%), sleep performance (~15%) and respiration (~5%). Day strain is a 0–21 cardiovascular load from time in heart-rate zones. Sleep is staged from movement and heart rate. Everything is computed here from the strap's raw data , it works for any day NOOP collected raw streams.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Recovery weighs your HRV against your personal baseline (~60%), resting heart rate (~20%), sleep performance (~15%) and respiration (~5%). Day strain is a 0–21 cardiovascular load from time in heart-rate zones. Sleep is staged from movement and heart rate. Everything is computed here from the strap's raw data — it works for any day NOOP collected raw streams."
+            "value": "Recovery weighs your HRV against your personal baseline (~60%), resting heart rate (~20%), sleep performance (~15%) and respiration (~5%). Day strain is a 0–21 cardiovascular load from time in heart-rate zones. Sleep is staged from movement and heart rate. Everything is computed here from the strap's raw data , it works for any day NOOP collected raw streams."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Erholung gewichtet deine HRV gegenüber deiner persönlichen Basislinie (~60 %), die Ruheherzfrequenz (~20 %), die Schlafleistung (~15 %) und die Atmung (~5 %). Die Tagesbelastung ist eine kardiovaskuläre Last von 0–21 aus der Zeit in Herzfrequenzzonen. Der Schlaf wird aus Bewegung und Herzfrequenz in Phasen eingeteilt. Alles wird hier aus den Rohdaten des Straps berechnet — es funktioniert für jeden Tag, an dem NOOP Rohdaten erfasst hat."
+            "value": "Die Erholung gewichtet deine HRV gegenüber deiner persönlichen Basislinie (~60 %), die Ruheherzfrequenz (~20 %), die Schlafleistung (~15 %) und die Atmung (~5 %). Die Tagesbelastung ist eine kardiovaskuläre Last von 0–21 aus der Zeit in Herzfrequenzzonen. Der Schlaf wird aus Bewegung und Herzfrequenz in Phasen eingeteilt. Alles wird hier aus den Rohdaten des Straps berechnet , es funktioniert für jeden Tag, an dem NOOP Rohdaten erfasst hat."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Восстановление рассчитывается на основе вашей ВСР относительно личной нормы (~60%), пульса в покое (~20%), качества сна (~15%) и частоты дыхания (~5%). Дневная нагрузка — это сердечно-сосудистая нагрузка от 0 до 21, рассчитанная по времени в пульсовых зонах. Стадии сна определяются по движению и пульсу. Всё рассчитывается здесь, на основе исходных данных браслета, и работает для любого дня, когда NOOP собирал исходные потоки данных."
+            "value": "Восстановление рассчитывается на основе вашей ВСР относительно личной нормы (~60%), пульса в покое (~20%), качества сна (~15%) и частоты дыхания (~5%). Дневная нагрузка , это сердечно-сосудистая нагрузка от 0 до 21, рассчитанная по времени в пульсовых зонах. Стадии сна определяются по движению и пульсу. Всё рассчитывается здесь, на основе исходных данных браслета, и работает для любого дня, когда NOOP собирал исходные потоки данных."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La récupération pondère votre VFC par rapport à votre référence personnelle (~60%), fréquence cardiaque au repos (~20%), performance du sommeil (~15%) et respiration (~5%). L'effort du jour est une charge cardiovasculaire de 0 à 21 basée sur le temps dans les zones de fréquence cardiaque. Le sommeil est stagé à partir du mouvement et de la fréquence cardiaque. Tout est calculé ici à partir des données brutes du bracelet , cela fonctionne pour chaque jour où NOOP a collecté des flux bruts."
           }
         }
       }
@@ -7130,6 +9038,12 @@
             "state": "translated",
             "value": "Обновить модели"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actualiser les modèles"
+          }
         }
       }
     },
@@ -7151,6 +9065,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Обновить модели от провайдера"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Actualiser les modèles depuis le fournisseur"
           }
         }
       }
@@ -7174,6 +9094,12 @@
             "state": "translated",
             "value": "Быстрый сон"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "REM"
+          }
         }
       }
     },
@@ -7195,6 +9121,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Удалить %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supprimer %@"
           }
         }
       }
@@ -7218,6 +9150,12 @@
             "state": "translated",
             "value": "Сбросить"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réinitialiser"
+          }
         }
       }
     },
@@ -7240,6 +9178,12 @@
             "state": "translated",
             "value": "Сбросить API-ключ"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réinitialiser la clé API"
+          }
         }
       }
     },
@@ -7261,6 +9205,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сбросить ключ"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réinitialiser la clé"
           }
         }
       }
@@ -7290,6 +9240,12 @@
             "state": "translated",
             "value": "Respiración"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respiratoire"
+          }
         }
       }
     },
@@ -7311,6 +9267,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Частота дыхания"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fréquence respiratoire"
           }
         }
       }
@@ -7340,6 +9302,12 @@
             "state": "translated",
             "value": "Отдых"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repos"
+          }
         }
       }
     },
@@ -7361,6 +9329,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Перезапустить"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redémarrer"
           }
         }
       }
@@ -7390,6 +9364,12 @@
             "state": "translated",
             "value": "Frecuencia cardíaca en reposo"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fréquence cardiaque au repos"
+          }
         }
       }
     },
@@ -7418,6 +9398,12 @@
             "state": "translated",
             "value": "Пульс в покое"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FC au repos"
+          }
         }
       }
     },
@@ -7439,6 +9425,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Восстанавливающий"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réparateur"
           }
         }
       }
@@ -7462,6 +9454,12 @@
             "state": "translated",
             "value": "Показать в Finder"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afficher dans le Finder"
+          }
         }
       }
     },
@@ -7483,6 +9481,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "РАУНД"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CYCLE"
           }
         }
       }
@@ -7512,6 +9516,12 @@
             "state": "translated",
             "value": "Бег"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En cours"
+          }
         }
       }
     },
@@ -7533,6 +9543,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сохранить ключ"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer la clé"
           }
         }
       }
@@ -7556,27 +9572,39 @@
             "state": "translated",
             "value": "Сохранить…"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer…"
+          }
         }
       }
     },
-    "Saves every raw 5/MG frame (with a timestamp and the live heart rate) to a JSON file you can share to help map the biometric layout. This only records frames the strap already sent — it never writes to your strap — so it is safe to leave on. Export the file and attach it to a protocol-mapping issue.": {
+    "Saves every raw 5/MG frame (with a timestamp and the live heart rate) to a JSON file you can share to help map the biometric layout. This only records frames the strap already sent , it never writes to your strap , so it is safe to leave on. Export the file and attach it to a protocol-mapping issue.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Saves every raw 5/MG frame (with a timestamp and the live heart rate) to a JSON file you can share to help map the biometric layout. This only records frames the strap already sent — it never writes to your strap — so it is safe to leave on. Export the file and attach it to a protocol-mapping issue."
+            "value": "Saves every raw 5/MG frame (with a timestamp and the live heart rate) to a JSON file you can share to help map the biometric layout. This only records frames the strap already sent , it never writes to your strap , so it is safe to leave on. Export the file and attach it to a protocol-mapping issue."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Speichert jeden rohen 5/MG-Frame (mit Zeitstempel und Live-Herzfrequenz) in einer JSON-Datei, die du teilen kannst, um das biometrische Layout zu kartieren. Dies zeichnet nur Frames auf, die der Strap bereits gesendet hat — es schreibt nie auf deinen Strap — daher ist es sicher, es aktiviert zu lassen. Exportiere die Datei und hänge sie an ein Protokoll-Mapping-Issue an."
+            "value": "Speichert jeden rohen 5/MG-Frame (mit Zeitstempel und Live-Herzfrequenz) in einer JSON-Datei, die du teilen kannst, um das biometrische Layout zu kartieren. Dies zeichnet nur Frames auf, die der Strap bereits gesendet hat , es schreibt nie auf deinen Strap , daher ist es sicher, es aktiviert zu lassen. Exportiere die Datei und hänge sie an ein Protokoll-Mapping-Issue an."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Сохраняет каждый исходный пакет данных 5/MG с меткой времени и текущим пульсом в JSON-файл, которым можно поделиться, чтобы помочь разобраться в структуре биометрических данных. Записываются только пакеты, которые браслет уже отправил; данные на браслет не записываются, поэтому эту опцию безопасно оставлять включённой. Экспортируйте файл и приложите его к задаче по разбору протокола."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistre chaque trame brute 5/MG (avec un horodatage et la fréquence cardiaque en direct) dans un fichier JSON que vous pouvez partager pour aider à cartographier la disposition biométrique. Cela n'enregistre que les trames que le bracelet a déjà envoyées , il n'écrit jamais sur votre bracelet , il est donc sans danger de le laisser activé. Exportez le fichier et joignez-le à une issue de cartographie de protocole."
           }
         }
       }
@@ -7600,6 +9628,12 @@
             "state": "translated",
             "value": "Сканировать"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanner"
+          }
         }
       }
     },
@@ -7621,6 +9655,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Найти и подключить"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanner et connecter"
           }
         }
       }
@@ -7644,6 +9684,12 @@
             "state": "translated",
             "value": "Отсканируйте любым кошельком %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanner avec n'importe quel portefeuille %@"
+          }
         }
       }
     },
@@ -7665,6 +9711,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сканирование…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan en cours…"
           }
         }
       }
@@ -7688,6 +9740,12 @@
             "state": "translated",
             "value": "Идёт поиск"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recherche en cours"
+          }
         }
       }
     },
@@ -7709,6 +9767,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "СЕКУНДЫ"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SECONDES"
           }
         }
       }
@@ -7732,6 +9796,12 @@
             "state": "translated",
             "value": "Отправить"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoyer"
+          }
         }
       }
     },
@@ -7753,6 +9823,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сессия"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Séance"
           }
         }
       }
@@ -7776,6 +9852,12 @@
             "state": "translated",
             "value": "СЕССИЯ ЗАВЕРШЕНА"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SÉANCE TERMINÉE"
+          }
         }
       }
     },
@@ -7797,6 +9879,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сессия активна"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Séance en direct"
           }
         }
       }
@@ -7826,6 +9914,12 @@
             "state": "translated",
             "value": "Настройки"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paramètres"
+          }
         }
       }
     },
@@ -7848,27 +9942,39 @@
             "state": "translated",
             "value": "Пол"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sexe"
+          }
         }
       }
     },
-    "Share of imported zone time, duration-weighted across sessions — approximate.": {
+    "Share of imported zone time, duration-weighted across sessions , approximate.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Share of imported zone time, duration-weighted across sessions — approximate."
+            "value": "Share of imported zone time, duration-weighted across sessions , approximate."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Anteil der importierten Zonenzeit, zeitgewichtet über alle Einheiten — Näherungswert."
+            "value": "Anteil der importierten Zonenzeit, zeitgewichtet über alle Einheiten , Näherungswert."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Доля импортированного времени в пульсовых зонах, взвешенная по длительности сессий. Приблизительно."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Part du temps de zone importé, pondéré par la durée entre les séances , approximatif."
           }
         }
       }
@@ -7892,6 +9998,12 @@
             "state": "translated",
             "value": "Стоит ли сегодня выкладываться?"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Devriez-vous forcer aujourd'hui ?"
+          }
         }
       }
     },
@@ -7913,6 +10025,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Показать адрес для пожертвования в %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Afficher l'adresse de don %@"
           }
         }
       }
@@ -7936,27 +10054,39 @@
             "state": "translated",
             "value": "ЗНАЧИМО"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SIGNIFICATIF"
+          }
         }
       }
     },
-    "Silent haptic HIIT — the strap buzzes the transitions": {
+    "Silent haptic HIIT , the strap buzzes the transitions": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Silent haptic HIIT — the strap buzzes the transitions"
+            "value": "Silent haptic HIIT , the strap buzzes the transitions"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stilles haptisches HIIT — der Strap vibriert die Übergänge"
+            "value": "Stilles haptisches HIIT , der Strap vibriert die Übergänge"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Тихая высокоинтенсивная интервальная тренировка с вибросигналами — браслет подсказывает смену интервалов"
+            "value": "Тихая высокоинтенсивная интервальная тренировка с вибросигналами , браслет подсказывает смену интервалов"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HIIT haptique silencieux , le bracelet vibre aux transitions"
           }
         }
       }
@@ -7979,6 +10109,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пропустить пока"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passer pour l'instant"
           }
         }
       }
@@ -8008,6 +10144,12 @@
             "state": "translated",
             "value": "Сон"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sommeil"
+          }
         }
       }
     },
@@ -8029,6 +10171,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Недосып"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dette de sommeil"
           }
         }
       }
@@ -8052,6 +10200,12 @@
             "state": "translated",
             "value": "Качество сна"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Performance du sommeil"
+          }
         }
       }
     },
@@ -8072,7 +10226,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Структура стадий сна: глубокий сон — %lld процентов, лёгкий сон — %lld процентов, быстрый сон — %lld процентов, бодрствование — %lld процентов"
+            "value": "Структура стадий сна: глубокий сон , %lld процентов, лёгкий сон , %lld процентов, быстрый сон , %lld процентов, бодрствование , %lld процентов"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Répartition des stades de sommeil : profond %lld %, léger %lld %, REM %lld %, éveillé %lld %"
           }
         }
       }
@@ -8096,6 +10256,12 @@
             "state": "translated",
             "value": "Медленные связи"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fils lents"
+          }
         }
       }
     },
@@ -8117,6 +10283,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Источник: Apple Здоровье"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source Apple Santé"
           }
         }
       }
@@ -8140,6 +10312,12 @@
             "state": "translated",
             "value": "Источник: WHOOP"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source Whoop"
+          }
         }
       }
     },
@@ -8161,6 +10339,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Структура стадий"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Répartition des stades"
           }
         }
       }
@@ -8184,6 +10368,12 @@
             "state": "translated",
             "value": "Стадии и норма"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stades vs typique"
+          }
         }
       }
     },
@@ -8205,6 +10395,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Старт"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Démarrer"
           }
         }
       }
@@ -8228,6 +10424,12 @@
             "state": "translated",
             "value": "Начать сессию"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Démarrer la séance"
+          }
         }
       }
     },
@@ -8249,6 +10451,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Состояние"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "État"
           }
         }
       }
@@ -8278,6 +10486,12 @@
             "state": "translated",
             "value": "Шаги"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas"
+          }
         }
       }
     },
@@ -8299,6 +10513,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Остановить сессию"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arrêter la séance"
           }
         }
       }
@@ -8322,6 +10542,12 @@
             "state": "translated",
             "value": "Браслет"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bracelet"
+          }
         }
       }
     },
@@ -8343,6 +10569,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Браслет привязан"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bracelet associé"
           }
         }
       }
@@ -8366,6 +10598,12 @@
             "state": "translated",
             "value": "ЖУРНАЛ БРАСЛЕТА"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "JOURNAL DU BRACELET"
+          }
         }
       }
     },
@@ -8388,6 +10626,12 @@
             "state": "translated",
             "value": "Браслет не подключён"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bracelet non connecté"
+          }
         }
       }
     },
@@ -8409,6 +10653,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Синхронизация браслета"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync du bracelet"
           }
         }
       }
@@ -8438,6 +10688,12 @@
             "state": "translated",
             "value": "Стресс"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress"
+          }
         }
       }
     },
@@ -8459,6 +10715,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Стресс · %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress · %@"
           }
         }
       }
@@ -8483,6 +10745,12 @@
             "state": "translated",
             "value": "Стресс · M"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress · M"
+          }
         }
       }
     },
@@ -8504,6 +10772,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Стресс %@ из 3, %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stress %@ de 3, %@"
           }
         }
       }
@@ -8527,6 +10801,12 @@
             "state": "translated",
             "value": "Стресс рассчитывается по двум сигналам вегетативной нервной системы."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le stress est dérivé de deux signaux autonomes."
+          }
         }
       }
     },
@@ -8548,6 +10828,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Монитор стресса"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moniteur de stress"
           }
         }
       }
@@ -8571,6 +10857,12 @@
             "state": "translated",
             "value": "Тренд стресса"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tendance du stress"
+          }
         }
       }
     },
@@ -8592,6 +10884,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Предлагаемый запрос: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suggestion : %@"
           }
         }
       }
@@ -8615,27 +10913,39 @@
             "state": "translated",
             "value": "Поддержка"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistance"
+          }
         }
       }
     },
-    "Support NOOP — donate or get in touch": {
+    "Support NOOP , donate or get in touch": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Support NOOP — donate or get in touch"
+            "value": "Support NOOP , donate or get in touch"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "NOOP unterstützen — spenden oder Kontakt aufnehmen"
+            "value": "NOOP unterstützen , spenden oder Kontakt aufnehmen"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Поддержите NOOP — сделайте пожертвование или свяжитесь с нами"
+            "value": "Поддержите NOOP , сделайте пожертвование или свяжитесь с нами"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soutenir NOOP , faire un don ou nous contacter"
           }
         }
       }
@@ -8659,6 +10969,12 @@
             "state": "translated",
             "value": "Поддержать разработку"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soutenir le développement"
+          }
         }
       }
     },
@@ -8680,6 +10996,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Синхронизирую историю браслета…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Synchronisation de l'historique du bracelet…"
           }
         }
       }
@@ -8703,6 +11025,12 @@
             "state": "translated",
             "value": "Тест вибрации %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test de vibration %@"
+          }
         }
       }
     },
@@ -8724,6 +11052,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Тестовое действие"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Action test"
           }
         }
       }
@@ -8747,6 +11081,12 @@
             "state": "translated",
             "value": "Тест вибрации"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vibration test"
+          }
         }
       }
     },
@@ -8768,6 +11108,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ваша история во времени."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le fil de vous au fil du temps."
           }
         }
       }
@@ -8791,6 +11137,12 @@
             "state": "translated",
             "value": "На их основе рассчитываются пульсовые зоны, оценка калорий и личные нормы восстановления. Следите, чтобы данные были точными."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ces éléments alimentent vos zones de fréquence cardiaque, estimations de calories et références de récupération. Gardez-les précis."
+          }
         }
       }
     },
@@ -8812,6 +11164,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Думаю"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réflexion en cours"
           }
         }
       }
@@ -8835,27 +11193,39 @@
             "state": "translated",
             "value": "Данные формируются по мере синхронизации с браслетом. Нагрузка и сон появятся после того, как вы поносите браслет и поспите с ним одну ночь. Для восстановления нужна примерно неделя ночей, чтобы определить вашу норму. Или импортируйте данные WHOOP, чтобы не ждать."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ceci se construit depuis le bracelet au fil de la synchronisation. L'effort et le sommeil apparaissent après que vous l'ayez porté et dormi une nuit. La récupération nécessite environ une semaine de nuits pour apprendre votre référence, ou importez votre export WHOOP pour éviter l'attente."
+          }
         }
       }
     },
-    "This is the only feature that leaves your Mac — it sends a summary of your metrics to %@ using your own key. Nothing is sent until you ask.": {
+    "This is the only feature that leaves your Mac , it sends a summary of your metrics to %@ using your own key. Nothing is sent until you ask.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This is the only feature that leaves your Mac — it sends a summary of your metrics to %@ using your own key. Nothing is sent until you ask."
+            "value": "This is the only feature that leaves your Mac , it sends a summary of your metrics to %@ using your own key. Nothing is sent until you ask."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dies ist die einzige Funktion, die deinen Mac verlässt — sie sendet eine Zusammenfassung deiner Metriken mit deinem eigenen Schlüssel an %@. Es wird nichts gesendet, bis du es anforderst."
+            "value": "Dies ist die einzige Funktion, die deinen Mac verlässt , sie sendet eine Zusammenfassung deiner Metriken mit deinem eigenen Schlüssel an %@. Es wird nichts gesendet, bis du es anforderst."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Это единственная функция, при которой данные покидают ваш Mac: она отправляет сводку ваших показателей в %@ с помощью вашего ключа. Ничего не отправляется без вашего запроса."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "C'est la seule fonctionnalité qui quitte votre Mac , elle envoie un résumé de vos métriques à %@ en utilisant votre propre clé. Rien n'est envoyé jusqu'à ce que vous le demandiez."
           }
         }
       }
@@ -8879,6 +11249,12 @@
             "state": "translated",
             "value": "Эта работа стала возможной благодаря сообществу, которое изучает протокол WHOOP. Огромное спасибо:"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ceci repose sur la rétro-ingénierie communautaire. Un immense merci :"
+          }
         }
       }
     },
@@ -8901,6 +11277,12 @@
             "state": "translated",
             "value": "Диапазон времени"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plage de temps"
+          }
         }
       }
     },
@@ -8922,6 +11304,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "до"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "à"
           }
         }
       }
@@ -8951,6 +11339,12 @@
             "state": "translated",
             "value": "Сегодня"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aujourd'hui"
+          }
         }
       }
     },
@@ -8973,6 +11367,12 @@
             "state": "translated",
             "value": "Сводка за сегодня"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Synthèse du jour"
+          }
         }
       }
     },
@@ -8993,7 +11393,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Сегодняшнее значение — это ваш записанный дневной балл стресса (0–3)."
+            "value": "Сегодняшнее значение , это ваш записанный дневной балл стресса (0–3)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today's value is your recorded daily stress score (0–3)."
           }
         }
       }
@@ -9017,6 +11423,12 @@
             "state": "translated",
             "value": "Всего калорий"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calories totales"
+          }
         }
       }
     },
@@ -9038,6 +11450,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Общая дистанция"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Distance totale"
           }
         }
       }
@@ -9061,6 +11479,12 @@
             "state": "translated",
             "value": "Общее время"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temps total"
+          }
         }
       }
     },
@@ -9082,6 +11506,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Всего тренировок"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Total des entraînements"
           }
         }
       }
@@ -9105,6 +11535,12 @@
             "state": "translated",
             "value": "Тренд"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tendance"
+          }
         }
       }
     },
@@ -9126,6 +11562,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Тренды"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tendances"
           }
         }
       }
@@ -9149,6 +11591,12 @@
             "state": "translated",
             "value": "Для построения трендов нужна история. Импортируйте данные WHOOP в разделе «Источники данных», чтобы сразу увидеть данные за недели, месяцы и годы."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les tendances ont besoin d'historique pour s'afficher. Importez votre export WHOOP dans Sources de données pour voir semaines, mois et années instantanément."
+          }
         }
       }
     },
@@ -9170,6 +11618,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Повторить"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réessayer"
           }
         }
       }
@@ -9193,6 +11647,12 @@
             "state": "translated",
             "value": "Попробовать экспериментальные функции протокола WHOOP 5/MG"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Essayer les sondes de protocole WHOOP 5/MG"
+          }
         }
       }
     },
@@ -9214,6 +11674,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Использовать"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utiliser"
           }
         }
       }
@@ -9237,6 +11703,12 @@
             "state": "translated",
             "value": "Использовать пользовательскую модель"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utiliser un modèle personnalisé"
+          }
         }
       }
     },
@@ -9255,6 +11727,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "v%@"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "v%@"
@@ -9281,6 +11759,12 @@
             "state": "translated",
             "value": "Только визуально"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visuel uniquement"
+          }
         }
       }
     },
@@ -9302,6 +11786,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Жизненные показатели"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signes vitaux"
           }
         }
       }
@@ -9325,6 +11815,12 @@
             "state": "translated",
             "value": "VO₂ макс."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "VO₂ Max"
+          }
         }
       }
     },
@@ -9347,27 +11843,39 @@
             "state": "translated",
             "value": "Подъём в"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réveil à"
+          }
         }
       }
     },
-    "We compare today's resting heart rate and HRV to your own 30-day baseline. A higher-than-usual resting HR and a lower-than-usual HRV both push the score up — classic signs the body is activated. The combined shift is mapped onto a 0–3 scale: 0 is calm, 1.5 sits at your baseline, 3 is highly activated.": {
+    "We compare today's resting heart rate and HRV to your own 30-day baseline. A higher-than-usual resting HR and a lower-than-usual HRV both push the score up , classic signs the body is activated. The combined shift is mapped onto a 0–3 scale: 0 is calm, 1.5 sits at your baseline, 3 is highly activated.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "We compare today's resting heart rate and HRV to your own 30-day baseline. A higher-than-usual resting HR and a lower-than-usual HRV both push the score up — classic signs the body is activated. The combined shift is mapped onto a 0–3 scale: 0 is calm, 1.5 sits at your baseline, 3 is highly activated."
+            "value": "We compare today's resting heart rate and HRV to your own 30-day baseline. A higher-than-usual resting HR and a lower-than-usual HRV both push the score up , classic signs the body is activated. The combined shift is mapped onto a 0–3 scale: 0 is calm, 1.5 sits at your baseline, 3 is highly activated."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wir vergleichen die heutige Ruheherzfrequenz und HRV mit deiner eigenen 30-Tage-Basislinie. Eine höhere Ruhe-HF als üblich und eine niedrigere HRV als üblich treiben den Wert beide nach oben — klassische Zeichen dafür, dass der Körper aktiviert ist. Die kombinierte Verschiebung wird auf eine Skala von 0–3 abgebildet: 0 ist ruhig, 1,5 liegt auf deiner Basislinie, 3 ist hoch aktiviert."
+            "value": "Wir vergleichen die heutige Ruheherzfrequenz und HRV mit deiner eigenen 30-Tage-Basislinie. Eine höhere Ruhe-HF als üblich und eine niedrigere HRV als üblich treiben den Wert beide nach oben , klassische Zeichen dafür, dass der Körper aktiviert ist. Die kombinierte Verschiebung wird auf eine Skala von 0–3 abgebildet: 0 ist ruhig, 1,5 liegt auf deiner Basislinie, 3 ist hoch aktiviert."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Мы сравниваем сегодняшний пульс в покое и ВСР с вашей личной нормой за 30 дней. Пульс в покое выше обычного и ВСР ниже обычного повышают оценку — это классические признаки активации организма. Итоговое отклонение переводится в шкалу от 0 до 3: 0 — спокойное состояние, 1,5 — ваша норма, 3 — высокая активация."
+            "value": "Мы сравниваем сегодняшний пульс в покое и ВСР с вашей личной нормой за 30 дней. Пульс в покое выше обычного и ВСР ниже обычного повышают оценку , это классические признаки активации организма. Итоговое отклонение переводится в шкалу от 0 до 3: 0 , спокойное состояние, 1,5 , ваша норма, 3 , высокая активация."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We compare today's resting heart rate and HRV to your own 30-day baseline. A higher-than-usual resting HR and a lower-than-usual HRV both push the score up , classic signs the body is activated. The combined shift is mapped onto a 0–3 scale: 0 is calm, 1.5 sits at your baseline, 3 is highly activated."
           }
         }
       }
@@ -9397,6 +11905,12 @@
             "state": "translated",
             "value": "Вес"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Poids"
+          }
         }
       }
     },
@@ -9418,6 +11932,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Что коррелирует"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce qui corrèle"
           }
         }
       }
@@ -9441,6 +11961,12 @@
             "state": "translated",
             "value": "Что влияет на ваш %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce qui fait évoluer votre %@"
+          }
         }
       }
     },
@@ -9462,6 +11988,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "ЧЕГО ОЖИДАТЬ"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "À QUOI S'ATTENDRE"
           }
         }
       }
@@ -9485,6 +12017,12 @@
             "state": "translated",
             "value": "Что нового"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What's new"
+          }
         }
       }
     },
@@ -9506,6 +12044,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "При двойном касании"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quand je double-tape"
           }
         }
       }
@@ -9529,6 +12073,12 @@
             "state": "translated",
             "value": "Когда появится системный запрос, выберите «Разрешить», чтобы NOOP мог найти ваш браслет."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quand la demande système apparaît, choisissez Autoriser pour que NOOP puisse trouver votre bracelet."
+          }
         }
       }
     },
@@ -9551,6 +12101,12 @@
             "state": "translated",
             "value": "Какой браслет?"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quel bracelet ?"
+          }
         }
       }
     },
@@ -9569,6 +12125,12 @@
           }
         },
         "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whoop"
+          }
+        },
+        "fr": {
           "stringUnit": {
             "state": "translated",
             "value": "Whoop"
@@ -9595,27 +12157,39 @@
             "state": "translated",
             "value": "Импорт Whoop"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importation Whoop"
+          }
         }
       }
     },
-    "WHOOP straps don't appear in macOS System Settings → Bluetooth. They advertise on a custom profile that only apps like NOOP can find — so there's nothing to pair there, and you shouldn't try.": {
+    "WHOOP straps don't appear in macOS System Settings → Bluetooth. They advertise on a custom profile that only apps like NOOP can find , so there's nothing to pair there, and you shouldn't try.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "WHOOP straps don't appear in macOS System Settings → Bluetooth. They advertise on a custom profile that only apps like NOOP can find — so there's nothing to pair there, and you shouldn't try."
+            "value": "WHOOP straps don't appear in macOS System Settings → Bluetooth. They advertise on a custom profile that only apps like NOOP can find , so there's nothing to pair there, and you shouldn't try."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "WHOOP-Straps erscheinen nicht in den macOS-Systemeinstellungen → Bluetooth. Sie senden über ein eigenes Profil, das nur Apps wie NOOP finden können — dort gibt es also nichts zu koppeln, und du solltest es nicht versuchen."
+            "value": "WHOOP-Straps erscheinen nicht in den macOS-Systemeinstellungen → Bluetooth. Sie senden über ein eigenes Profil, das nur Apps wie NOOP finden können , dort gibt es also nichts zu koppeln, und du solltest es nicht versuchen."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Браслеты WHOOP не отображаются в «Системных настройках» macOS → Bluetooth. Они работают через особый профиль, который видят только приложения вроде NOOP, поэтому там нечего подключать — и пытаться не нужно."
+            "value": "Браслеты WHOOP не отображаются в «Системных настройках» macOS → Bluetooth. Они работают через особый профиль, который видят только приложения вроде NOOP, поэтому там нечего подключать , и пытаться не нужно."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WHOOP straps don't appear in macOS System Settings → Bluetooth. They advertise on a custom profile that only apps like NOOP can find , so there's nothing to pair there, and you shouldn't try."
           }
         }
       }
@@ -9639,6 +12213,12 @@
             "state": "translated",
             "value": "Окно"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fenêtre"
+          }
         }
       }
     },
@@ -9660,6 +12240,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "С"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avec"
           }
         }
       }
@@ -9683,6 +12269,12 @@
             "state": "translated",
             "value": "Без"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sans"
+          }
         }
       }
     },
@@ -9704,6 +12296,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Обработка…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Traitement en cours…"
           }
         }
       }
@@ -9727,27 +12325,39 @@
             "state": "translated",
             "value": "Тренировки"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entraînements"
+          }
         }
       }
     },
-    "Wrist delivery isn't live yet — it needs a small on-device watcher (coming in an update) to read macOS notifications. Everything stays on this Mac. Your choices are saved now and will apply automatically once delivery ships.": {
+    "Wrist delivery isn't live yet , it needs a small on-device watcher (coming in an update) to read macOS notifications. Everything stays on this Mac. Your choices are saved now and will apply automatically once delivery ships.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Wrist delivery isn't live yet — it needs a small on-device watcher (coming in an update) to read macOS notifications. Everything stays on this Mac. Your choices are saved now and will apply automatically once delivery ships."
+            "value": "Wrist delivery isn't live yet , it needs a small on-device watcher (coming in an update) to read macOS notifications. Everything stays on this Mac. Your choices are saved now and will apply automatically once delivery ships."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Zustellung ans Handgelenk ist noch nicht aktiv — sie benötigt einen kleinen Dienst auf dem Gerät (kommt in einem Update), um macOS-Mitteilungen zu lesen. Alles bleibt auf diesem Mac. Deine Auswahl ist jetzt gespeichert und wird automatisch angewendet, sobald die Zustellung verfügbar ist."
+            "value": "Die Zustellung ans Handgelenk ist noch nicht aktiv , sie benötigt einen kleinen Dienst auf dem Gerät (kommt in einem Update), um macOS-Mitteilungen zu lesen. Alles bleibt auf diesem Mac. Deine Auswahl ist jetzt gespeichert und wird automatisch angewendet, sobald die Zustellung verfügbar ist."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
             "value": "Доставка уведомлений на браслет пока не работает: для чтения уведомлений macOS нужен небольшой локальный компонент, он появится в обновлении. Всё остаётся на этом Mac. Ваши настройки уже сохранены и применятся автоматически, когда функция станет доступна."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrist delivery isn't live yet , it needs a small on-device watcher (coming in an update) to read macOS notifications. Everything stays on this Mac. Your choices are saved now and will apply automatically once delivery ships."
           }
         }
       }
@@ -9771,6 +12381,12 @@
             "state": "translated",
             "value": "Вы сказали: %@"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez dit : %@"
+          }
         }
       }
     },
@@ -9793,6 +12409,12 @@
             "state": "translated",
             "value": "Вы подключены."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You're connected."
+          }
         }
       }
     },
@@ -9813,7 +12435,13 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Пульс в реальном времени уже поступает с браслета. Восстановление, нагрузка и сон будут формироваться на его основе в течение следующих нескольких ночей и уточняться по мере определения вашей нормы. Хотите сразу получить всю историю? Импортируйте данные WHOOP в разделе «Источники данных» — история заполнится примерно за минуту."
+            "value": "Пульс в реальном времени уже поступает с браслета. Восстановление, нагрузка и сон будут формироваться на его основе в течение следующих нескольких ночей и уточняться по мере определения вашей нормы. Хотите сразу получить всю историю? Импортируйте данные WHOOP в разделе «Источники данных» , история заполнится примерно за минуту."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre fréquence cardiaque en direct fonctionne depuis le bracelet, et la récupération, l'effort et le sommeil se construisent à partir de là sur vos prochaines nuits de port, s'affinant au fur et à mesure qu'il apprend votre référence. Vous voulez votre historique complet instantanément ? Importez votre export WHOOP dans Sources de données et il se remplit en environ une minute."
           }
         }
       }
@@ -9837,27 +12465,39 @@
             "state": "translated",
             "value": "Ваши показатели, ваш браслет и принципы работы NOOP. Всё на этом Mac."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vos chiffres, votre bracelet et comment NOOP fonctionne. Tout sur ce Mac."
+          }
         }
       }
     },
-    "Your strap in real time — heart rate and frames as they arrive.": {
+    "Your strap in real time , heart rate and frames as they arrive.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your strap in real time — heart rate and frames as they arrive."
+            "value": "Your strap in real time , heart rate and frames as they arrive."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dein Strap in Echtzeit — Herzfrequenz und Frames, sobald sie eintreffen."
+            "value": "Dein Strap in Echtzeit , Herzfrequenz und Frames, sobald sie eintreffen."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ваш браслет в реальном времени — пульс и данные по мере поступления."
+            "value": "Ваш браслет в реальном времени , пульс и данные по мере поступления."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre bracelet en temps réel , fréquence cardiaque et trames à mesure qu'ils arrivent."
           }
         }
       }
@@ -9881,6 +12521,12 @@
             "state": "translated",
             "value": "Ваша переписка начинается здесь."
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre fil commence ici."
+          }
         }
       }
     },
@@ -9903,6 +12549,12 @@
             "state": "translated",
             "value": "Зона"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zone"
+          }
         }
       }
     },
@@ -9924,6 +12576,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Δ к пред."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Δ vs préc."
           }
         }
       }
@@ -9953,6 +12611,12 @@
             "state": "translated",
             "value": "Фитнес-возраст"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Âge fitness"
+          }
         }
       }
     },
@@ -9980,6 +12644,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Жизненная энергия"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vitalité"
           }
         }
       }
@@ -10009,6 +12679,12 @@
             "state": "translated",
             "value": "Темп. кожи"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temp. cutanée"
+          }
         }
       }
     },
@@ -10036,6 +12712,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Гидратация"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hydratation"
           }
         }
       }
@@ -10065,6 +12747,12 @@
             "state": "translated",
             "value": "Вариабельность сердечного ритма"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Variabilité de la fréquence cardiaque"
+          }
         }
       }
     },
@@ -10092,6 +12780,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Вдохов в минуту"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Respirations par minute"
           }
         }
       }
@@ -10121,6 +12815,12 @@
             "state": "translated",
             "value": "Вегетативная нагрузка"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Charge autonome"
+          }
         }
       }
     },
@@ -10148,6 +12848,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Обновляется еженедельно"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mis à jour hebdomadairement"
           }
         }
       }
@@ -10177,6 +12883,12 @@
             "state": "translated",
             "value": "Оценка благополучия"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Score de bien-être"
+          }
         }
       }
     },
@@ -10204,6 +12916,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Температура кожи"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Température cutanée"
           }
         }
       }
@@ -10233,6 +12951,12 @@
             "state": "translated",
             "value": "Жидкость за сегодня"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today's fluid"
+          }
         }
       }
     },
@@ -10260,6 +12984,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Заряд"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Charge"
           }
         }
       }
@@ -10289,6 +13019,12 @@
             "state": "translated",
             "value": "Усилие"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Effort"
+          }
         }
       }
     },
@@ -10316,6 +13052,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Как рассчитывается Заряд"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment la charge est calculée"
           }
         }
       }
@@ -10345,6 +13087,12 @@
             "state": "translated",
             "value": "Как рассчитывается Усилие"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment l'effort est calculé"
+          }
         }
       }
     },
@@ -10372,6 +13120,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Как рассчитывается Отдых"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment le repos est calculé"
           }
         }
       }
@@ -10401,6 +13155,12 @@
             "state": "translated",
             "value": "Как рассчитывается Стресс"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment le stress est calculé"
+          }
         }
       }
     },
@@ -10428,6 +13188,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Нужен ремешок"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nécessite le bracelet"
           }
         }
       }
@@ -10457,6 +13223,12 @@
             "state": "translated",
             "value": "Формируется, наденьте на ночь"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Construction, portez-le ce soir"
+          }
         }
       }
     },
@@ -10484,6 +13256,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Формируется, меняется с активностью"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Construction, évolue avec vous"
           }
         }
       }
@@ -10513,33 +13291,45 @@
             "state": "translated",
             "value": "После сегодняшнего сна"
           }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After tonight's sleep"
+          }
         }
       }
     },
-    "Calibrating — %lld of %lld": {
+    "Calibrating , %lld of %lld": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Calibrating — %lld of %lld"
+            "value": "Calibrating , %lld of %lld"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Kalibrierung — %lld von %lld"
+            "value": "Kalibrierung , %lld von %lld"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Calibrando — %lld de %lld"
+            "value": "Calibrando , %lld de %lld"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Калибровка — %lld из %lld"
+            "value": "Калибровка , %lld из %lld"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calibration , %lld de %lld"
           }
         }
       }

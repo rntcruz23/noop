@@ -582,9 +582,9 @@ struct DataSourcesView: View {
                 return
             }
             do {
-                // `registryQueue` is the nonisolated GRDB handle the synchronous DeviceRegistryStore
+                // `registryWriter` is the nonisolated GRDB handle the synchronous DeviceRegistryStore
                 // wraps — same construction the rest of the app uses (AppModel / BLEManager).
-                try DeviceRegistryStore(dbQueue: store.registryQueue).deleteAllData(deviceId: model.appleDeviceId)
+                try DeviceRegistryStore(dbQueue: store.registryWriter).deleteAllData(deviceId: model.appleDeviceId)
                 await repo.refresh()
                 model.appleHealthImportSummary = nil
                 model.appleHealthImportFailed = false

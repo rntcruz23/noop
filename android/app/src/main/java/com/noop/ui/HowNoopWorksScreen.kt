@@ -72,8 +72,11 @@ private enum class PrimerSection(
     SCORES(
         title = "How your scores work",
         body = "Charge, Effort and Rest are scored on your own device from your strap data. " +
-            "They get personal after about two weeks of your nights (that's \"Calibrating\"). " +
-            "Before that NOOP shows what it can without faking a number.",
+            "Charge needs about four nights of sleep to learn your baseline (that's \"Calibrating\", " +
+            "counted as nights of 4 on the ring), and keeps sharpening over your first couple of weeks. " +
+            "On a WHOOP 5 or MG the strap banks little history, so that count can sit at 0 of 4 until you " +
+            "have worn it across a few nights. That's the strap's sync limit, not a fault. " +
+            "Before there's a number, NOOP shows what it can without faking one.",
         icon = Icons.Filled.Insights,
     ),
     RECORDING(

@@ -31,6 +31,18 @@ private enum TodayAutoLand {
     static var didLandThisLaunch = false
 }
 
+/// #762: carries the hero ring ROW's measured width up so `scoreHeroRow` can size the three rings off the
+/// real available width WITHOUT wrapping them in a height-clamped GeometryReader. The old GeometryReader was
+/// pinned to `.frame(height: 150)`; once a Charge/Rest ring also showed a provenance badge (the two-line
+/// SourceBadge + ScoreStatePill block), the column's intrinsic height climbed past 150 and the fixed frame
+/// CLIPPED it, so the badge under the Rest ring overlapped the content below (the reported overlap glitch).
+/// Measuring width via a zero-impact background reader instead lets the row self-size in height, so it grows
+/// to fit the rings + labels + badges and never clips. Reduce keeps the max, ignoring any 0 default.
+private struct HeroRingRowWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct TodayView: View {
     @EnvironmentObject var repo: Repository
     // PERF (scroll stutter): TodayView deliberately does NOT observe `LiveState` directly. A connected
@@ -168,6 +180,12 @@ struct TodayView: View {
     // trend and Rest score) resolves to the selected day instead of always showing today. Mirrors the
     // Android TodayScreen.selectedDayOffset. Loads re-run when this changes (see .task(id:)).
     @State private var selectedDayOffset = 0
+    // #762: the hero ring row's measured width, set by a zero-impact background preference reader so the
+    // three rings size off the real available width without a height-clamped GeometryReader clipping the
+    // badge under the Rest/Charge ring. 0 until first layout (the row falls back to a sensible default
+    // width then). Only changes on a genuine width change (rotation / size class), never on the ~1 Hz
+    // live-HR re-render, so this @State doesn't add to the body-eval flood the type note warns about.
+    @State private var heroRingRowWidth: CGFloat = 0
     // iOS top-bar state: the date-jump popover and the profile/settings sheet.
     @State private var showDayPicker = false
     @State private var showSettings = false
@@ -1824,21 +1842,46 @@ struct TodayView: View {
     /// floats cleanly on the scenic field (no per-ring card); a tappable label + chevron sits beneath
     /// each and opens that score's section in the scoring guide. Rings are sized off the available
     /// width so the trio never crushes on a narrow phone nor bloats on iPad.
+    /// #762: the hero ring diameter for a given row width. Clamped to [82, 98] so the trio never crushes on
+    /// a narrow phone nor bloats on iPad; the linear middle term divides the usable width (less the two 22pt
+    /// gaps and a small margin) across the three columns. Pure + static so the clamp can be unit-tested
+    /// without a live view, and so the value feeding the SELF-SIZING row (no fixed 150pt clip) is the same
+    /// one the test asserts. Mirror on Android if the hero ever moves to a measured-width sizing there.
+    static func heroRingDiameter(rowWidth: CGFloat) -> CGFloat {
+        min(98, max(82, (rowWidth - 56) / 3.4))
+    }
+
     @ViewBuilder
     private func scoreHeroRow(d: DailyMetric?, score: Double?) -> some View {
-        GeometryReader { geo in
-            // Design Reset: three EQUAL clean rings (no glow, faint track) in Charge / Effort / Rest order
-            // with generous spacing — mirrors the flat mockup. Sized off width so they stay equal on any phone.
-            let ring = min(98, max(82, (geo.size.width - 56) / 3.4))
-            HStack(alignment: .top, spacing: 22) {
-                // Component 4 — Charge/Rest badge their real per-day merge winner; Effort has no badge.
-                heroRingColumn(section: .charge, domain: .charge, provenanceKey: "recovery") { chargeRing(score: score, d: d, diameter: ring) }
-                heroRingColumn(section: .effort, domain: .effort) { effortRing(d: d, diameter: ring) }
-                heroRingColumn(section: .rest, domain: .rest, provenanceKey: "sleep_performance") { restRing(diameter: ring) }
-            }
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
+        // #762: size the three rings off the row's MEASURED width (read via a background preference reader,
+        // not a height-clamped GeometryReader), then let the HStack SELF-SIZE its height. The old layout
+        // wrapped the row in `GeometryReader { … }.frame(height: 150)`; that hard 150pt height clipped the
+        // column once a Charge/Rest ring also rendered its provenance badge (ring + label + the two-line
+        // SourceBadge/ScoreStatePill block exceeds 150), so the Rest badge overlapped the content beneath
+        // (the reported overlap/clipping). With a self-sizing HStack the row grows to fit its tallest column
+        // and never clips. Until the first layout measures width, fall back to a sensible phone width so the
+        // rings render at a reasonable size on the very first frame rather than collapsing.
+        let measured = heroRingRowWidth > 1 ? heroRingRowWidth : 345
+        // Design Reset: three EQUAL clean rings (no glow, faint track) in Charge / Effort / Rest order with
+        // generous spacing, mirroring the flat mockup. Sized off width so they stay equal on any phone.
+        let ring = Self.heroRingDiameter(rowWidth: measured)
+        HStack(alignment: .top, spacing: 22) {
+            // Component 4: Charge/Rest badge their real per-day merge winner; Effort has no badge.
+            heroRingColumn(section: .charge, domain: .charge, provenanceKey: "recovery") { chargeRing(score: score, d: d, diameter: ring) }
+            heroRingColumn(section: .effort, domain: .effort) { effortRing(d: d, diameter: ring) }
+            heroRingColumn(section: .rest, domain: .rest, provenanceKey: "sleep_performance") { restRing(diameter: ring) }
         }
-        .frame(height: 150)
+        .frame(maxWidth: .infinity, alignment: .center)
+        // Zero-impact width reader: a clear background that publishes the row's width up via preference. It
+        // adds no visual and no intrinsic size, so the HStack's own (self-sizing) height is what lays out.
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: HeroRingRowWidthKey.self, value: geo.size.width)
+            }
+        )
+        .onPreferenceChange(HeroRingRowWidthKey.self) { w in
+            if w > 1 && abs(w - heroRingRowWidth) > 0.5 { heroRingRowWidth = w }
+        }
     }
 
     /// The localized natural-case display word for a score domain (Charge / Effort / Rest / Stress). The
@@ -2654,7 +2697,17 @@ struct TodayView: View {
         async let appleDaysA         = repo.appleDailyRows()
         async let xStepsA            = repo.series(key: "steps", source: "xiaomi-band")
         async let xSleepA            = repo.series(key: "sleep_total_min", source: "xiaomi-band")
-        async let stressSeriesA      = repo.exploreSeries(key: "stress", source: "my-whoop")
+        // #753: the pinned Stress card must read its number the SAME way StressView (the detail page) does,
+        // not off the merged stress series' last row. StressView builds `StressModel(days: repo.days,
+        // stored:)` and shows `model.score`, which PREFERS today's stored stress row but otherwise DERIVES
+        // today's score from the live `repo.days` RHR/HRV baseline. The old pinned read
+        // (`exploreSeries("stress").last`) returned the latest *banked* day instead, so when today had no
+        // stored stress row yet the pinned card sat on yesterday's number (e.g. "2") while the detail page
+        // moved to today's freshly-derived value. They diverged because they computed from different sources
+        // AND the pinned card never re-derived. Reading the SAME `repo.series` the detail uses, and building
+        // the SAME StressModel below, ties the pinned card to today's score; both then refresh on the shared
+        // `repo.refreshSeq` task key (loadAll's TodayLoadKey) and stay in sync.
+        async let stressStoredA      = repo.series(key: "stress", source: "my-whoop")
         async let fitnessAgeSeriesA  = repo.exploreSeries(key: "fitness_age", source: "my-whoop")
         async let vitalitySeriesA    = repo.exploreSeries(key: "vitality", source: "my-whoop")
 
@@ -2672,9 +2725,12 @@ struct TodayView: View {
         let xSteps = await xStepsA
         let xSleep = await xSleepA
         xiaomiDays = Set(xSteps.map(\.day) + xSleep.map(\.day)).count
-        // Your cards (#582 / Design Reset): latest Stress / Fitness age / Vitality for the pinned home
-        // cards. Same merged exploreSeries reads their detail screens use; nil simply hides that card.
-        stressToday = (await stressSeriesA).last?.value
+        // Your cards (#582 / Design Reset): Stress / Fitness age / Vitality for the pinned home cards.
+        // #753: Stress mirrors StressView. `StressModel(days:stored:).score` is TODAY's score (stored row
+        // preferred, else derived off the live RHR/HRV baseline), so the pinned card never lags the detail
+        // page on a day with no banked stress row. nil (no usable signal) keeps the honest "Calibrating"
+        // placeholder, matching StressView's empty state. Fitness age / Vitality keep their merged reads.
+        stressToday = StressModel(days: repo.days, stored: await stressStoredA)?.score
         fitnessAgeToday = (await fitnessAgeSeriesA).last?.value
         vitalityToday = (await vitalitySeriesA).last?.value
         // Hydration card (opt-in): today's stored total + the sex/Effort goal. Only loaded when the

@@ -364,7 +364,7 @@ final class AppModel: ObservableObject {
     /// model's `scan()` / `disconnect()`), so the coordinator never references BLEManager directly.
     private func wireSourceCoordinator() async {
         guard sourceCoordinator == nil, let store = await repo.storeHandle() else { return }
-        let registry = DeviceRegistry(store: DeviceRegistryStore(dbQueue: store.registryQueue))
+        let registry = DeviceRegistry(store: DeviceRegistryStore(dbQueue: store.registryWriter))
         registry.reload()
         let coordinator = SourceCoordinator(
             registry: registry,

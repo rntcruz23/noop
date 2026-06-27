@@ -691,8 +691,9 @@ public final class BLEManager: NSObject, ObservableObject {
         // Route deviceId through the device registry: use the active device's id (migration v15 seeds
         // a single 'my-whoop' row as active, so this is still "my-whoop" today — zero behaviour change).
         // Guarded + best-effort: if the registry is empty/unreadable, deviceId stays as it was, so no
-        // crash and no behaviour change. registryQueue is nonisolated/Sendable (GRDB-serialized).
-        if let activeId = try? DeviceRegistryStore(dbQueue: store.registryQueue).activeDeviceId(),
+        // crash and no behaviour change. registryWriter is nonisolated/Sendable (the Pool manages
+        // its own concurrency).
+        if let activeId = try? DeviceRegistryStore(dbQueue: store.registryWriter).activeDeviceId(),
            !activeId.isEmpty {
             self.deviceId = activeId
         }

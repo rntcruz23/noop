@@ -20,6 +20,13 @@ struct HydrationView: View {
     @State private var totalML: Double = 0
     @State private var history: [(day: String, value: Double)] = []
     @State private var reloadTick = 0
+    /// #798 - today's individual logged drinks (for swipe-to-delete + tap-to-edit), and the entry being
+    /// edited in the amount sheet (nil when the sheet is closed).
+    @State private var entries: [HydrationEntry] = []
+    @State private var editingEntry: HydrationEntry?
+    /// #798 - the user's custom container size (ml), editable from the custom-size sheet. Persisted local-only.
+    @AppStorage(HydrationStore.customSizeKey) private var customSizeML = HydrationGoal.cupML
+    @State private var showCustomSizeSheet = false
 
     private var goalML: Int { repo.hydrationGoalML(profileSex: profile.sex) }
     private var fraction: Double { HydrationGoal.fraction(totalML: totalML, goalML: goalML) }
@@ -32,6 +39,7 @@ struct HydrationView: View {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
                 ringSection
                 logSection
+                entriesSection
                 historySection
                 todayTotalSection
                 Text("A simple goal that adjusts to your effort. General wellness guidance, not medical advice.")
@@ -41,6 +49,20 @@ struct HydrationView: View {
             }
         }
         .task(id: reloadTick) { await reload() }
+        // #798 - edit a logged drink's amount.
+        .sheet(item: $editingEntry) { entry in
+            HydrationAmountSheet(title: "Edit drink", initialML: entry.amountMl) { newML in
+                editingEntry = nil
+                Task { await updateEntry(entry, to: newML) }
+            } onCancel: { editingEntry = nil }
+        }
+        // #798 - set the custom container size.
+        .sheet(isPresented: $showCustomSizeSheet) {
+            HydrationAmountSheet(title: "Custom size", initialML: customSizeML) { newML in
+                customSizeML = newML
+                showCustomSizeSheet = false
+            } onCancel: { showCustomSizeSheet = false }
+        }
     }
 
     // MARK: - Ring (total vs goal, in litres)
@@ -86,6 +108,25 @@ struct HydrationView: View {
                 logButton("Cup", systemImage: "cup.and.saucer.fill", ml: HydrationGoal.cupML)
                 logButton("Bottle", systemImage: "drop.fill", ml: HydrationGoal.bottleML)
             }
+            // #798 - a custom container the user sizes themselves. Tapping logs it; the pencil opens the
+            // size editor so a one-off mug / flask / glass can be set once and reused.
+            HStack(spacing: NoopMetrics.gap) {
+                NoopButton("Custom \(customSizeML) ml", systemImage: "drop.circle", kind: .secondary, fullWidth: true) {
+                    Task { await add(ml: customSizeML) }
+                }
+                .accessibilityLabel("Log custom \(customSizeML) millilitres")
+                Button { showCustomSizeSheet = true } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(StrandPalette.accent)
+                        .frame(width: 44, height: 44)
+                        .background(RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous)
+                            .fill(StrandPalette.surfaceInset))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Set custom container size")
+            }
             Text("Sip \(HydrationGoal.sipML) ml · Cup \(HydrationGoal.cupML) ml · Bottle \(HydrationGoal.bottleML) ml")
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textTertiary)
@@ -99,6 +140,74 @@ struct HydrationView: View {
         }
         .accessibilityLabel("Log \(title)")
     }
+
+    // MARK: - Today's logged drinks (#798) - swipe to delete, tap to edit
+
+    @ViewBuilder private var entriesSection: some View {
+        if !entries.isEmpty {
+            NoopCard(padding: 18) {
+                VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                    Text("Today's drinks").strandOverline()
+                    // A plain list inside the card so each row gets native swipe-to-delete. Sized to its
+                    // content and scroll-disabled so it lives inside the page scroll, not a nested scroller.
+                    List {
+                        ForEach(entries) { entry in
+                            entryRow(entry)
+                                .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        Task { await deleteEntry(entry) }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .scrollDisabled(true)
+                    .frame(height: CGFloat(entries.count) * 44 + 8)
+                    Text("Swipe a drink to delete it, or tap to edit the amount.")
+                        .font(StrandFont.footnote)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+            }
+        }
+    }
+
+    /// One logged-drink row: the time it was logged + its amount, tappable to edit.
+    private func entryRow(_ entry: HydrationEntry) -> some View {
+        Button { editingEntry = entry } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "drop.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(StrandPalette.accent)
+                    .accessibilityHidden(true)
+                Text(Self.entryTimeFmt.string(from: entry.loggedAt))
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                Spacer(minLength: 8)
+                Text("\(entry.amountMl) ml")
+                    .font(StrandFont.subhead.weight(.semibold))
+                    .foregroundStyle(StrandPalette.textPrimary)
+                    .monospacedDigit()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Logged \(entry.amountMl) millilitres at \(Self.entryTimeFmt.string(from: entry.loggedAt))")
+        .accessibilityHint("Tap to edit, swipe to delete")
+    }
+
+    private static let entryTimeFmt: DateFormatter = {
+        let f = DateFormatter(); f.timeStyle = .short; f.dateStyle = .none; return f
+    }()
 
     // MARK: - 7-day mini history (flat bars, today on the right)
 
@@ -193,15 +302,96 @@ struct HydrationView: View {
         return String(out.string(from: date).prefix(1))
     }
 
-    /// Log `ml` (additive day total) and refresh.
+    /// Log `ml` (additive day total + a per-entry row, #798) and refresh.
     private func add(ml: Int) async {
+        guard ml > 0 else { return }
         _ = await repo.logHydration(amountMl: ml)
         reloadTick &+= 1
     }
 
-    /// Load today's total + the 7-day history from the store.
+    /// #798 - delete a logged drink, re-deriving the day total, then refresh.
+    private func deleteEntry(_ entry: HydrationEntry) async {
+        _ = await repo.deleteHydrationEntry(id: entry.id)
+        reloadTick &+= 1
+    }
+
+    /// #798 - set a logged drink's amount, re-deriving the day total, then refresh.
+    private func updateEntry(_ entry: HydrationEntry, to ml: Int) async {
+        _ = await repo.updateHydrationEntry(id: entry.id, amountMl: ml)
+        reloadTick &+= 1
+    }
+
+    /// Load today's total + the 7-day history + today's per-entry list from the store.
     private func reload() async {
         totalML = await repo.hydrationTotal(day: Repository.localDayKey(Date()))
         history = await repo.hydrationHistory(days: 7)
+        entries = repo.hydrationEntries()
+    }
+}
+
+// MARK: - Amount sheet (#798) - edit a drink / set the custom size
+
+/// A small stepper sheet for an ml amount. Reused by the edit-entry and custom-size flows. Tokens only,
+/// NoopButton actions, ARIA labels. Clamps to a sane range so the value stays a real container size.
+private struct HydrationAmountSheet: View {
+    let title: LocalizedStringKey
+    let initialML: Int
+    let onSave: (Int) -> Void
+    let onCancel: () -> Void
+
+    @State private var ml: Int
+
+    /// Bounds for a plausible single container (10 ml up to 3 L), stepping in 10 ml increments.
+    private static let minML = 10
+    private static let maxML = 3000
+    private static let stepML = 10
+
+    init(title: LocalizedStringKey, initialML: Int, onSave: @escaping (Int) -> Void,
+         onCancel: @escaping () -> Void) {
+        self.title = title
+        self.initialML = initialML
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _ml = State(initialValue: Self.clamp(initialML))
+    }
+
+    static func clamp(_ value: Int) -> Int { min(maxML, max(minML, value)) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
+            Text(title)
+                .font(StrandFont.title2)
+                .foregroundStyle(StrandPalette.textPrimary)
+            HStack {
+                Text("Amount")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                Spacer()
+                Text("\(ml) ml")
+                    .font(StrandFont.rounded(28, weight: .bold))
+                    .foregroundStyle(StrandPalette.textPrimary)
+                    .monospacedDigit()
+            }
+            Stepper(value: $ml, in: Self.minML...Self.maxML, step: Self.stepML) {
+                Text("Adjust amount")
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textTertiary)
+            }
+            .accessibilityLabel("Amount in millilitres")
+            .accessibilityValue("\(ml) millilitres")
+            HStack(spacing: NoopMetrics.gap) {
+                NoopButton("Cancel", kind: .secondary, fullWidth: true) { onCancel() }
+                NoopButton("Save", kind: .primary, fullWidth: true) { onSave(Self.clamp(ml)) }
+            }
+        }
+        .padding(NoopMetrics.space5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(StrandPalette.surfaceBase.ignoresSafeArea())
+        // iOS-only sheet sizing - macOS sheets are free-floating windows and reject detents (see the
+        // shared `noopSheetPresentation` note); the call site stays cross-platform via this guard.
+        #if os(iOS)
+        .presentationDetents([.height(300)])
+        .presentationDragIndicator(.visible)
+        #endif
     }
 }

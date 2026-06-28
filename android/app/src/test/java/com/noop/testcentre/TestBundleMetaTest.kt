@@ -20,7 +20,10 @@ class TestBundleMetaTest {
         build = TestBundleMeta.Build(channel = "GitHub", signed = true),
         storage = TestBundleMeta.Storage(dbBytes = 1024, rows = mapOf("sleep_sessions" to 12), rawCaptureBytes = 2048),
         redaction = "v2",
-        truncated = false)
+        truncated = false,
+        captureCheck = TestBundleMeta.CaptureCheck(
+            traces = mapOf("universal" to "present", "sleep" to "MISSING"),
+            complete = false))
 
     @Test fun encodesSnakeCaseWireKeys() {
         val json = sample().encoded()
@@ -49,5 +52,26 @@ class TestBundleMetaTest {
         val json = sample().encoded()
         assertTrue(json.indexOf("\"app_version\"") < json.indexOf("\"platform\""))
         assertTrue(json.indexOf("\"build\"") < json.indexOf("\"storage\""))
+    }
+
+    @Test fun encodesCaptureCheckBlock() {
+        // The capture_check block carries the report-completeness tie: a {domainId -> status} traces map
+        // plus the overall complete flag. Wire key is snake_case, byte-aligned with the Swift twin.
+        val json = sample().encoded()
+        assertTrue(json.contains("\"capture_check\""))
+        assertTrue(json.contains("\"traces\""))
+        assertTrue(json.contains("\"complete\""))
+        assertTrue(json.contains("\"universal\" : \"present\""))
+        assertTrue(json.contains("\"sleep\" : \"MISSING\""))
+        assertTrue(json.contains("\"complete\" : false"))
+    }
+
+    @Test fun captureCheckSortsAfterBuildBeforeOsVersion() {
+        // .sortedKeys puts capture_check between build and os_version; the Kotlin emitter sorts to match.
+        val json = sample().encoded()
+        assertTrue(json.indexOf("\"build\"") < json.indexOf("\"capture_check\""))
+        assertTrue(json.indexOf("\"capture_check\"") < json.indexOf("\"os_version\""))
+        // Inside the block, complete (a top-level capture_check key) sorts before traces.
+        assertTrue(json.indexOf("\"complete\"") < json.indexOf("\"traces\""))
     }
 }

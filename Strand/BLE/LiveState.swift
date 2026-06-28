@@ -129,6 +129,48 @@ public final class LiveState: ObservableObject {
         }
     }
 
+    // MARK: - Strap clock-drift snapshot (universal export self-diagnostic, RTC cluster #531/#767/#804/#812)
+
+    /// The strap's last-decoded banked-record window + firmware layout, banked from the GET_DATA_RANGE reply
+    /// and the offload's hist_version. It is what the export assembler turns into the UNIVERSAL clock-drift
+    /// line that rides EVERY Test Centre export (UniversalTrace.clockDriftLine), so a clock-broken strap
+    /// self-diagnoses on a Sleep / Battery / any-mode report, not only when the Connection mode is on. Set
+    /// unconditionally (it is observability, not gated) and cleared on disconnect so a stale window can't
+    /// outlive the link. nil until the strap first reports its range this session.
+    public struct StrapRange: Equatable, Sendable {
+        public var newestUnix: Int
+        public var oldestUnix: Int?
+        public var firmwareLayout: Int?
+        public init(newestUnix: Int, oldestUnix: Int? = nil, firmwareLayout: Int? = nil) {
+            self.newestUnix = newestUnix; self.oldestUnix = oldestUnix; self.firmwareLayout = firmwareLayout
+        }
+    }
+    @Published public private(set) var strapRange: StrapRange?
+
+    /// Bank the strap's reported banked-record window (from GET_DATA_RANGE). Additive observability: the
+    /// universal clock-drift export line reads this. `oldest` keeps the previously-known value when this
+    /// reply carries only the upper bound, so a half/short range reply never clears a good lower bound.
+    public func setStrapRange(newestUnix: Int, oldestUnix: Int?) {
+        let firmware = strapRange?.firmwareLayout
+        let oldest = oldestUnix ?? strapRange?.oldestUnix
+        strapRange = StrapRange(newestUnix: newestUnix, oldestUnix: oldest, firmwareLayout: firmware)
+    }
+
+    /// Bank the historical record-layout version (hist_version: 18/24/25/26) the strap emits, so the
+    /// universal clock-drift line is firmware-aware even before a fresh range reply lands. Keeps the
+    /// already-known window; a nil range (firmware seen before any range) stores a firmware-only snapshot.
+    public func setStrapFirmwareLayout(_ version: Int) {
+        if let r = strapRange {
+            strapRange = StrapRange(newestUnix: r.newestUnix, oldestUnix: r.oldestUnix, firmwareLayout: version)
+        } else {
+            strapRange = StrapRange(newestUnix: 0, oldestUnix: nil, firmwareLayout: version)
+        }
+    }
+
+    /// Drop the strap-range snapshot (called on disconnect with the other live clears) so a stale clock-drift
+    /// window can't outlive the link.
+    public func clearStrapRange() { strapRange = nil }
+
     @Published public var lastFrameType: String? = nil
     @Published public var lastEvent: String? = nil
     /// The strap's BLE advertising name, read back from firmware via GET_ADVERTISING_NAME_HARVARD
@@ -366,6 +408,7 @@ public final class LiveState: ObservableObject {
         clearBatterySamples()   // a stale runtime estimate must not outlive the link either (#713)
         recentHrSamples.removeAll()       // Sleep readout buffers must not outlive the link (Group E)
         recentGravitySamples.removeAll()
+        clearStrapRange()                 // a stale clock-drift window must not outlive the link either
     }
 
     /// Cap on the in-app strap-log ring buffer. Raised from the old ~1h (200 lines) to retain a rolling

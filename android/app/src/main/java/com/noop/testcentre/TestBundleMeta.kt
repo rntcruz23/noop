@@ -22,9 +22,15 @@ data class TestBundleMeta(
     val storage: Storage,
     val redaction: String,
     val truncated: Boolean,
+    val captureCheck: CaptureCheck,
 ) {
     data class Build(val channel: String, val signed: Boolean)
     data class Storage(val dbBytes: Int, val rows: Map<String, Int>, val rawCaptureBytes: Int)
+
+    /** The report-completeness tie (twin of the Swift CaptureCheck): per-domain killer-trace presence
+     *  ({domainId -> "present"|"MISSING"}) plus the overall `complete` flag, so a maintainer can tell at
+     *  a glance whether the report actually carries each active mode's diagnostic. */
+    data class CaptureCheck(val traces: Map<String, String>, val complete: Boolean)
 
     /** Pretty, sorted JSON. We do NOT rely on JSONObject key ordering (the org.json on the unit-test
      *  classpath is HashMap-backed and does not preserve insertion order), so we emit keys in explicit
@@ -34,6 +40,9 @@ data class TestBundleMeta(
         val root = mapOf<String, Any?>(
             "app_version" to appVersion,
             "build" to mapOf("channel" to build.channel, "signed" to build.signed),
+            "capture_check" to mapOf(
+                "complete" to captureCheck.complete,
+                "traces" to captureCheck.traces),
             "os_version" to osVersion,
             "platform" to platform,
             "profile_started_at" to profileStartedAt,

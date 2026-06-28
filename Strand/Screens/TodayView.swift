@@ -253,6 +253,15 @@ struct TodayView: View {
     // single-vs-two-column boundary and could collapse to one full-width column on a narrow phone.
     private let grid = [GridItem(.adaptive(minimum: 150), spacing: NoopMetrics.gap)]
 
+    /// #817 - the furthest-back offset the day-nav (swipe + chevrons + date jump) may reach: today's
+    /// logical day back to the earliest banked day across all sources. 0 when there's no data yet, so
+    /// today stays the only navigable day. Drives the swipe clamp so a swipe can't strand the user on a
+    /// day with no data behind it.
+    private var earliestDayOffset: Int {
+        Self.maxDayOffset(earliestDayKey: repo.freshness.earliestDay,
+                          todayKey: Repository.logicalDayKey(Date()))
+    }
+
     /// The logical day the selector resolves to: offset 0 is today's logical day (rolls at 04:00 like
     /// `repo.today`), past offsets count back from it. Presentation-only — used to pick which stored row
     /// is on screen and to anchor the HR-trend window. Mirrors Android TodayScreen.selectedDay.
@@ -327,6 +336,30 @@ struct TodayView: View {
         // yyyy-MM-dd compares lexicographically, so `$0.day < selectedDayKey` keeps only genuine prior days.
         // Belt-and-suspenders on top of the gate + one-time heal — cheap and never wrong.
         return days.last(where: { $0.recovery != nil && $0.day < selectedDayKey })
+    }
+
+    /// #817 - day-nav swipe/arrow clamp. Pure + unit-testable so the bounds can't drift between the
+    /// swipe gesture, the chevrons and the date jump. `current` is the days-back offset (0 = today),
+    /// `delta` is +1 to step one day OLDER, -1 to step one day NEWER. The result is clamped to
+    /// `0 ... maxOffset`: never past today (no future day), never older than the earliest data day.
+    /// `maxOffset` is the number of whole days from today's logical day back to the earliest banked day
+    /// (0 when there's no data yet, so the only reachable day is today). Mirror EXACTLY in Kotlin.
+    static func clampedDayOffset(current: Int, delta: Int, maxOffset: Int) -> Int {
+        let upper = max(0, maxOffset)
+        return min(upper, max(0, current + delta))
+    }
+
+    /// Whole days from today's logical day back to `earliestDayKey` (the oldest banked day across all
+    /// sources). nil/unparseable earliest, or a key on/after today, both yield 0 - today is then the only
+    /// navigable day. Both keys are "yyyy-MM-dd". Pure + unit-testable.
+    static func maxDayOffset(earliestDayKey: String?, todayKey: String) -> Int {
+        guard let earliestKey = earliestDayKey,
+              let earliest = dayKeyParser.date(from: earliestKey),
+              let today = dayKeyParser.date(from: todayKey) else { return 0 }
+        let gap = Calendar.current.dateComponents([.day],
+                                                  from: Calendar.current.startOfDay(for: earliest),
+                                                  to: Calendar.current.startOfDay(for: today)).day ?? 0
+        return max(0, gap)
     }
 
     /// Carry-over recency cap (#779): the "Last night" framing only holds when the carried scored day is
@@ -638,6 +671,26 @@ struct TodayView: View {
         let f = DateFormatter(); f.dateFormat = "EEE d MMM"; f.locale = Locale(identifier: "en_US_POSIX"); return f
     }()
 
+    /// #817 - the day-nav swipe. A horizontal drag flips the day: swipe right (toward today) to the newer
+    /// day, swipe left to the older one. Gated so it only fires on a clearly-horizontal drag past a small
+    /// threshold (vertical scrolling keeps winning), and clamped to `0 ... earliestDayOffset` so it can't
+    /// reach a future day or step older than the earliest banked day. Mirrors the chevron bounds exactly.
+    private var daySwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                // Horizontal-dominant and far enough to count as a deliberate day flip.
+                guard abs(dx) > abs(dy) * 1.5, abs(dx) > 50 else { return }
+                // Swipe LEFT (dx < 0) -> OLDER day (+1 offset); swipe RIGHT -> NEWER day (-1 offset).
+                let delta = dx < 0 ? 1 : -1
+                let next = Self.clampedDayOffset(current: selectedDayOffset, delta: delta,
+                                                 maxOffset: earliestDayOffset)
+                guard next != selectedDayOffset else { return }
+                withAnimation(StrandMotion.interactive) { selectedDayOffset = next }
+            }
+    }
+
     /// Picker binding that converts a chosen date back to a whole-day offset (capped at today).
     private var dayPickerBinding: Binding<Date> {
         Binding(
@@ -681,6 +734,26 @@ struct TodayView: View {
                 DatePicker("", selection: dayPickerBinding, in: ...Date(), displayedComponents: [.date])
                     .datePickerStyle(.graphical).labelsHidden().padding(12)
             }
+
+            // #817 - prev/next day chevrons beside the date. ‹ steps OLDER (disabled at the earliest banked
+            // day), › steps NEWER (disabled at today, so no future day). Same clamp as the swipe gesture, so
+            // both day-nav affordances share one bound.
+            topNavChevron("chevron.left", enabled: selectedDayOffset < earliestDayOffset) {
+                StrandHaptic.selection.play()
+                withAnimation(StrandMotion.interactive) {
+                    selectedDayOffset = Self.clampedDayOffset(current: selectedDayOffset, delta: 1,
+                                                              maxOffset: earliestDayOffset)
+                }
+            }
+            .accessibilityLabel("Previous day")
+            topNavChevron("chevron.right", enabled: selectedDayOffset > 0) {
+                StrandHaptic.selection.play()
+                withAnimation(StrandMotion.interactive) {
+                    selectedDayOffset = Self.clampedDayOffset(current: selectedDayOffset, delta: -1,
+                                                              maxOffset: earliestDayOffset)
+                }
+            }
+            .accessibilityLabel("Next day")
 
             Spacer(minLength: 8)
 
@@ -916,6 +989,15 @@ struct TodayView: View {
                 #endif
                 sourcesSection
             }
+            #if os(iOS)
+            // #817 - horizontal swipe to change day. A right-swipe (positive X) steps to the NEWER day
+            // (toward today), a left-swipe to the OLDER day, both clamped by `clampedDayOffset` so it can't
+            // pass today or go older than the earliest banked day - the same bounds the chevrons use. A
+            // height/width ratio gate keeps a near-vertical scroll from registering as a day swipe, and a
+            // ~50pt minimum distance avoids stray taps flipping the day. minimumDistance lets the scroll view
+            // win short drags so vertical scrolling is unaffected.
+            .gesture(daySwipeGesture)
+            #endif
             // #755: mirror `LiveState.backfilling` into `liveBackfillingFlag` WITHOUT TodayView observing
             // LiveState (which would re-flood `body` ~1 Hz — see the top-of-type note). The bridge is a
             // zero-size leaf in `.background` (no layout impact) that owns the observation and pushes only

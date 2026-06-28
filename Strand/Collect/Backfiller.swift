@@ -138,6 +138,11 @@ final class Backfiller {
     /// Both default inert (always-off / nil) so tests + non-prod inits get the byte-identical untraced path.
     private let connectionActive: () -> Bool
     private let connectionLog: ((String) -> Void)?
+    /// UNIVERSAL clock-drift wiring (RTC cluster): banks the strap's historical record-layout version
+    /// (hist_version) onto LiveState so the export assembler's universal clock-drift line is firmware-aware
+    /// on EVERY export, not only in Connection mode. Called UNCONDITIONALLY (it is observability, not gated)
+    /// once per distinct layout this session. Default nil (inert) so tests / non-prod inits are untouched.
+    private let firmwareLayout: ((Int) -> Void)?
 
     init(store: BackfillStoreWriting,
          deviceId: String,
@@ -148,6 +153,7 @@ final class Backfiller {
          onChunk: ((_ decoded: Bool, _ console: Bool) -> Void)? = nil,
          connectionActive: @escaping () -> Bool = { false },
          connectionLog: ((String) -> Void)? = nil,
+         firmwareLayout: ((Int) -> Void)? = nil,
          extract: @escaping Extractor = { extractHistoricalStreams($0, deviceClockRef: $1, wallClockRef: $2,
                                                                     sessionOldestUnix: $3, sessionNewestUnix: $4) }) {
         self.store = store
@@ -159,6 +165,7 @@ final class Backfiller {
         self.onChunk = onChunk
         self.connectionActive = connectionActive
         self.connectionLog = connectionLog
+        self.firmwareLayout = firmwareLayout
         self.extract = extract
     }
 
@@ -338,6 +345,9 @@ final class Backfiller {
             if let v = parsed.lazy.compactMap({ $0.parsed["hist_version"]?.intValue }).first,
                loggedLayoutVersions.insert(v).inserted {
                 log?("Backfill: historical records use layout v\(v)")
+                // UNIVERSAL clock-drift: bank the layout so the export's universal clock-drift line is
+                // firmware-aware on every export (not only Connection mode). Unconditional observability.
+                firmwareLayout?(v)
                 // Connection test mode: the firmware layout as a compact tagged line. A layout that decoded
                 // a signature field (heart_rate / gravity_x / ppg_waveform) is decodable; otherwise the
                 // unmapped-version path below fires too. Gated zero-cost.

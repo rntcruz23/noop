@@ -1,4 +1,5 @@
 import Foundation
+import StrandAnalytics
 
 /// The machine-readable tie between a strap log and the test profile that produced it: meta.json,
 /// schema v1 (spec section 5.1). Folds in build-provenance and the storage / DB-size block so a
@@ -18,6 +19,11 @@ struct TestBundleMeta: Codable {
     let storage: Storage
     let redaction: String              // "v2"
     let truncated: Bool
+    /// The report-completeness guard result (#812, generalised): per ACTIVE domain, OK (its killer trace
+    /// landed, with a count) or INCOMPLETE (the mode was on but produced no trace). Empty on a non-test
+    /// export. Lets a maintainer see at a glance, from meta alone, that a report is thin and WHICH capture
+    /// failed. Built by CaptureCompleteness.evaluate over the redacted report.txt.
+    var captureCheck: [CaptureCheck] = []
 
     /// channel: one of AltStore / App Store / TestFlight / brew / GitHub / sideload. signed is false on
     /// the sideloaded iOS path; derived from IOSDiagnostics.isSideloaded on iOS, fixed per flavour else.
@@ -36,6 +42,7 @@ struct TestBundleMeta: Codable {
         case schema, platform, source, questionnaire, build, storage, redaction, truncated
         case appVersion = "app_version", osVersion = "os_version", strapModel = "strap_model"
         case testProfile = "test_profile", profileStartedAt = "profile_started_at"
+        case captureCheck = "capture_check"
     }
 
     func encoded() -> Data {

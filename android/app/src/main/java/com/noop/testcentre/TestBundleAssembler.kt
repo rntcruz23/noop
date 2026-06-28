@@ -83,6 +83,13 @@ object TestBundleAssembler {
      * client and is testable; the header and last crash are added here to match the strap-log file.
      */
     fun assemble(context: Context, profile: TestDomain, logText: String): List<Pair<String, ByteArray>> {
+        val tc = TestCentre.from(context)
+        // The set of currently-active domains drives the report-completeness guard. MASTER turns every
+        // domain on (TestCentre.active resolves that), so a master report checks every mapped trace.
+        val activeDomains = ReportCompleteness.killerTokens.keys
+            .filter { tc.active(it) }
+            .toSet()
+
         // 1. report.txt: header (app + Android diagnostics) + the strap-log body, the same shape the
         //    strap-log share writes. Already scrubbed by the log() sink; the redactEntries pass re-scrubs.
         val header = buildString {
@@ -94,12 +101,20 @@ object TestBundleAssembler {
         val body = logText.ifBlank {
             "(strap log is empty, connect to your strap, reproduce the issue, then report again)"
         }
+        // CAPTURE-completeness: append the "Capture check" section so report.txt itself states, per active
+        // domain, whether its killer trace landed. Computed over the header+body that will ship (the guard
+        // reads exactly what the maintainer reads). Byte-identical section to the Swift twin.
+        val reportBody = header + "\n" + body
+        val captureCheck = ReportCompleteness.captureCheckSection(reportBody, activeDomains)
+        val reportText = reportBody + "\n" + captureCheck
         val entries = ArrayList<Pair<String, ByteArray>>()
-        entries.add("report.txt" to (header + "\n" + body).toByteArray())
+        entries.add("report.txt" to reportText.toByteArray())
 
         // last-crash.txt: only if a crash was captured (degrade gracefully, never fabricate).
+        var crashWasCaptured = false
         CrashCapture.lastCrash(context)?.let { crash ->
             entries.add("last-crash.txt" to crash.toByteArray())
+            crashWasCaptured = true
         }
 
         // 1b. Display & Performance: capture a screenshot for the DISPLAY profile (or any mode that declares
@@ -126,7 +141,6 @@ object TestBundleAssembler {
         // 3. meta.json: the machine-readable tie. Answers + startedAt come off the single TestCentre
         //    surface. Storage is left zeroed in Phase 1 (the DB-size probe is a later wire-up); we never
         //    fabricate a number we cannot read. The Android build is unsigned-flavour, channel "GitHub".
-        val tc = TestCentre.from(context)
         val started = tc.startedAt(profile)?.let {
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.US)
                 .format(java.util.Date(it * 1000L))
@@ -145,10 +159,37 @@ object TestBundleAssembler {
             storage = TestBundleMeta.Storage(dbBytes = 0, rows = emptyMap(), rawCaptureBytes = 0),
             redaction = REDACTION_VERSION,
             truncated = truncated,
+            // The same completeness guard, machine-readable. Computed over the SHIPPING report.txt (the
+            // capped, redacted one) so meta.capture_check and the report.txt section can never disagree:
+            // a non-MASTER report keeps report.txt small, and the cap only ever trims raw-capture, so the
+            // report body the guard read above is byte-identical to the one in `capped`.
+            captureCheck = ReportCompleteness.captureCheckMeta(reportText, activeDomains).let {
+                TestBundleMeta.CaptureCheck(traces = it.traces, complete = it.complete)
+            },
         )
         // meta.json has no PII shapes, but route it through the same sink so the whole bundle has passed
         // one scrub point (5.3).
         out += redactEntries(listOf("meta.json" to meta.encoded().toByteArray()))
+
+        // 4. Bundle robustness check (twin of the Swift assembler's): the last-line verifier over the FINAL
+        //    bytes about to ship. Confirms report.txt + meta.json are present/non-empty, the screenshot is
+        //    honoured when expected, a captured crash is attached, and - the #453 / 5.3 net - that no raw
+        //    MAC / serial survived redaction in any text entry. We append its PII-free summary line to the
+        //    report.txt so a maintainer reads the verdict ("bundle ok ... leaks=0") in the report itself; a
+        //    failure is surfaced, never silently shipped. Re-redact only the rewritten report.txt entry (its
+        //    summary line is fixed-format and PII-free, but route it through the same sink for the 5.3
+        //    guarantee). The robustness scan reads the bundle WITHOUT the summary line, so it can never
+        //    self-reference.
+        val robustness = BundleRobustness.verify(
+            entries = out,
+            expectScreenshot = wantsShot,
+            crashWasCaptured = crashWasCaptured,
+        )
+        val reportIdx = out.indexOfFirst { it.first == "report.txt" }
+        if (reportIdx >= 0) {
+            val withVerdict = String(out[reportIdx].second) + "\n" + robustness.summaryLine(out.size)
+            out[reportIdx] = redactEntries(listOf("report.txt" to withVerdict.toByteArray())).first()
+        }
         return out
     }
 }

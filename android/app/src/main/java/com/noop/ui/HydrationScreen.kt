@@ -10,11 +10,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.LocalDrink
 import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -29,6 +37,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,6 +60,18 @@ import java.util.Locale
 /** The reset accent blue (matches NoopButton's pinned iOS `StrandPalette.accent`: #234F9E / #60A0E0). */
 private val hydrationAccent: Color
     @Composable get() = if (Palette.isLight) Color(0xFF234F9E) else Color(0xFF60A0E0)
+
+/** Upper bound (ml) for a single custom hydration log (#798) - a sane cap so a stray digit can't bank an
+ *  absurd 50-litre day. A 3-litre container covers any realistic bottle/jug. Mirrors the iOS clamp. */
+private const val MAX_CUSTOM_ML: Int = 3000
+
+/** Parse a custom-amount field to a clamped whole-ml value in 1..[MAX_CUSTOM_ML], or null when the text
+ *  isn't a usable positive number. Pure + side-effect-free so the dialog's confirm gate is unit-testable. */
+internal fun parseCustomHydrationMl(text: String): Int? {
+    val n = text.trim().toIntOrNull() ?: return null
+    if (n <= 0) return null
+    return n.coerceAtMost(MAX_CUSTOM_ML)
+}
 
 /**
  * The Hydration detail screen. The goal's effort bump uses today's Effort/strain (0..100) read from the
@@ -79,15 +100,47 @@ fun HydrationScreen(viewModel: AppViewModel) {
         history = runCatching { HydrationStore.history(viewModel.repo, days = 7) }.getOrDefault(emptyList())
     }
 
+    // #798 - the LAST amount logged this session, so the detail can offer a one-tap "Undo" that removes
+    // exactly that container from the day total. The single-total schema can't address an individual log,
+    // so undo subtracts the last known amount (clamped at 0 by the store). Reset to null after an undo so
+    // the affordance only appears when there's something to take back. Not persisted - a relaunch shows
+    // the day total but no pending undo, which is honest (you can still correct via the custom dialog).
+    var lastLoggedMl by remember { mutableStateOf<Int?>(null) }
+    // The custom-amount dialog (the "custom container size" - log any ml the quick buttons don't cover).
+    var showCustom by remember { mutableStateOf(false) }
+
     val log: (Int) -> Unit = { amount ->
         scope.launch {
             runCatching { HydrationStore.log(viewModel.repo, amount) }
+            if (amount > 0) lastLoggedMl = amount
+            reloadTick += 1
+        }
+    }
+    // Remove [amount] ml from the day total (the undo / delete-a-log path, #798). Clears the pending undo.
+    val remove: (Int) -> Unit = { amount ->
+        scope.launch {
+            runCatching { HydrationStore.remove(viewModel.repo, amount) }
+            lastLoggedMl = null
             reloadTick += 1
         }
     }
 
     val fraction = if (goalMl > 0) (totalMl / goalMl).toFloat() else 0f
     val accent = hydrationAccent
+
+    // #798 - the custom-amount entry. Logs any whole-ml amount the Sip/Cup/Bottle quick buttons don't
+    // cover (a bespoke container), clamped to a sane 1..MAX_CUSTOM_ML, then routed through the SAME
+    // additive `log` path so it accumulates into the day total and refreshes the ring + history.
+    if (showCustom) {
+        CustomAmountDialog(
+            accent = accent,
+            onDismiss = { showCustom = false },
+            onConfirm = { ml ->
+                showCustom = false
+                log(ml)
+            },
+        )
+    }
 
     // PERF (#707): lazy scaffold — each top-level section is one `item { }`. Order + spacing unchanged
     // (LazyColumn reproduces the eager `spacedBy(20.dp)`); only on-screen cards compose + are
@@ -159,6 +212,16 @@ fun HydrationScreen(viewModel: AppViewModel) {
             ) { log(HydrationGoal.BOTTLE_ML) }
         }
         }
+        // #798 - "Custom" (a bespoke container size). Full-width secondary button under the quick-add row;
+        // opens the custom-amount dialog so any ml the presets don't cover can be logged.
+        item {
+        NoopButton(
+            text = "Custom amount",
+            leadingIcon = Icons.Filled.Add,
+            kind = NoopButtonKind.Secondary,
+            modifier = Modifier.fillMaxWidth(),
+        ) { showCustom = true }
+        }
         item {
         Text(
             "Sip ${HydrationGoal.SIP_ML} ml · Cup ${HydrationGoal.CUP_ML} ml · Bottle ${HydrationGoal.BOTTLE_ML} ml",
@@ -212,6 +275,26 @@ fun HydrationScreen(viewModel: AppViewModel) {
                             style = NoopType.headline.copy(fontWeight = FontWeight.SemiBold),
                             color = Palette.textPrimary,
                         )
+                    }
+                    // #798 - undo / correct affordances. "Undo last" appears once something has been logged
+                    // this session and removes exactly that container from the day total. "Clear today" zeroes
+                    // the day's total outright (the delete-everything correction). Both route through the
+                    // store's clamped remove/set, so the total never goes negative.
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        lastLoggedMl?.let { last ->
+                            NoopButton(
+                                text = "Undo last ($last ml)",
+                                leadingIcon = Icons.AutoMirrored.Filled.Undo,
+                                kind = NoopButtonKind.Secondary,
+                                modifier = Modifier.weight(1f),
+                            ) { remove(last) }
+                        }
+                        NoopButton(
+                            text = "Clear today",
+                            leadingIcon = Icons.Filled.Delete,
+                            kind = NoopButtonKind.Secondary,
+                            modifier = Modifier.weight(1f),
+                        ) { remove(totalMl.toInt()) }
                     }
                 }
             }
@@ -306,3 +389,73 @@ private fun weekdayInitial(dayKey: String): String =
     runCatching {
         LocalDate.parse(dayKey).format(DateTimeFormatter.ofPattern("EEE", Locale.US)).take(1)
     }.getOrDefault("·")
+
+/**
+ * #798 - the custom-amount dialog. A single numeric ml field (the "custom container size") with a clamped
+ * confirm: the Log button is disabled until the text parses to a positive whole-ml value (1..MAX_CUSTOM_ML
+ * via [parseCustomHydrationMl]), and confirming hands the parsed amount back to the caller's additive log.
+ * Tokens-only on the hydration-blue field; mirrors the iOS custom-amount sheet.
+ */
+@Composable
+private fun CustomAmountDialog(
+    accent: Color,
+    onDismiss: () -> Unit,
+    onConfirm: (Int) -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    val parsed = parseCustomHydrationMl(text)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.surfaceOverlay,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.WaterDrop,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text("Custom amount", style = NoopType.title2, color = Palette.textPrimary)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { new -> text = new.filter { it.isDigit() }.take(5) },
+                    label = { Text("Millilitres (ml)", style = NoopType.footnote) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Palette.textPrimary,
+                        unfocusedTextColor = Palette.textPrimary,
+                        cursorColor = accent,
+                        focusedBorderColor = accent,
+                        unfocusedBorderColor = Palette.hairline,
+                        focusedLabelColor = accent,
+                        unfocusedLabelColor = Palette.textSecondary,
+                        focusedContainerColor = Palette.surfaceInset,
+                        unfocusedContainerColor = Palette.surfaceInset,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Enter any amount from 1 to $MAX_CUSTOM_ML ml.",
+                    style = NoopType.footnote,
+                    color = if (text.isNotEmpty() && parsed == null) Palette.statusWarning else Palette.textTertiary,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { parsed?.let(onConfirm) }, enabled = parsed != null) {
+                Text("Log", color = if (parsed != null) accent else Palette.textTertiary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = Palette.textSecondary)
+            }
+        },
+    )
+}

@@ -29,6 +29,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Air
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.History
@@ -76,6 +78,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -741,7 +745,25 @@ fun TodayScreen(
         )
     }
 
+    // #817 - horizontal swipe to change day, alongside the header chevrons. `detectHorizontalDragGestures`
+    // only claims HORIZONTAL drags, so the LazyColumn keeps its vertical scroll; we accumulate the drag and
+    // resolve the day ONCE on lift via the pure `dayNavSwipeTarget` (rightward = older, leftward = newer,
+    // clamped at today). The threshold is density-scaled from DAY_NAV_SWIPE_THRESHOLD_DP so a small wobble
+    // during a scroll doesn't flip the day. Mirrors the iOS day-nav swipe lane.
+    val swipeThresholdPx = with(LocalDensity.current) { DAY_NAV_SWIPE_THRESHOLD_DP.dp.toPx() }
+    val daySwipeModifier = Modifier.pointerInput(Unit) {
+        var accumulatedX = 0f
+        detectHorizontalDragGestures(
+            onDragStart = { accumulatedX = 0f },
+            onDragEnd = {
+                selectedDayOffset = dayNavSwipeTarget(selectedDayOffset, accumulatedX, swipeThresholdPx)
+            },
+            onHorizontalDrag = { _, dragAmount -> accumulatedX += dragAmount },
+        )
+    }
+
     LazyScreenScaffold(
+        modifier = daySwipeModifier,
         // title = null suppresses the big scaffold header (the nullable-title path); the compact
         // WHOOP-style top bar below replaces it, mirroring the iOS Today screen (todayTopBar).
         title = null,
@@ -791,6 +813,7 @@ fun TodayScreen(
                 dayLabel = dayNavShortLabel(selectedDayOffset, selectedDay),
                 fullDate = headerFullDate(selectedDay),
                 selectedDay = selectedDay,
+                selectedOffset = selectedDayOffset,
                 recordingState = headerRecordingState,
                 onPickDay = { offset -> selectedDayOffset = offset },
                 updateStore = updateStore,
@@ -1345,6 +1368,41 @@ private fun dayNavShortLabel(selectedOffset: Int, selectedDay: LocalDate): Strin
     else -> selectedDay.format(DateTimeFormatter.ofPattern("EEE d MMM", Locale.US))
 }
 
+// MARK: - Day navigation (#817) - chevron arrows + horizontal swipe, iOS parity
+//
+// `selectedDayOffset` is days-back-from-today (0 = today, 1 = yesterday, …). The header chevrons and a
+// horizontal swipe across the dashboard both move it: older increments the offset (no upper bound - you
+// can browse arbitrarily far back), newer decrements it but is CLAMPED at 0 so a future day can never be
+// selected. These pure helpers hold that clamp so it's covered by a JVM test and shared by both the
+// arrow taps and the swipe handler, matching the iOS DayNavBar's `canGoNewer` / `selectedOffset ± 1`.
+
+/** The offset for one step toward an OLDER day (previous). Unbounded above - history runs as far back as
+ *  the data does. */
+internal fun dayNavOlder(selectedOffset: Int): Int = selectedOffset + 1
+
+/** The offset for one step toward a NEWER day (next), CLAMPED at 0 so a future day is never selectable. */
+internal fun dayNavNewer(selectedOffset: Int): Int = (selectedOffset - 1).coerceAtLeast(0)
+
+/** True when there IS a newer day to step to (i.e. we're not already on today). Gates the ▶ chevron's
+ *  enabled state, mirroring the iOS `canGoNewer`. */
+internal fun dayNavCanGoNewer(selectedOffset: Int): Boolean = selectedOffset > 0
+
+/** The minimum horizontal drag (px) that counts as a day-change swipe, so a small wobble during a
+ *  vertical scroll doesn't flip the day. ~64dp at mdpi; the handler passes density-scaled px. */
+internal const val DAY_NAV_SWIPE_THRESHOLD_DP: Float = 64f
+
+/**
+ * Resolve a completed horizontal swipe to the next [selectedDayOffset]. A drag whose total horizontal
+ * travel doesn't clear [thresholdPx] returns the offset UNCHANGED (treated as a non-swipe). A rightward
+ * swipe (positive [dragX], the natural "go back" / reveal-the-past gesture) steps to the OLDER day; a
+ * leftward swipe steps to the NEWER day, clamped at today. Pure so the gesture mapping is unit-tested.
+ */
+internal fun dayNavSwipeTarget(selectedOffset: Int, dragX: Float, thresholdPx: Float): Int = when {
+    kotlin.math.abs(dragX) < thresholdPx -> selectedOffset
+    dragX > 0f -> dayNavOlder(selectedOffset)
+    else -> dayNavNewer(selectedOffset)
+}
+
 /** The full date subtitle under the large title, e.g. "Tuesday, 23 June" — mirrors iOS's
  *  weekday().day().month() stamp so the header shows the explicit day the data belongs to. */
 private fun headerFullDate(selectedDay: LocalDate): String =
@@ -1355,6 +1413,7 @@ private fun TodayTopBar(
     dayLabel: String,
     fullDate: String,
     selectedDay: LocalDate,
+    selectedOffset: Int,
     recordingState: RecordingState?,
     onPickDay: (Int) -> Unit,
     updateStore: UpdateStore?,
@@ -1399,6 +1458,21 @@ private fun TodayTopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        // #817 - ◀ chevron: step one day OLDER. Unbounded back-navigation (no lower edge), mirroring the
+        // iOS DayNavBar "Previous day" chevron. A compact 28dp glyph so it sits flush against the large
+        // title without stealing the icon row's width.
+        IconButton(
+            onClick = { onPickDay(dayNavOlder(selectedOffset)) },
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                Icons.Filled.ChevronLeft,
+                contentDescription = "Previous day",
+                tint = Palette.accent,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+
         // LEFT — the tappable large title ("Today ⌄") over the full date. Taps open the date picker.
         Column(
             modifier = Modifier
@@ -1434,6 +1508,22 @@ private fun TodayTopBar(
                 color = Palette.textSecondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+
+        // #817 - ▶ chevron: step one day NEWER, DISABLED on today so a future day can't be selected
+        // (greyed glyph). Mirrors the iOS DayNavBar "Next day" chevron + its `canGoNewer` gate.
+        val canGoNewer = dayNavCanGoNewer(selectedOffset)
+        IconButton(
+            onClick = { if (canGoNewer) onPickDay(dayNavNewer(selectedOffset)) },
+            enabled = canGoNewer,
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                Icons.Filled.ChevronRight,
+                contentDescription = "Next day",
+                tint = if (canGoNewer) Palette.accent else Palette.textTertiary,
+                modifier = Modifier.size(20.dp),
             )
         }
 

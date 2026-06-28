@@ -841,8 +841,19 @@ private fun WorkoutDetailSheet(vm: AppViewModel, row: WorkoutRow, onDismiss: () 
                 val unitSystem = UnitPrefs.system(LocalContext.current)
                 DetailRow("Distance", UnitFormatter.distanceFromKilometers(row.distanceM / 1000.0, unitSystem))
             }
-            if (row.strain != null) DetailRow("Strain", oneDecimal(row.strain))
             if (!row.notes.isNullOrBlank()) DetailRow("Notes", row.notes)
+
+            // #796 - per-session Effort contribution. The session's captured strain re-homed from a plain
+            // value row into a prominent Effort-amber card (the big count-up value + the "This session"
+            // overline + an explainer), mirroring the iOS WorkoutDetailView.effortCard. Gated on a captured
+            // strain - an imported session with none simply omits the card. The display honours the Effort
+            // scale toggle (#268), so a WHOOP-axis user sees the rescaled 0–21 value; the stored value is
+            // unchanged. Presentation only - no new data is computed here.
+            row.strain?.let { strain ->
+                val effortScale = UnitPrefs.effortScale(LocalContext.current)
+                CardDivider()
+                SessionEffortCard(strain = strain, effortScale = effortScale)
+            }
 
             // HR curve over the session window (#410). A faint baseline shows under 2 points.
             if (hrCurve.size > 1) {
@@ -891,6 +902,55 @@ private fun WorkoutDetailSheet(vm: AppViewModel, row: WorkoutRow, onDismiss: () 
                         color = Palette.textTertiary,
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * #796 - the workout detail's per-session Effort contribution card. The Effort-amber tinted [NoopCard]
+ * carries a "This session" overline, the captured strain as a big count-up value (the NOOP signature),
+ * its scale caption (Effort 0–100 or strain 0–21), and a one-line explainer. Mirrors the iOS
+ * WorkoutDetailView.effortCard: same colour world, same count-up, same copy. [strain] is the stored
+ * 0–100 Effort value; [effortScale] only changes how it is DISPLAYED, never the stored number.
+ */
+@Composable
+private fun SessionEffortCard(strain: Double, effortScale: EffortScale) {
+    val shown = UnitFormatter.effortValue(strain, effortScale)
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.space8)) {
+        SectionHeader("Effort", overline = "This session")
+        NoopCard(tint = Palette.effortColor) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(Metrics.space2),
+                    modifier = Modifier.semantics {
+                        contentDescription =
+                            "This session's Effort, ${oneDecimal(shown)} on the " +
+                                (if (effortScale == EffortScale.WHOOP) "0 to 21 strain" else "0 to 100 Effort") +
+                                " scale."
+                    },
+                ) {
+                    CountUpText(
+                        value = shown,
+                        format = { oneDecimal(it) },
+                        style = NoopType.number(34f),
+                        color = Palette.effortBright,
+                    )
+                    Text(
+                        if (effortScale == EffortScale.WHOOP) "strain (0–21)" else "Effort (0–100)",
+                        style = NoopType.footnote,
+                        color = Palette.textTertiary,
+                    )
+                }
+                Text(
+                    "This session's contribution to the day's Effort, as captured during the workout.",
+                    style = NoopType.subhead,
+                    color = Palette.textSecondary,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }

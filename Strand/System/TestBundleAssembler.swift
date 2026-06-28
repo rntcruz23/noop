@@ -83,11 +83,19 @@ enum TestBundleAssembler {
         let platform = "macOS"
         #endif
 
-        // 1. report.txt: the same exportable strap log the strap-log card shares. Already redacted by the
-        //    append(log:) sink, but the whole-bundle redactEntries pass below re-scrubs it anyway (5.3).
-        let textEntries: [FileExport.BundleEntry] = [
-            FileExport.BundleEntry(name: "report.txt", data: Data(live.exportableLogText().utf8)),
-        ]
+        // 0. The universal clock-drift line (RTC cluster #531/#767/#804/#812): rides EVERY export so a
+        //    clock-broken strap self-diagnoses on a Sleep / Battery / any-mode report, not only in Connection
+        //    mode. Built from the strap-range snapshot BLEManager banked (LiveState.strapRange). Appended to
+        //    the report body BEFORE the completeness scan so its `dayOwner`-sibling token is part of the text
+        //    the guard reads. No-op when no range was ever seen this session (no strap reply yet).
+        let baseReport = live.exportableLogText()
+        let universalLine = universalClockDriftLine(range: live.strapRange)
+        let reportText = universalLine.map { baseReport + "\n[universal] " + $0 } ?? baseReport
+
+        // 1. report.txt: the same exportable strap log the strap-log card shares, plus the universal
+        //    clock-drift line. Already redacted by the append(log:) sink, but the whole-bundle redactEntries
+        //    pass below re-scrubs it anyway (5.3).
+        let reportEntry = FileExport.BundleEntry(name: "report.txt", data: Data(reportText.utf8))
 
         // 1b. Display & Performance: capture a screenshot for the .display profile (or any mode that
         //     declares includesScreenshot) as screenshot.png. The PNG is BINARY image bytes, not text, so it
@@ -102,17 +110,57 @@ enum TestBundleAssembler {
             ? DisplayScreenshot.capturePNG().map { FileExport.BundleEntry(name: DisplayScreenshot.bundleName, data: $0) }
             : nil
 
-        // 2. Redact the TEXT files, then cap. The screenshot is included in the cap input (NOT the redact
-        //    input) so its bytes COUNT against the 20 MB cap: capEntries budgets raw-capture as
-        //    capBytes - (everything else), so a large/retina PNG shrinks the raw-capture tail rather than
-        //    breaching the cap. Only raw-capture is trimmed; report.txt is bounded and the PNG is kept whole.
+        // 1c. raw-capture.jsonl: the on-device raw frame capture (when enabled in Settings -> Experimental),
+        //     read from disk by URL. It is TEXT (JSON lines) where embedded console strings can carry a
+        //     serial, so it IS run through the redactEntries pass below (the #1 reason the whole-bundle scrub
+        //     exists, 5.3). Attached only when the file exists; a non-capturing install ships no raw entry.
+        let rawCapture: FileExport.BundleEntry? = live.puffinCaptureURL
+            .flatMap { fileEntry(at: $0, name: "raw-capture.jsonl") }
+
+        // 1d. last-crash.txt: the most recent crash report, when one is present on disk. It is TEXT, so it
+        //     ALSO rides the redactEntries pass. There is no crash producer wired yet, so this is normally
+        //     absent; the lookup is a no-op then. Pluggable via `crashLogURL` so a future crash handler need
+        //     only drop a file at the known path for it to start attaching, fully redacted, automatically.
+        let crash: FileExport.BundleEntry? = crashLogURL()
+            .flatMap { fileEntry(at: $0, name: "last-crash.txt") }
+
+        // 2. Redact the TEXT files (report.txt, raw-capture.jsonl, last-crash.txt), then cap. The screenshot
+        //    is included in the cap input (NOT the redact input) so its bytes COUNT against the 20 MB cap:
+        //    capEntries budgets raw-capture as capBytes - (everything else), so a large/retina PNG shrinks
+        //    the raw-capture tail rather than breaching the cap. Only raw-capture is trimmed; report.txt and
+        //    last-crash are bounded and the PNG is kept whole.
+        let textEntries = [reportEntry] + (rawCapture.map { [$0] } ?? []) + (crash.map { [$0] } ?? [])
         let redacted = redactEntries(textEntries)
         let (capped, truncated) = capEntries(redacted + (shot.map { [$0] } ?? []))
         var entries = capped
 
+        // 2b. REPORT-COMPLETENESS GUARD (#812, generalised): for each domain ACTIVE during this capture,
+        //     scan the redacted report.txt for its killer-trace token(s) and produce OK / INCOMPLETE. This
+        //     makes a thin/empty report self-evident at submit time (the section is in the report the review
+        //     gate shows) and names WHICH capture failed. Run over the REDACTED report so it sees exactly the
+        //     bytes that ship. `.universal` is graded whenever any mode was active (the dayOwner +
+        //     clock-drift lines ride every export). Re-read the redacted report.txt from `capped` so the scan
+        //     and the shipped text can never diverge.
+        let redactedReport = capped.first { $0.name == "report.txt" }
+            .flatMap { String(data: $0.data, encoding: .utf8) } ?? reportText
+        let active = activeDomains()
+        let checks = CaptureCompleteness.evaluate(activeDomains: active, reportText: redactedReport)
+        let section = CaptureCompleteness.reportSection(checks)
+        if !section.isEmpty {
+            // Append the Capture-check section to the shipped report.txt and re-redact (the section carries
+            // no PII shapes, so the scrub is byte-identical, but it keeps the single-scrub-point invariant).
+            let appended = redactedReport + "\n" + section
+            entries = entries.map { e in
+                e.name == "report.txt"
+                    ? redactEntries([FileExport.BundleEntry(name: "report.txt", data: Data(appended.utf8))])[0]
+                    : e
+            }
+        }
+
         // 3. meta.json: the machine-readable tie. The questionnaire answers are whatever the tester saved
         //    for this profile; profileStartedAt is ISO8601 from TestCentre. Storage is left zeroed in
-        //    Phase 1 (the DB-size probe is a later wire-up); we never fabricate a number we cannot read.
+        //    Phase 1 (the DB-size probe is a later wire-up); we never fabricate a number we cannot read. The
+        //    capture_check field carries the same OK/INCOMPLETE verdicts as the report section.
         let started = TestCentre.startedAt(profile).map { ISO8601DateFormatter().string(from: $0) }
         let meta = TestBundleMeta(
             schema: 1,
@@ -127,11 +175,52 @@ enum TestBundleAssembler {
             build: buildProvenance(),
             storage: TestBundleMeta.Storage(dbBytes: 0, rows: [:], rawCaptureBytes: 0),
             redaction: redactionVersion,
-            truncated: truncated)
+            truncated: truncated,
+            captureCheck: checks)
 
         // meta.json has no PII shapes, so the redact pass leaves it byte-identical, but we route it through
         // the same sink so the whole bundle is guaranteed to have passed one scrub point (5.3).
         entries += redactEntries([FileExport.BundleEntry(name: "meta.json", data: meta.encoded())])
         return entries
+    }
+
+    // MARK: - Helpers (universal clock-drift, bundle gather, active-domain view)
+
+    /// Build the UNIVERSAL clock-drift line from the strap-range snapshot, or nil when no range was seen
+    /// this session (no strap reply yet) OR only a firmware-only snapshot exists (newest==0, no real window).
+    /// Pure; delegates the format to UniversalTrace so the line can never silently drift. `now` is injectable
+    /// so the line is unit-testable without a live clock.
+    static func universalClockDriftLine(range: LiveState.StrapRange?,
+                                        now: Int = Int(Date().timeIntervalSince1970)) -> String? {
+        guard let range, range.newestUnix > 0 else { return nil }
+        return UniversalTrace.clockDriftLine(newestUnix: range.newestUnix, wallNowUnix: now,
+                                             oldestUnix: range.oldestUnix, firmwareLayout: range.firmwareLayout)
+    }
+
+    /// The set of domains ACTIVE during this capture, plus `.universal` whenever any mode was on (the
+    /// dayOwner + clock-drift lines ride every export). Reads the same zero-cost TestCentre.active gate the
+    /// emitters check, so the guard grades exactly the modes that were capturing.
+    static func activeDomains() -> Set<TestDomain> {
+        var s = Set(TestDomain.allCases.filter { $0 != .universal && TestCentre.active($0) })
+        if !s.isEmpty { s.insert(.universal) }
+        return s
+    }
+
+    /// Read a file at `url` into a redactable bundle entry, or nil when the file is absent / unreadable, so a
+    /// missing raw-capture / crash file is never a dead entry. The bytes are returned RAW; the caller runs
+    /// them through redactEntries (these are text streams whose embedded console strings can carry a serial).
+    static func fileEntry(at url: URL, name: String) -> FileExport.BundleEntry? {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return FileExport.BundleEntry(name: name, data: data)
+    }
+
+    /// The on-disk path a crash report would live at, when a crash handler is wired. There is no producer
+    /// yet, so this normally points at a non-existent file and `fileEntry` returns nil. Centralised here so a
+    /// future handler need only write to this path for the crash log to start attaching (fully redacted)
+    /// automatically. Lives in the app's caches dir so it is never iCloud-synced.
+    static func crashLogURL() -> URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("noop-last-crash.txt")
     }
 }

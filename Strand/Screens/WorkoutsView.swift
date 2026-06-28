@@ -710,8 +710,9 @@ struct WorkoutsView: View {
                           overline: "Log",
                           trailing: "\(rows.count) total")
             NoopCard(padding: 0) {
-                // The fixed-width columns total ≈612pt — wider than an iPhone — so on iOS the table
-                // scrolls horizontally instead of clipping the SPORT / DIST / SOURCE columns (#183).
+                // The fixed-width columns total well over an iPhone's width (more so since #796 added the
+                // EFFORT column) so on iOS the table scrolls horizontally instead of clipping the SPORT /
+                // DIST / EFFORT / SOURCE columns (#183).
                 // macOS windows are wide enough to show it all, so they keep the full-width layout.
                 #if os(iOS)
                 ScrollView(.horizontal, showsIndicators: true) {
@@ -757,6 +758,10 @@ struct WorkoutsView: View {
             colHeader("AVG HR", width: ColWidth.hr, align: .trailing)
             colHeader("KCAL", width: ColWidth.kcal, align: .trailing)
             colHeader("DIST", width: ColWidth.dist, align: .trailing)
+            // #796 - per-session Effort (the stored 0-100 strain this workout contributed to the day),
+            // shown on the user's selected Effort scale. Same value the Effort ring and the detail's
+            // Effort card read, surfaced per row so each session's effort is visible without opening it.
+            colHeader("EFFORT", width: ColWidth.effort, align: .trailing)
             Spacer(minLength: 0)
             colHeader("SOURCE", width: ColWidth.source, align: .trailing)
             // Empty header over the per-row "•••" actions menu column (keeps SOURCE aligned).
@@ -802,6 +807,9 @@ struct WorkoutsView: View {
             cell(row.energyKcal.map { grouped($0) } ?? "–", width: ColWidth.kcal,
                  color: row.energyKcal != nil ? StrandPalette.metricAmber : nil)
             cell(distanceLabel(row.distanceM), width: ColWidth.dist)
+            // #796 - per-session Effort, on the user's scale, tinted the Effort colour when present.
+            cell(Self.effortCellLabel(strain: row.strain, scale: effortScale), width: ColWidth.effort,
+                 color: row.strain != nil ? StrandPalette.effortColor : nil)
 
             Spacer(minLength: 0)
 
@@ -877,6 +885,14 @@ struct WorkoutsView: View {
                    source: "manual", durationS: row.durationS, energyKcal: row.energyKcal,
                    avgHr: row.avgHr, maxHr: row.maxHr, strain: row.strain, distanceM: row.distanceM,
                    zonesJSON: row.zonesJSON, notes: row.notes)
+    }
+
+    /// #796 - the per-session Effort cell label: the stored 0-100 strain mapped to the user's Effort scale
+    /// (the SAME `UnitFormatter.effortDisplay` every other Effort read-out routes through, so the toggle and
+    /// rounding stay consistent), or "–" when the session has no captured strain. Pure + unit-testable.
+    static func effortCellLabel(strain: Double?, scale: EffortScale) -> String {
+        guard let strain else { return "–" }
+        return UnitFormatter.effortDisplay(strain, scale: scale)
     }
 
     private func cell(_ text: String, width: CGFloat, color: Color? = nil) -> some View {
@@ -1075,6 +1091,7 @@ struct WorkoutsView: View {
         static let hr: CGFloat = 64
         static let kcal: CGFloat = 70
         static let dist: CGFloat = 72
+        static let effort: CGFloat = 64   // #796 per-session Effort column
         static let source: CGFloat = 80
         static let action: CGFloat = 36   // trailing "•••" per-row actions menu
     }

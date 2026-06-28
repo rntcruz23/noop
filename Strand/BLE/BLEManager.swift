@@ -723,7 +723,10 @@ public final class BLEManager: NSObject, ObservableObject {
                                 // Backfiller checks before building any .connection diagnostic line. The gate is
                                 // one UserDefaults bool; nothing is emitted (or built) when the mode is off.
                                 connectionActive: { TestCentre.active(.connection) },
-                                connectionLog: { [weak self] s in self?.state.append(log: s, domain: .connection) })
+                                connectionLog: { [weak self] s in self?.state.append(log: s, domain: .connection) },
+                                // UNIVERSAL clock-drift: bank the strap's historical layout so the export's
+                                // universal clock-drift line is firmware-aware on every export. Unconditional.
+                                firmwareLayout: { [weak self] v in self?.state.setStrapFirmwareLayout(v) })
         // Strand: no server uploader/sync — all data stays on-device.
 
         // Retro-decode: when the decoder gains a historical layout (e.g. WHOOP 4.0 v25), re-run every
@@ -3050,6 +3053,11 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                             let spanDays = (newest - oldest) / 86_400
                             log("Strap banked history span: \(d.string(from: Date(timeIntervalSince1970: TimeInterval(oldest)))) → newest (~\(spanDays) day\(spanDays == 1 ? "" : "s") of backlog, drained oldest-first)")
                         }
+                        // UNIVERSAL clock-drift snapshot (RTC cluster #531/#767/#804/#812): bank the strap's
+                        // [oldest, newest] window onto LiveState UNCONDITIONALLY (observability, not gated) so the
+                        // export assembler can ride a universal clock-drift line on EVERY Test Centre export, not
+                        // only when Connection mode is on. Additive; the decode above is unchanged.
+                        state.setStrapRange(newestUnix: newest, oldestUnix: (oldest.map { $0 < newest } ?? false) ? oldest : nil)
                         // Connection test mode: promote the CLOCK-DRIFT picture from the buried raw frames to one
                         // upfront tagged line - the strap-reported [oldest, newest] window vs wall clock with a
                         // FUTURE-DATE flag (#767 / #754 cluster). Gated zero-cost; pure formatter, no behaviour

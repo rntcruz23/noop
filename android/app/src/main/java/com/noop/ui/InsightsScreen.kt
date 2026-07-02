@@ -682,7 +682,7 @@ private fun ActivityCostCard(cost: com.noop.analytics.ActivityCost) {
                 StatTile(
                     modifier = Modifier.weight(1f),
                     label = "Bounce back",
-                    value = cost.daysToBaseline?.let { "${it}d" } ?: ", ",
+                    value = cost.daysToBaseline?.let { "${it}d" } ?: "—",
                     caption = if (cost.daysToBaseline != null) "to baseline" else "not within 7d",
                     accent = Palette.chargeColor,
                 )
@@ -1059,14 +1059,14 @@ private fun ActiveExperimentCard(
             ExperimentMeasure(
                 modifier = Modifier.weight(1f),
                 label = "Baseline",
-                value = snapshot.baselineMean?.let { snapshot.outcome.format(it) } ?: ", ",
+                value = snapshot.baselineMean?.let { snapshot.outcome.format(it) } ?: "—",
                 caption = "${snapshot.baselineCount} days without it",
                 tint = Palette.textSecondary,
             )
             ExperimentMeasure(
                 modifier = Modifier.weight(1f),
                 label = "Intervention",
-                value = snapshot.interventionMean?.let { snapshot.outcome.format(it) } ?: ", ",
+                value = snapshot.interventionMean?.let { snapshot.outcome.format(it) } ?: "—",
                 caption = "${snapshot.interventionCount} logged days",
                 tint = Palette.accent,
             )
@@ -1374,7 +1374,7 @@ private fun experimentDeltaColor(s: ExperimentSnapshot): Color {
 }
 
 private fun formatExperimentDelta(delta: Double?, outcome: Outcome, includeSign: Boolean = true): String {
-    if (delta == null) return ", "
+    if (delta == null) return "—"
     val prefix = if (!includeSign) "" else if (delta > 0) "+" else if (delta < 0) "−" else ""
     val v = abs(delta).roundToInt()
     return when (outcome) {

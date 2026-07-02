@@ -231,7 +231,7 @@ final class WeeklyDigestTests: XCTestCase {
         XCTAssertFalse(line.lowercased().contains("steady"),
                        "Must NOT claim a steady week against 2 days: \(line)")
         XCTAssertFalse(line.contains("too early"),
-                       "The current week is fine — the honesty aims at last week: \(line)")
+                       "The current week is fine; the honesty aims at last week: \(line)")
     }
 
     // MARK: - Rough-comparison flag (chips must not imply confidence on a sparse side)

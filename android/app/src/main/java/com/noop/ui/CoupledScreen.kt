@@ -124,8 +124,10 @@ fun CoupledScreen(
     }
 
     // On-device readiness, computed EXACTLY as Today does, so the one-word pill matches the home screen.
-    val readinessLevel = remember(days, carriedRecoveryDay, todayRow) {
-        val anchor = carriedRecoveryDay?.day ?: todayRow?.day ?: logicalKey
+    // The carried anchor is gated on isCarrying (Today's !todayScored gate): on a normal scored day today's
+    // own key wins, so Coupled's pill can't diverge from Today's onto yesterday (#787).
+    val readinessLevel = remember(days, carriedRecoveryDay, todayRow, isCarrying) {
+        val anchor = (if (isCarrying) carriedRecoveryDay?.day else todayRow?.day) ?: logicalKey
         ReadinessEngine.evaluate(days, anchor).level
     }
 

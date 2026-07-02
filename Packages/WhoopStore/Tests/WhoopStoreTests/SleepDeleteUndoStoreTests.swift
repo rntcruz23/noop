@@ -80,4 +80,50 @@ final class SleepDeleteUndoStoreTests: XCTestCase {
         XCTAssertEqual(rows[0].endTs, 9000)
         XCTAssertEqual(rows[0].stagesJSON, edited.stagesJSON)
     }
+
+    // MARK: - motion + band-state survive undo (Deep Timeline tracks; Android parity)
+
+    /// A `userEdited` night is never re-detected, so `analyzeRecent` won't re-persist its Deep Timeline
+    /// motion + Band Sleep State tracks after an undo. The Repository snapshot therefore captures
+    /// `motionJSON`/`sleepStateJSON` at delete time and re-persists them after the restore-upsert. This
+    /// pins the store half of that path: the two per-epoch series must round-trip through
+    /// delete → upsert → re-persist intact (the bug was they came back NULL, diverging from Android).
+    func testUndoRestoresUserEditedNightMotionAndBandStateTracks() async throws {
+        let store = try await WhoopStore.inMemory()
+        let edited = session(start: 4000, end: 10_000, edited: true)
+        try await store.upsertSleepSessions([edited], deviceId: computed)
+
+        // Populate the per-epoch tracks the Deep Timeline reads.
+        let motion: [Double] = [0.1, 0.9, 0.3, 0.0, 1.2]
+        let bandState: [Int] = [0, 1, 2, 3, 1]
+        _ = try await store.persistSessionMotion(deviceId: computed, sessionStart: 4000, motionEpochs: motion)
+        _ = try await store.persistSessionSleepState(deviceId: computed, sessionStart: 4000, states: bandState)
+
+        // Snapshot the tracks BEFORE deleting (what ownedSleepRowSnapshot now captures).
+        let snapMotion = try await store.sessionMotion(deviceId: computed, sessionStart: 4000)
+        let snapState = try await store.sessionSleepState(deviceId: computed, sessionStart: 4000)
+        XCTAssertEqual(snapMotion, motion)
+        XCTAssertEqual(snapState, bandState)
+
+        // Delete drops the row AND its per-epoch columns. (Hoist awaited reads: XCTAssert autoclosures
+        // can't await.)
+        _ = try await store.deleteSleepSession(deviceId: computed, startTs: 4000)
+        let motionAfterDelete = try await store.sessionMotion(deviceId: computed, sessionStart: 4000)
+        let stateAfterDelete = try await store.sessionSleepState(deviceId: computed, sessionStart: 4000)
+        XCTAssertNil(motionAfterDelete, "delete removes the motion track with the row")
+        XCTAssertNil(stateAfterDelete)
+
+        // Undo: restore the row, THEN re-persist the captured tracks (the fixed undo order).
+        _ = try await store.upsertSleepSessions([edited], deviceId: computed)
+        _ = try await store.persistSessionMotion(deviceId: computed, sessionStart: 4000,
+                                                 motionEpochs: snapMotion ?? [])
+        _ = try await store.persistSessionSleepState(deviceId: computed, sessionStart: 4000,
+                                                     states: snapState ?? [])
+
+        // Both Deep Timeline tracks are back, byte-for-byte (no silent loss like the pre-fix path).
+        let motionAfterUndo = try await store.sessionMotion(deviceId: computed, sessionStart: 4000)
+        let stateAfterUndo = try await store.sessionSleepState(deviceId: computed, sessionStart: 4000)
+        XCTAssertEqual(motionAfterUndo, motion, "the Deep Timeline motion track survives undo")
+        XCTAssertEqual(stateAfterUndo, bandState, "the Band Sleep State track survives undo")
+    }
 }

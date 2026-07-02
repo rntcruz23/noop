@@ -108,6 +108,14 @@ struct SleepDeletionSnapshot: Equatable {
     let ownerDeviceId: String
     /// The night's wake span used in the tombstone token (== `session.endTs`).
     let endTs: Int
+    /// The per-epoch Deep Timeline motion series (`motionJSON`), captured at delete time. Not carried on
+    /// `CachedSleepSession`, so undo must re-persist it after the upsert or a `userEdited` night's motion
+    /// track vanishes (a detected night self-heals via `analyzeRecent`; a hand-edited one is never
+    /// re-detected). nil when the column was NULL. (#65 Android parity.)
+    var motion: [Double]?
+    /// The per-epoch banked band sleep-state series (`sleepStateJSON`), captured at delete time. Same
+    /// reason as `motion`: undo re-persists it so a `userEdited` night keeps its Band Sleep State track.
+    var sleepState: [Int]?
 }
 
 /// Read model over the on-device WhoopStore. Opens its own handle (WAL + busy-timeout makes the
@@ -1046,6 +1054,16 @@ final class Repository: ObservableObject {
                                                            endTs: snapshot.endTs, from: dismissedSleepSpans)
         // Restore into the SAME namespace that owned it. upsertSleepSessions preserves userEdited.
         _ = try? await store.upsertSleepSessions([snapshot.session], deviceId: snapshot.ownerDeviceId)
+        // Re-persist the per-epoch motion + band-state series the delete dropped (they're not carried on
+        // CachedSleepSession). Must run AFTER the upsert (both are UPDATEs keyed on (deviceId, startTs)),
+        // so a userEdited night keeps its Deep Timeline motion + Band Sleep State tracks (Android parity).
+        // A nil series persists the empty array, which the store maps to NULL (absent stays absent).
+        _ = try? await store.persistSessionMotion(deviceId: snapshot.ownerDeviceId,
+                                                  sessionStart: snapshot.session.startTs,
+                                                  motionEpochs: snapshot.motion ?? [])
+        _ = try? await store.persistSessionSleepState(deviceId: snapshot.ownerDeviceId,
+                                                     sessionStart: snapshot.session.startTs,
+                                                     states: snapshot.sleepState ?? [])
         await refresh()
     }
 
@@ -1059,11 +1077,21 @@ final class Repository: ObservableObject {
                                                        limit: 4)) ?? []
             return rows.first { $0.startTs == detectedStartTs }
         }
+        // Capture the per-epoch motion + band-state series alongside the row (they live in the same
+        // sleepSession row but NOT on CachedSleepSession), so undo can re-persist them after the upsert.
+        // Deleting the row drops those columns, so without this a userEdited night's Deep Timeline motion
+        // + Band Sleep State tracks vanish on undo (Android preserves them). (#65 parity.)
+        func snapshot(_ session: CachedSleepSession, owner: String) async -> SleepDeletionSnapshot {
+            let motion = try? await store.sessionMotion(deviceId: owner, sessionStart: detectedStartTs)
+            let sleepState = try? await store.sessionSleepState(deviceId: owner, sessionStart: detectedStartTs)
+            return SleepDeletionSnapshot(session: session, ownerDeviceId: owner, endTs: session.endTs,
+                                         motion: motion ?? nil, sleepState: sleepState ?? nil)
+        }
         if let computed = await row(computedDeviceId) {
-            return SleepDeletionSnapshot(session: computed, ownerDeviceId: computedDeviceId, endTs: computed.endTs)
+            return await snapshot(computed, owner: computedDeviceId)
         }
         if let imported = await row(deviceId) {
-            return SleepDeletionSnapshot(session: imported, ownerDeviceId: deviceId, endTs: imported.endTs)
+            return await snapshot(imported, owner: deviceId)
         }
         return nil
     }

@@ -622,11 +622,11 @@ struct InsightsView: View {
                 spacing: NoopMetrics.gap
             ) {
                 experimentMeasure("Baseline",
-                                  value: snapshot.baselineMean.map { formatOutcome($0, as: snapshot.outcome) } ?? ", ",
+                                  value: snapshot.baselineMean.map { formatOutcome($0, as: snapshot.outcome) } ?? "—",
                                   caption: String(localized: "\(snapshot.baselineCount) days without it"),
                                   tint: StrandPalette.textSecondary)
                 experimentMeasure("Intervention",
-                                  value: snapshot.interventionMean.map { formatOutcome($0, as: snapshot.outcome) } ?? ", ",
+                                  value: snapshot.interventionMean.map { formatOutcome($0, as: snapshot.outcome) } ?? "—",
                                   caption: String(localized: "\(snapshot.interventionCount) logged days"),
                                   tint: StrandPalette.accent)
                 experimentMeasure("Change",
@@ -883,7 +883,7 @@ struct InsightsView: View {
     private func formatExperimentDelta(_ delta: Double?,
                                        outcome: Outcome,
                                        includeSign: Bool = true) -> String {
-        guard let delta else { return ", " }
+        guard let delta else { return "—" }
         let prefix: String
         if includeSign {
             prefix = delta > 0 ? "+" : (delta < 0 ? "−" : "")
@@ -1160,7 +1160,7 @@ struct InsightsView: View {
                              caption: String(localized: "untouched days"),
                              accent: StrandPalette.textPrimary)
                     StatTile(label: "Bounce back",
-                             value: cost.daysToBaseline.map { "\($0)d" } ?? ", ",
+                             value: cost.daysToBaseline.map { "\($0)d" } ?? "—",
                              caption: cost.daysToBaseline != nil ? String(localized: "to baseline") : String(localized: "not within 7d"),
                              accent: StrandPalette.chargeColor)
                     StatTile(label: "Sessions",

@@ -1239,16 +1239,24 @@ final class IntelligenceEngine: ObservableObject {
         else { return }
         let hrMax = Double(profile.hrMax)
         var updated: [WorkoutRow] = []
+        // A manual row is eligible when it looks under-scored (negligible kcal, #137) OR it's missing
+        // strain (the merged-workout case, where kcal is the SUM of inputs so it never looks under-scored
+        // yet Effort stays blank forever). `improves` then accepts a strain-only gain for the latter.
         for row in rows where row.source == "manual"
-            && ManualWorkoutRescore.looksUnderScored(currentKcal: row.energyKcal) {
+            && (ManualWorkoutRescore.looksUnderScored(currentKcal: row.energyKcal) || row.strain == nil) {
             guard let samples = try? await store.hrSamples(deviceId: deviceId, from: row.startTs,
                                                            to: row.endTs, limit: 20_000),
                   let s = ManualWorkoutRescore.scored(windowSamples: samples, profile: up, hrMax: hrMax),
-                  ManualWorkoutRescore.improves(s, over: row.energyKcal)
+                  ManualWorkoutRescore.improves(s, over: row.energyKcal, currentStrain: row.strain,
+                                                allowStrainOnlyFill: true)
             else { continue }
+            // Never lower a summed kcal: only take the recomputed kcal when it genuinely beats the stored
+            // value; a strain-only fill (merged row) keeps the existing summed energyKcal.
+            let kcalBeatsStored = (s.kcal ?? 0) > (row.energyKcal ?? 0) + ManualWorkoutRescore.improvementMarginKcal
+            let energyKcal = kcalBeatsStored ? s.kcal : row.energyKcal
             updated.append(WorkoutRow(
                 startTs: row.startTs, endTs: row.endTs, sport: row.sport, source: row.source,
-                durationS: row.durationS, energyKcal: s.kcal, avgHr: s.avgHr, maxHr: s.maxHr,
+                durationS: row.durationS, energyKcal: energyKcal, avgHr: s.avgHr, maxHr: s.maxHr,
                 strain: s.strain, distanceM: row.distanceM, zonesJSON: row.zonesJSON, notes: row.notes))
         }
         if !updated.isEmpty { _ = try? await store.upsertWorkouts(updated, deviceId: deviceId) }

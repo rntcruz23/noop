@@ -79,9 +79,11 @@ struct CoupledView: View {
     }
 
     /// On-device readiness, computed EXACTLY as Today does (ReadinessEngine.evaluate over the same rows,
-    /// anchored on the last scored day when carrying), so the one-word pill matches the home screen's read.
+    /// anchored on the last scored day ONLY when carrying), so the one-word pill matches the home screen's
+    /// read. The carried anchor is gated on `isCarryingRecovery` (Today's `!todayScored` gate): on a normal
+    /// scored day today's own key wins, so Coupled's pill can't diverge from Today's onto yesterday (#787).
     private var readinessLevel: ReadinessEngine.Level {
-        let anchor = carriedRecoveryDay?.day ?? day?.day ?? Repository.logicalDayKey(Date())
+        let anchor = (isCarryingRecovery ? carriedRecoveryDay?.day : day?.day) ?? Repository.logicalDayKey(Date())
         return ReadinessEngine.evaluate(days: repo.days, today: anchor).level
     }
 

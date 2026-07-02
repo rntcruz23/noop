@@ -582,7 +582,14 @@ private fun SleepUndoBanner(session: SleepSession, onUndo: () -> Unit) {
     // effectiveStartTs is the displayed onset (a userEdited night's corrected bed time), matching iOS.
     val startText = timeFmt.format(java.util.Date(session.effectiveStartTs * 1000L))
     val endText = timeFmt.format(java.util.Date(session.endTs * 1000L))
-    val message = "Sleep deleted. NOOP won't detect sleep between $startText and $endText again."
+    // Branch the copy on userEdited: a hand-edited/added (nap) night writes NO tombstone (it is never
+    // re-detected), so the suppression promise would be false for it. Only a DETECTED delete tombstones,
+    // so only it gets the "won't detect ... again" wording. Mirrors the macOS branch. (#65 banner honesty.)
+    val message = if (session.userEdited) {
+        "Sleep deleted."
+    } else {
+        "Sleep deleted. NOOP won't detect sleep between $startText and $endText again."
+    }
     NoopCard(tint = Palette.restColor) {
         Row(
             modifier = Modifier.fillMaxWidth().semantics { contentDescription = message },
@@ -1781,8 +1788,14 @@ private fun NightNavHeader(
             textContentColor = Palette.textSecondary,
             title = { Text("Delete this sleep session?", style = NoopType.headline) },
             text = {
+                // A detected night is tombstoned so it won't re-detect; a userEdited/nap row writes no
+                // tombstone, so its copy drops that (false) promise. Mirrors the undo banner. (#65)
                 Text(
-                    "Removes this recorded sleep and recomputes the day without it. NOOP won't re-detect sleep in this window. You can undo for a few seconds after.",
+                    if (session.userEdited) {
+                        "Removes this sleep and recomputes the day without it. You can undo for a few seconds after."
+                    } else {
+                        "Removes this recorded sleep and recomputes the day without it. NOOP won't re-detect sleep in this window. You can undo for a few seconds after."
+                    },
                     style = NoopType.subhead,
                 )
             },

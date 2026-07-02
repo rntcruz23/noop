@@ -197,6 +197,7 @@ struct SleepView: View {
                 let coverageLo = min(edit.detectedStartTs, edit.bedTs)
                 SleepTimeEditor(bedTs: edit.bedTs, wakeTs: edit.wakeTs,
                                 coverage: coverageLo...max(edit.wakeTs, coverageLo + 1),
+                                suppressesReDetection: !edit.userEdited,
                                 onSave: { newBedTs, newWakeTs in
                     await repo.editSleepTimes(detectedStartTs: edit.detectedStartTs, oldEndTs: edit.wakeTs,
                                               storedStagesJSON: edit.stagesJSON,
@@ -283,7 +284,12 @@ struct SleepView: View {
     /// Button. role-alert-ish for VoiceOver; the Undo button carries its own explicit label.
     @ViewBuilder
     private func sleepUndoBanner(_ banner: SleepUndoBanner) -> some View {
-        let message = String(localized: "Sleep deleted. NOOP won't detect sleep between \(clockTime(banner.displayStart)) and \(clockTime(banner.windowEnd)) again.")
+        // Branch the copy on userEdited: a hand-edited/added night writes NO tombstone (it is never
+        // re-detected), so the suppression promise would be false for it. Only a DETECTED delete writes a
+        // tombstone, so only it gets the "won't detect ... again" wording. (#65 banner honesty.)
+        let message = banner.snapshot.session.userEdited
+            ? String(localized: "Sleep deleted.")
+            : String(localized: "Sleep deleted. NOOP won't detect sleep between \(clockTime(banner.displayStart)) and \(clockTime(banner.windowEnd)) again.")
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "moon.zzz")
                 .font(.system(size: 14, weight: .semibold))
@@ -573,7 +579,8 @@ struct SleepView: View {
                 wakeEdit = WakeEdit(detectedStartTs: nap.startTs,
                                     bedTs: nap.effectiveStartTs,
                                     wakeTs: nap.endTs,
-                                    stagesJSON: nap.stagesJSON)
+                                    stagesJSON: nap.stagesJSON,
+                                    userEdited: true)   // a nap row is always manually added → no tombstone on delete
             } label: {
                 Image(systemName: isEdited ? "pencil.circle.fill" : "pencil.circle")
                     .font(StrandFont.headline)
@@ -856,7 +863,8 @@ struct SleepView: View {
                 wakeEdit = WakeEdit(detectedStartTs: target.startTs,
                                     bedTs: target.effectiveStartTs,
                                     wakeTs: target.endTs,
-                                    stagesJSON: target.stagesJSON)
+                                    stagesJSON: target.stagesJSON,
+                                    userEdited: isEdited)
             } label: {
                 Image(systemName: isEdited ? "pencil.circle.fill" : "pencil.circle")
                     .font(StrandFont.headline)
@@ -2307,6 +2315,10 @@ private struct WakeEdit: Identifiable {
     let bedTs: Int             // current effective onset (seeds the bed picker)
     let wakeTs: Int            // current wake (seeds the wake picker)
     let stagesJSON: String?
+    /// True for a hand-edited / manually-added (nap) night. Such a delete writes NO tombstone (it is
+    /// never re-detected), so the editor's delete-confirm copy must NOT promise re-detection suppression
+    /// for it. Mirrors the undo-banner branch (#65 banner/confirm honesty).
+    let userEdited: Bool
     var id: Int { detectedStartTs }
 }
 
@@ -2345,6 +2357,10 @@ private struct SleepTimeEditor: View {
     /// "Add a nap" sheet, whose window deliberately sits outside the night (only the future-bed
     /// guard applies there).
     private let coverage: ClosedRange<Int>?
+    /// True when deleting THIS session writes a re-detection tombstone (a DETECTED night). false for a
+    /// userEdited/nap row, which is never re-detected, so the delete-confirm copy drops the suppression
+    /// promise for it, matching the undo banner. (#65 confirm honesty.)
+    private let suppressesReDetection: Bool
 
     @Environment(\.dismiss) private var dismiss
     @State private var bed: Date
@@ -2368,6 +2384,7 @@ private struct SleepTimeEditor: View {
          wakeLabel: LocalizedStringKey = "Woke",
          deleteLabel: LocalizedStringKey = "Delete this sleep",
          coverage: ClosedRange<Int>? = nil,
+         suppressesReDetection: Bool = true,
          onSave: @escaping (Int, Int) async -> Void,
          onDelete: (() async -> Void)? = nil) {
         self.onSave = onSave
@@ -2376,6 +2393,7 @@ private struct SleepTimeEditor: View {
         self.bedLabel = bedLabel; self.wakeLabel = wakeLabel
         self.deleteLabel = deleteLabel
         self.coverage = coverage
+        self.suppressesReDetection = suppressesReDetection
         // A bed can never be seeded in the future (#940): the "Add a nap" anchor is wake+1h, which is
         // ahead of the clock right after a morning sync; clamp so the picker opens inside its bound.
         let seedBed = min(bedTs, Int(Date().timeIntervalSince1970))
@@ -2510,7 +2528,11 @@ private struct SleepTimeEditor: View {
                 }
             }
         } message: {
-            Text("Removes this recorded sleep and recomputes the day without it. NOOP won't re-detect sleep in this window. You can undo for a few seconds after.")
+            // A detected night is tombstoned so it won't re-detect; a userEdited/nap row writes no
+            // tombstone, so its copy drops that (false) promise. Mirrors the undo banner. (#65)
+            Text(suppressesReDetection
+                 ? "Removes this recorded sleep and recomputes the day without it. NOOP won't re-detect sleep in this window. You can undo for a few seconds after."
+                 : "Removes this sleep and recomputes the day without it. You can undo for a few seconds after.")
         }
     }
 }

@@ -1041,12 +1041,19 @@ object IntelligenceEngine {
         val updated = ArrayList<WorkoutRow>()
         for (row in rows) {
             if (row.source != "manual") continue
-            if (!ManualWorkoutRescore.looksUnderScored(row.energyKcal)) continue
+            // Eligible when it looks under-scored (negligible kcal, #137) OR it's missing strain (the
+            // merged-workout case, where kcal is the SUM of inputs so it never looks under-scored yet
+            // Effort stays blank forever). improves() then accepts a strain-only gain for the latter.
+            if (!ManualWorkoutRescore.looksUnderScored(row.energyKcal) && row.strain != null) continue
             val samples = runCatching { repo.hrSamples(deviceId, row.startTs, row.endTs, 20_000) }
                 .getOrNull() ?: continue
             val s = ManualWorkoutRescore.scored(samples, profile, hrMax) ?: continue
-            if (!ManualWorkoutRescore.improves(s, row.energyKcal)) continue
-            updated.add(row.copy(energyKcal = s.kcal, avgHr = s.avgHr, maxHr = s.maxHr, strain = s.strain))
+            if (!ManualWorkoutRescore.improves(s, row.energyKcal, row.strain, allowStrainOnlyFill = true)) continue
+            // Never lower a summed kcal: only take the recomputed kcal when it genuinely beats the stored
+            // value; a strain-only fill (merged row) keeps the existing summed energyKcal.
+            val kcalBeatsStored = (s.kcal ?: 0.0) > (row.energyKcal ?: 0.0) + ManualWorkoutRescore.IMPROVEMENT_MARGIN_KCAL
+            val energyKcal = if (kcalBeatsStored) s.kcal else row.energyKcal
+            updated.add(row.copy(energyKcal = energyKcal, avgHr = s.avgHr, maxHr = s.maxHr, strain = s.strain))
         }
         if (updated.isNotEmpty()) repo.upsertWorkouts(updated)
     }

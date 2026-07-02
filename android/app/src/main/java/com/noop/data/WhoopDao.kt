@@ -528,9 +528,17 @@ interface WhoopDao : DeviceRegistryDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertDismissedSleep(rows: List<DismissedSleep>)
 
-    /** All deleted-sleep markers for a [deviceId] (the computed "<id>-noop" source the engine writes). */
+    /** All deleted-sleep markers for a [deviceId]. The engine reads the UNION of the imported id and its
+     *  computed "<id>-noop" id (see WhoopRepository.dismissedSleeps, #65 3A), since a tombstone is written
+     *  under whichever namespace owned the deleted row. */
     @Query("SELECT * FROM dismissedSleep WHERE deviceId = :deviceId")
     suspend fun dismissedSleeps(deviceId: String): List<DismissedSleep>
+
+    /** Lift ONE deleted-sleep tombstone (#65 undo / "allow re-detection"): removes the marker so the
+     *  night is re-detected from raw on the next analyze pass. Keyed by (deviceId, startTs): the same
+     *  natural key the insert uses, so it removes exactly the tombstone [deleteSleepSession] wrote. */
+    @Query("DELETE FROM dismissedSleep WHERE deviceId = :deviceId AND startTs = :startTs")
+    suspend fun deleteDismissedSleep(deviceId: String, startTs: Long)
 
     // MARK: - Frontier / stats (Reads.swift)
 

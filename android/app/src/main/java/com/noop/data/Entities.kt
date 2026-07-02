@@ -428,7 +428,8 @@ data class DismissedWorkout(
  * Durable tombstone for a user-DELETED sleep session (#33): keeps a deleted computed night from being
  * re-derived by the recompute, mirroring [DismissedWorkout] (#107). PK (deviceId, startTs), keyed on
  * the deleted session's start; `endTs` is the span the recompute's overlap test uses (a re-detected
- * onset can drift second-to-second). Android-only (iOS has no sleep-delete path). Added by MIGRATION_9_10.
+ * onset can drift second-to-second). iOS has the twin sleep-delete path since #68 (its tombstones live in
+ * UserDefaults, not a table); the undo lifts a tombstone by (deviceId, startTs) (#65). Added by MIGRATION_9_10.
  */
 @Entity(tableName = "dismissedSleep", primaryKeys = ["deviceId", "startTs"])
 data class DismissedSleep(

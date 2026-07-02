@@ -98,6 +98,18 @@ struct RepositoryFreshness: Equatable, Sendable {
     var hasAnyHistory: Bool { importedDays > 0 || computedDays > 0 || appleDays > 0 }
 }
 
+/// What `deleteSleepSession` hands back so a transient UNDO can restore the night (#65). Carries the
+/// deleted row VERBATIM (stagesJSON, motion via the row's own fields, `userEdited`, the effective onset)
+/// plus the deviceId of the namespace that OWNED it (computed vs imported), so undo re-inserts it exactly
+/// where it came from. A `userEdited` night restored into computed keeps its flag and is not re-scored
+/// as a detected twin.
+struct SleepDeletionSnapshot: Equatable {
+    let session: CachedSleepSession
+    let ownerDeviceId: String
+    /// The night's wake span used in the tombstone token (== `session.endTs`).
+    let endTs: Int
+}
+
 /// Read model over the on-device WhoopStore. Opens its own handle (WAL + busy-timeout makes the
 /// two-handle BLEManager+Repository pattern safe) and publishes the dashboard caches the screens bind to.
 @MainActor
@@ -978,41 +990,91 @@ final class Repository: ObservableObject {
         await refresh()
     }
 
-    /// Delete ONE sleep session , the `editSleepTimes` path minus the re-stage/re-insert, so the user can
+    /// Delete ONE sleep session: the `editSleepTimes` path minus the re-stage/re-insert, so the user can
     /// clear a misread or spurious night and the day recomputes as if it were never recorded (#68; Android
-    /// parity , `WhoopRepository.deleteSleepSession`). `detectedStartTs` is the immutable detected key
+    /// parity `WhoopRepository.deleteSleepSession`). `detectedStartTs` is the immutable detected key
     /// (`startTs`); `endTs` is the night's span, recorded in the tombstone so the engine's overlap test
     /// suppresses a re-detected onset that drifts second-to-second.
     ///
     /// Two durable effects, mirroring the workout-dismiss path:
-    ///  1. delete the row from whichever namespace OWNS it , try the computed source first, fall back to
+    ///  1. delete the row from whichever namespace OWNS it: try the computed source first, fall back to
     ///     the imported `deviceId` only when no computed row matched, exactly as `editSleepTimes` applies
     ///     its edit (the merged session list carries no source deviceId, so we resolve the owner here and
     ///     never delete a coincidental same-startTs row in the other namespace);
     ///  2. persist a `dismissedSleep` span in UserDefaults so the next `analyzeRecent` re-detection doesn't
-    ///     simply regenerate the night , the engine's sleep guard now skips any re-detected session
+    ///     simply regenerate the night: the engine's sleep guard now skips any re-detected session
     ///     overlapping a dismissed span (just as the dismissed-WORKOUT spans hide a re-derived bout).
     /// Refreshes so the hero re-reads without the deleted night immediately.
-    func deleteSleepSession(detectedStartTs: Int, endTs: Int) async {
-        guard let store = await ensureStore() else { return }
-        // Record the durable tombstone first (idempotent) so a delete that races a recompute still wins.
-        var spans = dismissedSleepSpans
-        let token = "\(detectedStartTs):\(endTs)"
-        if !spans.contains(token) { spans.append(token); dismissedSleepSpans = spans }
-        // Delete from the namespace that actually owns the row , computed first, imported as a fallback.
+    /// Returns the snapshot needed to UNDO the delete (the deleted row + which namespace owned it), or nil
+    /// when no row matched. #65: a DETECTED night is tombstoned so `analyzeRecent` does not silently
+    /// re-detect + re-insert it; a user-created/edited (`userEdited`) night is deleted WITHOUT a tombstone
+    /// (it is never re-detected, so it needs no suppression). The undo re-inserts the snapshot into its
+    /// ORIGINAL namespace and lifts the tombstone.
+    @discardableResult
+    func deleteSleepSession(detectedStartTs: Int, endTs: Int) async -> SleepDeletionSnapshot? {
+        guard let store = await ensureStore() else { return nil }
+        // Snapshot the owning row BEFORE deleting, resolving the owner exactly as the delete does below:
+        // computed source first, imported deviceId as the fallback. A one-second-wide window around the
+        // immutable detected key uniquely identifies the row (the key never moves).
+        let snapshot = await ownedSleepRowSnapshot(store: store, detectedStartTs: detectedStartTs)
+        // Record the durable tombstone ONLY for a DETECTED night. A `userEdited` row (a hand-corrected
+        // night or a manually-added nap) is never re-detected, so suppressing its window would needlessly
+        // block a real future night that happens to overlap it.
+        if DismissedSleepSpans.writesTombstoneOnDelete(userEdited: snapshot?.session.userEdited ?? false) {
+            dismissedSleepSpans = DismissedSleepSpans.adding(startTs: detectedStartTs, endTs: endTs,
+                                                             to: dismissedSleepSpans)
+        }
+        // Delete from the namespace that actually owns the row: computed first, imported as a fallback.
         let computedDeleted = (try? await store.deleteSleepSession(
             deviceId: computedDeviceId, startTs: detectedStartTs)) ?? 0
         if computedDeleted == 0 {
             _ = try? await store.deleteSleepSession(deviceId: deviceId, startTs: detectedStartTs)
         }
         await refresh()
+        return snapshot
+    }
+
+    /// Undo a `deleteSleepSession` (#65): lift the tombstone and restore the deleted row into its ORIGINAL
+    /// owning namespace (computed vs imported), preserving `userEdited` so the next `analyzeRecent` does
+    /// NOT treat a hand-corrected night as a fresh detected twin. Single-level and transient: the Sleep
+    /// screen's undo banner calls this within a few seconds. Idempotent: a snapshot with no tombstone
+    /// (a `userEdited` delete) still restores the row.
+    func undoDeleteSleepSession(_ snapshot: SleepDeletionSnapshot) async {
+        guard let store = await ensureStore() else { return }
+        // Lift the tombstone so the restored night is not immediately re-suppressed on the next pass.
+        dismissedSleepSpans = DismissedSleepSpans.removing(startTs: snapshot.session.startTs,
+                                                           endTs: snapshot.endTs, from: dismissedSleepSpans)
+        // Restore into the SAME namespace that owned it. upsertSleepSessions preserves userEdited.
+        _ = try? await store.upsertSleepSessions([snapshot.session], deviceId: snapshot.ownerDeviceId)
+        await refresh()
+    }
+
+    /// Read the single owned sleep row for `detectedStartTs`, resolving the namespace exactly as
+    /// `deleteSleepSession` does (computed first, imported fallback). Returns the row plus the owning
+    /// deviceId so undo can restore it into that same namespace.
+    private func ownedSleepRowSnapshot(store: WhoopStore, detectedStartTs: Int) async -> SleepDeletionSnapshot? {
+        func row(_ deviceId: String) async -> CachedSleepSession? {
+            let rows = (try? await store.sleepSessions(deviceId: deviceId,
+                                                       from: detectedStartTs, to: detectedStartTs,
+                                                       limit: 4)) ?? []
+            return rows.first { $0.startTs == detectedStartTs }
+        }
+        if let computed = await row(computedDeviceId) {
+            return SleepDeletionSnapshot(session: computed, ownerDeviceId: computedDeviceId, endTs: computed.endTs)
+        }
+        if let imported = await row(deviceId) {
+            return SleepDeletionSnapshot(session: imported, ownerDeviceId: deviceId, endTs: imported.endTs)
+        }
+        return nil
     }
 
     /// Durable "user deleted this night" tombstones as "startTs:endTs" strings, persisted in UserDefaults
     /// (the macOS `CachedSleepSession` lives in the WhoopStore Journal file, which this layer must not
     /// extend with a new table , the same reason dismissed WORKOUT spans live here, not in the DB). The
     /// re-detector in `IntelligenceEngine.analyzeRecent` consults `dismissedSleepWindows` so a deleted
-    /// night that re-detects stays gone. (#68; Android twin: the `dismissedSleep` Room table.)
+    /// night that re-detects stays gone. Pure token/window logic lives in `DismissedSleepSpans` (the
+    /// swift-test-reachable twin of Android's `DismissedSleepGuard`). (#65/#68; Android twin: the
+    /// `dismissedSleep` Room table.)
     private var dismissedSleepSpans: [String] {
         get { UserDefaults.standard.stringArray(forKey: Repository.dismissedSleepDefaultsKey) ?? [] }
         set { UserDefaults.standard.set(newValue, forKey: Repository.dismissedSleepDefaultsKey) }
@@ -1024,11 +1086,22 @@ final class Repository: ObservableObject {
     /// Parsed dismissed-sleep windows for the engine's re-detection guard. Malformed / non-positive-width
     /// entries are dropped so a corrupt value can never hide everything (mirrors `WorkoutSource`'s parser).
     func dismissedSleepWindows() -> [(start: Int, end: Int)] {
-        dismissedSleepSpans.compactMap { s in
-            let parts = s.split(separator: ":")
-            guard parts.count == 2, let a = Int(parts[0]), let b = Int(parts[1]), b > a else { return nil }
-            return (a, b)
-        }
+        DismissedSleepSpans.windows(from: dismissedSleepSpans)
+    }
+
+    /// The user's deleted-sleep windows for the "Deleted sleep windows" management list (#65 escape hatch):
+    /// each with its parsed window so the UI can render "d MMM, HH:mm-HH:mm" + an "Allow re-detection"
+    /// action. Ordered newest-first by end-time.
+    func dismissedSleepManagementWindows() -> [(start: Int, end: Int)] {
+        dismissedSleepWindows().sorted { $0.end > $1.end }
+    }
+
+    /// Remove a tombstone by its window (#65 "Allow re-detection" / expiry escape hatch): the night
+    /// regenerates from raw on the next `analyzeRecent` for a computed night. Imported nights cannot be
+    /// re-created (there is no raw to re-derive); the caller shows that honest caption.
+    func allowSleepReDetection(startTs: Int, endTs: Int) async {
+        dismissedSleepSpans = DismissedSleepSpans.removing(startTs: startTs, endTs: endTs,
+                                                           from: dismissedSleepSpans)
     }
 
     /// Manually ADD a missed sleep session , typically a daytime NAP the detector didn't pick up (#508).

@@ -270,14 +270,37 @@ class WhoopRepository(private val dao: WhoopDao) {
 
     /** Remove a sleep session entirely , the delete half of [updateSleepSessionTimes] with no
      *  re-insert. (deviceId, startTs) is the primary key, so it uniquely identifies the row, letting
-     *  the user clear a misread or spurious night so the day recomputes without it (#281). */
+     *  the user clear a misread or spurious night so the day recomputes without it (#281).
+     *
+     *  #65: a DETECTED night is tombstoned so the recompute does not silently regenerate it (mirrors the
+     *  dismissedWorkout marker; `endTs` is the span the engine's overlap test uses, since a re-detected
+     *  onset can drift second-to-second). A user-created/edited (`userEdited`) night (a hand-corrected
+     *  night or a manually-added nap) is deleted WITHOUT a tombstone: it is never re-detected, so
+     *  suppressing its window would needlessly block a real future night overlapping it. The tombstone is
+     *  written under the row's OWN [SleepSession.deviceId] and the engine reads the union of both id
+     *  namespaces (see [dismissedSleeps], #65 3A). */
     suspend fun deleteSleepSession(session: SleepSession) {
         dao.deleteSleepSession(session.deviceId, session.startTs)
-        // #33: record a durable tombstone so the recompute doesn't regenerate this night (mirrors the
-        // dismissedWorkout marker). `endTs` is the span the engine's overlap test uses, since a
-        // re-detected onset can drift second-to-second.
-        dao.insertDismissedSleep(listOf(DismissedSleep(session.deviceId, session.startTs, session.endTs)))
+        if (com.noop.analytics.DismissedSleepGuard.writesTombstoneOnDelete(session.userEdited)) {
+            dao.insertDismissedSleep(listOf(DismissedSleep(session.deviceId, session.startTs, session.endTs)))
+        }
     }
+
+    /** Undo a [deleteSleepSession] (#65): lift the tombstone and restore the deleted row into its ORIGINAL
+     *  namespace (the row still carries its owning `deviceId`), preserving `userEdited` so the next analyze
+     *  pass does NOT treat a hand-corrected night as a fresh detected twin (HAZARD 2). Single-level +
+     *  transient: the Sleep screen's undo snackbar calls this within a few seconds. The tombstone lift is
+     *  a no-op for a `userEdited` delete (which wrote none). Mirrors Swift Repository.undoDeleteSleepSession. */
+    suspend fun undoDeleteSleepSession(session: SleepSession) {
+        dao.deleteDismissedSleep(session.deviceId, session.startTs)
+        dao.upsertSleepSessions(listOf(session))
+    }
+
+    /** Lift a deleted-sleep tombstone by (deviceId, startTs) (#65 "Allow re-detection" escape hatch): the
+     *  night regenerates from raw on the next analyze pass for a computed night. An imported night can't be
+     *  re-created (no raw to re-derive); the caller shows that honest caption. */
+    suspend fun allowSleepReDetection(deviceId: String, startTs: Long) =
+        dao.deleteDismissedSleep(deviceId, startTs)
 
     /** #899 dedup heal: remove ONE sleep-session row WITHOUT the #33 dismissal tombstone. The heal
      *  deletes stale timebase-shifted duplicates of a night whose canonical copy is STAYING; a tombstone
@@ -594,9 +617,16 @@ class WhoopRepository(private val dao: WhoopDao) {
     suspend fun dismissedDetected(strapDeviceId: String = "my-whoop"): List<DismissedWorkout> =
         dao.dismissedWorkouts(computedDeviceId(strapDeviceId))
 
-    /** Deleted-sleep tombstones for the computed source of [strapDeviceId] (#33). Mirrors dismissedDetected. */
+    /** Deleted-sleep tombstones for BOTH the imported and computed sources of [strapDeviceId] (#33/#65).
+     *
+     *  HAZARD FIX (#65 3A): [deleteSleepSession] writes the tombstone under the deleted row's OWN
+     *  `session.deviceId` ("my-whoop" for an IMPORTED night, "my-whoop-noop" for a computed one). This
+     *  read used to consult ONLY the computed id, so a deleted IMPORTED night wrote a tombstone the engine
+     *  never saw, and a strap raw re-detection over that window resurrected it as a computed twin. Reading
+     *  the UNION of both ids fixes it with NO data migration: tombstones written under either id are now
+     *  found. De-duping on (deviceId,startTs) is unnecessary because the two id namespaces never collide. */
     suspend fun dismissedSleeps(strapDeviceId: String = "my-whoop"): List<DismissedSleep> =
-        dao.dismissedSleeps(computedDeviceId(strapDeviceId))
+        dao.dismissedSleeps(strapDeviceId) + dao.dismissedSleeps(computedDeviceId(strapDeviceId))
 
     /**
      * Persist a retroactive / edited manual workout under the strap source. [replacing] is the row the

@@ -1176,6 +1176,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         rescoreAfterEdit()
     }
 
+    /** Undo the most recent sleep delete (#65): restore the row into its ORIGINAL namespace, lift the
+     *  tombstone, then re-score so the day recomputes WITH the night again, matching Swift SleepView's
+     *  analyzeRecent() after undoDeleteSleepSession. Swallows persist failures. */
+    suspend fun undoDeleteSleepSession(session: com.noop.data.SleepSession) {
+        runCatching { repository.undoDeleteSleepSession(session) }
+        rescoreAfterEdit()
+    }
+
     /** Manually add a missed nap as its OWN session (#508) — staged from raw, written under the computed
      *  source with userEdited=true so the recompute guard keeps it and it's never folded into main sleep —
      *  then re-score the affected day immediately so the day's aggregates pick up the new session, matching

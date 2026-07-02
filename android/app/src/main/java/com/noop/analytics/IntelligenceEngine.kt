@@ -943,14 +943,16 @@ object IntelligenceEngine {
         // detected twin. Sleep has no delete-reinsert pass (unlike dailyMetric/workout), so this IS the
         // idempotency guard for the edited case. Overlap uses the edit's EFFECTIVE window. (#318)
         val editedWindows = editedRows.map { it.effectiveStartTs to it.endTs }
-        // #33: also drop any re-detected night the user has DELETED , a dismissedSleep tombstone keeps it
+        // #33: also drop any re-detected night the user has DELETED: a dismissedSleep tombstone keeps it
         // from regenerating, mirroring the dismissedWorkout guard. Overlap (not exact startTs) because a
         // re-detected onset drifts as more raw data arrives.
+        // #65 3A: dismissedSleeps now reads the UNION of the imported + computed ids, so a tombstone
+        // written under EITHER namespace (an imported night writes "my-whoop", a computed one writes
+        // "my-whoop-noop") is found. The overlap-suppression predicate lives in DismissedSleepGuard,
+        // the JVM-tested twin of Swift's DismissedSleepSpans.
         val dismissedWindows = repo.dismissedSleeps(importedDeviceId).map { it.startTs to it.endTs }
         val skipWindows = editedWindows + dismissedWindows
-        val sleepKept = sleepRows.filterNot { s ->
-            skipWindows.any { (start, end) -> s.startTs < end && start < s.endTs } // time-overlap test
-        }
+        val sleepKept = DismissedSleepGuard.keeping(sleepRows, skipWindows) { it.startTs to it.endTs }
         if (sleepKept.isNotEmpty()) repo.upsertSleepSessions(sleepKept)
         // ── Persist per-epoch motion (H8) beside each kept session's stagesJSON ──────────────────────────
         // The sleepSession rows exist now (just upserted), so the targeted motion UPDATE lands. Persist ONLY

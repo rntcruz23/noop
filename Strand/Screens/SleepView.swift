@@ -97,6 +97,14 @@ struct SleepView: View {
     /// the nap's own `startTs` so one popover shows at a time even with several nap rows. (C1)
     @State private var napWhyStartTs: Int?
 
+    /// The transient UNDO banner shown after a suppressing delete (#65). Non-nil for ~7 seconds: carries
+    /// the snapshot needed to restore the deleted night into its ORIGINAL namespace and the window text
+    /// for the message. A user-created/edited delete writes no tombstone but still offers undo (restore).
+    @State private var sleepUndo: SleepUndoBanner?
+    /// The pending auto-dismiss task for `sleepUndo`, cancelled when a new delete replaces the banner or
+    /// the user hits Undo, so a stale timer can't clear a fresh banner.
+    @State private var sleepUndoTask: Task<Void, Never>?
+
     var body: some View {
         // Resolve the memoized model for THIS render. `dataKey` is O(1)-ish (counts + last-row
         // identity), so comparing it every render is cheap. When it matches the cached key we
@@ -117,6 +125,7 @@ struct SleepView: View {
                 if let resolved {
                     // Each top-level section fades + rises in sequence on first appear (Reduce-Motion safe).
                     VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
+                        if let sleepUndo { sleepUndoBanner(sleepUndo) }
                         restHero(resolved).staggeredAppear(index: 0)
                         SleepMarkCard().staggeredAppear(index: 1)
                         hero(resolved).staggeredAppear(index: 2)
@@ -200,9 +209,15 @@ struct SleepView: View {
                     // Delete = the edit path minus the re-insert: drop this session so every metric
                     // recomputes immediately as if the night were never recorded, durably tombstoned so a
                     // re-detect doesn't bring it back, then re-score + refresh exactly like an edit. (#68)
-                    await repo.deleteSleepSession(detectedStartTs: edit.detectedStartTs, endTs: edit.wakeTs)
+                    // #65: the returned snapshot lets the user UNDO within a few seconds. It restores the
+                    // deleted row into its ORIGINAL namespace and lifts the tombstone.
+                    let snapshot = await repo.deleteSleepSession(detectedStartTs: edit.detectedStartTs,
+                                                                 endTs: edit.wakeTs)
                     await intelligence.analyzeRecent()
                     await repo.refresh()
+                    // `edit.bedTs` is the effective (displayed) onset, so the banner shows the same clock
+                    // time the user saw for this night.
+                    if let snapshot { presentSleepUndo(snapshot, displayStart: edit.bedTs, windowEnd: edit.wakeTs) }
                 })
             }
             // Manually add a missed nap (#508): same picker, but the chosen window is staged from raw and
@@ -223,6 +238,80 @@ struct SleepView: View {
     }
 
     // MARK: - 0. REST HERO — scenic backdrop + sleep-performance gauge (Bevel)
+
+    // MARK: - Delete undo (#65)
+
+    /// Show the transient UNDO banner after a suppressing delete, and arm the 7-second auto-dismiss. A
+    /// second delete replaces the banner (its old auto-dismiss task is cancelled first) so only the most
+    /// recent delete is undoable. Single-level and transient, matching the WorkoutsView postLogNote idiom.
+    private func presentSleepUndo(_ snapshot: SleepDeletionSnapshot, displayStart: Int, windowEnd: Int) {
+        sleepUndoTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) {
+            sleepUndo = SleepUndoBanner(snapshot: snapshot, identityStart: snapshot.session.startTs,
+                                        displayStart: displayStart, windowEnd: windowEnd)
+        }
+        let armed = snapshot.session.startTs
+        sleepUndoTask = Task {
+            try? await Task.sleep(nanoseconds: 7_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                // Only clear if this is still the banner we armed (a newer delete would have replaced it).
+                if sleepUndo?.identityStart == armed {
+                    withAnimation(.easeOut(duration: 0.2)) { sleepUndo = nil }
+                }
+            }
+        }
+    }
+
+    /// Undo the most recent suppressing delete: restore the row into its ORIGINAL namespace, lift the
+    /// tombstone, re-score, then dismiss the banner.
+    private func undoSleepDelete(_ banner: SleepUndoBanner) async {
+        sleepUndoTask?.cancel()
+        await repo.undoDeleteSleepSession(banner.snapshot)
+        await intelligence.analyzeRecent()
+        await repo.refresh()
+        await MainActor.run { withAnimation(.easeOut(duration: 0.2)) { sleepUndo = nil } }
+    }
+
+    /// Locale-formatted clock time (no date) for the banner's window range.
+    private func clockTime(_ ts: Int) -> String {
+        Date(timeIntervalSince1970: TimeInterval(ts))
+            .formatted(date: .omitted, time: .shortened)
+    }
+
+    /// The transient undo strip: a Rest-tinted frosted banner with the suppressed window and a real Undo
+    /// Button. role-alert-ish for VoiceOver; the Undo button carries its own explicit label.
+    @ViewBuilder
+    private func sleepUndoBanner(_ banner: SleepUndoBanner) -> some View {
+        let message = String(localized: "Sleep deleted. NOOP won't detect sleep between \(clockTime(banner.displayStart)) and \(clockTime(banner.windowEnd)) again.")
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "moon.zzz")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(StrandPalette.restColor)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button {
+                Task { await undoSleepDelete(banner) }
+            } label: {
+                Text("Undo").font(StrandFont.footnote.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(StrandPalette.restColor)
+            .accessibilityLabel("Undo sleep deletion")
+        }
+        .padding(NoopMetrics.space3)
+        .background(StrandPalette.restColor.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous)
+            .strokeBorder(StrandPalette.restColor.opacity(0.22), lineWidth: 1))
+        .transition(.opacity)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(message)
+    }
 
     /// The fill fraction (0…1) the Rest hero gauge animates to — the night's sleep-performance
     /// score over 100. 0 when no score exists (the headline-hours hero shows instead). Cheap, so
@@ -2203,6 +2292,16 @@ private struct Night {
 
 /// Identifies the night being edited for `.sheet(item:)`. A night's `startTs` is its stable natural
 /// key (wake-time edits never move it), so it doubles as the sheet identity.
+/// The transient UNDO banner state after a suppressing delete (#65). `identityStart` is the immutable
+/// detected key so a stale auto-dismiss task can tell whether it still owns the current banner;
+/// `displayStart` is the effective (shown) onset for the message clock.
+private struct SleepUndoBanner {
+    let snapshot: SleepDeletionSnapshot
+    let identityStart: Int
+    let displayStart: Int
+    let windowEnd: Int
+}
+
 private struct WakeEdit: Identifiable {
     let detectedStartTs: Int   // immutable detected key the edit writes against
     let bedTs: Int             // current effective onset (seeds the bed picker)
@@ -2411,7 +2510,7 @@ private struct SleepTimeEditor: View {
                 }
             }
         } message: {
-            Text("Removes this recorded sleep and recomputes the day without it. This can't be undone.")
+            Text("Removes this recorded sleep and recomputes the day without it. NOOP won't re-detect sleep in this window. You can undo for a few seconds after.")
         }
     }
 }

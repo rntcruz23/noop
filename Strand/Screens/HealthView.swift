@@ -30,7 +30,10 @@ struct HealthView: View {
                        // alignment/spacing/header); builds the trailing vitals/skin-temp/age sections on
                        // demand instead of all up-front.
                        onRefresh: { await repo.refresh() },
-                       lazy: true) {
+                       lazy: true,
+                       // The day-of-sky liquid backdrop, matching Today / Sleep / Trends: a fixed,
+                       // full-bleed time-of-day sky behind the scroll content (does not scroll).
+                       topBackground: liquidScaffoldSky()) {
             if repo.days.isEmpty {
                 // First run / no history: whether to show the empty state or the full live stack depends
                 // on whether a strap is streaming live HR — a `live`-dependent choice. It's isolated to
@@ -592,10 +595,10 @@ private struct RecoveryContributorsSection: View {
     }
 }
 
-/// One README "zone / stage bar": a label + qualitative word on top, the NOOP signature segmented
-/// `PipBar` (metric-hue pips that cascade up to the 0…100 strength on appear/change), and a
-/// right-aligned raw reading. Used for the recovery contributors. A nil strength (calibrating)
-/// renders an empty bar — no fabricated fill.
+/// One README "zone / stage bar": a label + qualitative word on top, the signature liquid `LiquidTube`
+/// (a metric-tinted horizontal tube that fills to the 0…100 strength, matching Today's Key-Metrics and
+/// Last-Workouts tubes), and a right-aligned raw reading. Used for the recovery contributors. A nil
+/// strength (calibrating) renders an empty tube — no fabricated fill.
 private struct ContributorBar: View {
     let label: LocalizedStringKey
     /// 0…100 strength; nil renders an empty (calibrating) track.
@@ -616,9 +619,10 @@ private struct ContributorBar: View {
                     .font(StrandFont.captionNumber)
                     .foregroundStyle(StrandPalette.textSecondary)
             }
-            // The signature count-up segmented bar. Flat, crisp, no glow; handles the cascade-in
-            // and Reduce Motion internally. Calibrating (nil) reads as an empty 0 bar.
-            PipBar(value: strength ?? 0, tint: tint)
+            // The signature liquid tube: fills to the 0…1 strength, tinted to the contributor's world.
+            // Static (posed) — a row of small bars shouldn't each run a live 30fps Canvas. Calibrating
+            // (nil) reads as an empty 0 tube.
+            LiquidTube(frac: (strength ?? 0) / 100, tint: tint, height: 10, animated: false)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(detail), \(word)")
@@ -729,6 +733,14 @@ private struct FitnessAgeSection: View {
         }
     }
 
+    /// The hero vessel's fill (0…1): younger reads FULLER. Maps a fitness age across a 20…70-year span
+    /// onto a full→empty gauge, so a 30-year fitness age fills high and a 65 fills low. Purely a visual
+    /// anchor for the gauge — the number and the ± band carry the real read-out.
+    private func fitnessAgeFraction(_ age: Double) -> Double {
+        let lo = 20.0, hi = 70.0
+        return max(0.05, min(1, (hi - age) / (hi - lo)))
+    }
+
     /// The younger/older-than-your-age subtitle as whole-phrase variants per count and direction, so
     /// translators see complete sentences (never a stitched plural or direction fragment).
     private func ageDeltaLine(years: Int, younger: Bool) -> String {
@@ -753,14 +765,19 @@ private struct FitnessAgeSection: View {
             // Tap the hero body to open the full "fitness_age" trend.
             Button { fitnessSheet = .trend } label: {
                 HStack(alignment: .center, spacing: NoopMetrics.space5) {
+                    // The signature liquid gauge anchors the hero: a vessel tinted to the Charge world,
+                    // filled by how young the fitness age reads (younger = fuller), with the age counting
+                    // up over it. Same HeroScoreCell idiom as Today; taps fall through to the trend button.
+                    ZStack {
+                        LiquidVessel(value: fitnessAgeFraction(age), tint: StrandPalette.chargeColor, animated: true)
+                            .frame(width: 96, height: 96)
+                        CountUpNumber(value: Double(shown), font: StrandFont.rounded(30))
+                            .foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+                            .allowsHitTesting(false)
+                    }
                     VStack(alignment: .leading, spacing: NoopMetrics.space1) {
                         Text("Fitness Age").strandOverline()
-                        // The hero age ticks up on appear / weekly refresh (snaps under Reduce Motion).
-                        CountUpText(value: Double(shown),
-                                    format: { "\(Int($0.rounded()))" },
-                                    font: StrandFont.display(64),
-                                    color: StrandPalette.textPrimary)
-                            .tracking(StrandFont.displayTracking(64))
                         Text(ageDeltaLine(years: years, younger: younger))
                             .font(StrandFont.subhead)
                             .foregroundStyle(younger ? StrandPalette.statusPositive : StrandPalette.statusWarning)
@@ -784,7 +801,7 @@ private struct FitnessAgeSection: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LiquidPressStyle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Fitness Age \(shown), \(ageDeltaLine(years: years, younger: younger)). Tap to see the trend.")
 
@@ -813,7 +830,7 @@ private struct FitnessAgeSection: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(LiquidPressStyle())
             // Whole-string key per variant (never a stitched Hide/Show fragment).
             .accessibilityLabel(showReadiness
                 ? "How accurate is this? Hide the data behind your Fitness Age"
@@ -1025,15 +1042,24 @@ private struct VitalitySection: View {
         let worst = sorted.last
         return VStack(alignment: .leading, spacing: NoopMetrics.space4) {
             HStack(alignment: .center, spacing: NoopMetrics.space5) {
+                // The weekly Vitality score (0…100) as the signature liquid gauge: a vessel tinted to the
+                // Charge world, filled to the score, with the number counting up over it (Today's
+                // HeroScoreCell idiom). Taps splash the gauge; the number is hit-transparent.
                 VStack(alignment: .leading, spacing: NoopMetrics.space1) {
                     Text("Vitality").strandOverline()
-                    // The weekly Vitality score ticks up to its value (snaps under Reduce Motion).
-                    CountUpText(value: v,
-                                format: { "\(Int($0.rounded()))" },
-                                font: StrandFont.display(56),
-                                color: StrandPalette.textPrimary)
-                        .tracking(StrandFont.displayTracking(56))
-                    Text("out of 100").font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                    ZStack {
+                        LiquidVessel(value: max(0, min(1, v / 100)), tint: StrandPalette.chargeColor, animated: true)
+                            .frame(width: 108, height: 108)
+                        VStack(spacing: 0) {
+                            CountUpNumber(value: v, font: StrandFont.rounded(38))
+                                .foregroundStyle(.white)
+                                .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+                            Text("of 100").font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                        }
+                        .allowsHitTesting(false)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Vitality \(Int(v.rounded())) out of 100")
                 }
                 Spacer(minLength: 0)
                 VStack(alignment: .trailing, spacing: NoopMetrics.space1) {
@@ -1119,26 +1145,91 @@ private struct VitalsSection: View {
                 spacing: NoopMetrics.gap
             ) {
                 ForEach(Array(readings.enumerated()), id: \.element.id) { idx, v in
-                    // Each vital is a frosted, metric-tinted StatTile — matching Today's Key-Metrics
-                    // grid. `accent` carries the metric's colour world (rose RHR, purple HRV, cyan
-                    // SpO₂, amber skin temp), washing the card and tinting its spark trail to match.
-                    StatTile(
-                        label: "\(v.label)",
-                        value: v.formattedValue ?? "—",
-                        caption: v.stateCaption,
-                        accent: v.accent,
-                        sparkline: v.sparkline,
-                        sparkColor: v.metricColor
-                    )
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(v.accessibilityText)
-                    .staggeredAppear(index: idx)
+                    // Each headline vital is now a liquid tile: the signature LiquidVessel gauge tinted
+                    // to the metric's colour world (rose RHR, purple HRV, cyan SpO₂, amber skin temp),
+                    // filled to the metric's fraction, with the value counting up beside it and the same
+                    // banding caption + sparkline the classic tile carried. Every binding + accessibility
+                    // label is preserved — this is the liquid restyle of the flat StatTile.
+                    LiquidVitalTile(reading: v)
+                        .staggeredAppear(index: idx)
                 }
             }
             Text("Once NOOP has 14 nights of history, in-range compares each vital to your own baseline (approximate, not medical advice); until then, typical adult ranges apply.")
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Liquid vital tile (vessel gauge + count-up value + banding caption + spark trail)
+
+/// One headline vital sign rendered in the liquid finish: a metric-tinted `LiquidVessel` gauge (filled
+/// to the vital's physiological fraction), the value counting up beside it, the banded state caption, and
+/// the same sparkline trail the classic StatTile drew. A frosted `NoopCard` tinted to the metric's accent,
+/// matching Today's Key-Metrics tiles. Presentation-only: value, banding and source are unchanged — this
+/// just gives each vital a real liquid gauge instead of a flat tile.
+private struct LiquidVitalTile: View {
+    let reading: BodyVitalReading
+
+    var body: some View {
+        NoopCard(padding: 14, tint: reading.accent) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("\(reading.label)").strandOverline()
+                Spacer(minLength: 8)
+                HStack(alignment: .center, spacing: 10) {
+                    // The signature liquid gauge — static (posed) so a grid of them doesn't each run a live
+                    // 30fps Canvas. nil fraction (no value) reads as an empty vessel, no fabricated fill.
+                    LiquidVessel(value: vesselFraction, tint: reading.metricColor, animated: false)
+                        .frame(width: 34, height: 34)
+                    if let value = reading.value {
+                        // The value counts up on appear (snaps under Reduce Motion), formatted exactly as
+                        // the classic tile did (the reading's own formatter + unit), so it's byte-identical.
+                        CountUpText(value: value,
+                                    format: { "\(reading.format($0)) \(reading.unit)" },
+                                    font: StrandFont.number(24),
+                                    color: reading.accent)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    } else {
+                        Text("—").font(StrandFont.number(24)).foregroundStyle(reading.accent)
+                    }
+                    Spacer(minLength: 0)
+                }
+                #if !os(watchOS)
+                if let sparkline = reading.sparkline, sparkline.count > 1 {
+                    Sparkline(values: sparkline, gradient: Gradient(colors: [reading.metricColor.opacity(0.5), reading.metricColor]))
+                        .frame(height: 22).padding(.top, 6)
+                        .accessibilityHidden(true)
+                }
+                #endif
+                Text(reading.stateCaption)
+                    .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary).lineLimit(1)
+                    .padding(.top, 4)
+            }
+        }
+        .frame(minHeight: NoopMetrics.tileHeight, maxHeight: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(reading.accessibilityText)
+    }
+
+    /// The vessel's fill (0…1): the vital's value mapped onto its physiological span, matching Today's
+    /// per-metric `fracOver` denominators (HRV/120, RHR/100, respiratory/24, SpO₂ across 90…100, absolute
+    /// skin temp across 33…38 °C). nil when there's no value, so the gauge reads empty rather than faked.
+    private var vesselFraction: Double? {
+        guard let v = reading.value else { return nil }
+        func over(_ span: Double) -> Double { max(0.02, min(1, v / span)) }
+        func across(_ lo: Double, _ hi: Double) -> Double { max(0.02, min(1, (v - lo) / (hi - lo))) }
+        switch reading.key {
+        case "hrv":        return over(120)
+        case "rhr":        return over(100)
+        case "resp_rate":  return over(24)
+        case "spo2":       return across(90, 100)
+        case "skin_temp":
+            // Absolute skin temp (>= 20 °C) maps across a plausible wrist band; a small ±deviation
+            // maps around a half-full centre so a normal night reads mid-gauge, not empty.
+            return VitalBands.isAbsoluteSkinTemp(v) ? across(33, 38) : max(0.02, min(1, 0.5 + v / 4))
+        default:           return across(0, max(1, v * 1.5))
         }
     }
 }
@@ -1256,7 +1347,8 @@ private struct HealthHubLinksSection: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        // Liquid press response — every tappable liquid card settles inward on touch (matches Today).
+        .buttonStyle(LiquidPressStyle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title). \(subtitle)")
     }

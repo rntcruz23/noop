@@ -10,6 +10,7 @@ import PhotosUI
 import StrandDesign
 import StrandAnalytics
 import WhoopStore
+import WhoopProtocol
 
 /// Settings — profile (powers zones / calories / recovery), strap connection, and about.
 /// Grouped cards on surface.raised with a two-column form feel.
@@ -1397,7 +1398,101 @@ struct SettingsView: View {
                         .foregroundStyle(StrandPalette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Divider().overlay(StrandPalette.hairline)
+
+                // MARK: Protocol health check (#103) — read-only; turns one 5/MG session into verdicts.
+                protocolCheckSection
             }
+        }
+    }
+
+    // MARK: - 5/MG protocol health check (#174/#103)
+
+    /// A read-only, user-runnable audit of NOOP's implemented 5/MG paths against the connected
+    /// strap: each check flips to pass/partial/fail live as the session exercises it, and the
+    /// plain-text report (identical on Android) is what a 5/MG owner pastes on the deep-data issue.
+    private var protocolCheckSection: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.rowSpacing) {
+            Text("Protocol health check")
+                .font(StrandFont.subhead)
+                .foregroundStyle(StrandPalette.textPrimary)
+            Text("Checks what your strap actually does with NOOP: handshake, bond, live heart rate, clock, frame CRCs, command channel, R22 flag acks, history offload, and record decode. Read-only — nothing is written to the strap. Connect your 5/MG, let it sync (and optionally send the R22 sequence above), then copy the report and attach it with your strap log to the deep-data issue.")
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: NoopMetrics.space3) {
+                NoopButton(live.whoop5AuditActive ? "Stop check" : "Start check",
+                           systemImage: live.whoop5AuditActive ? "stop.circle" : "stethoscope",
+                           kind: live.whoop5AuditActive ? .secondary : .primary) {
+                    if live.whoop5AuditActive {
+                        model.ble.stopWhoop5Audit()
+                    } else {
+                        model.ble.startWhoop5Audit()
+                    }
+                }
+                if live.whoop5AuditSnapshot != nil {
+                    NoopButton("Copy report", systemImage: "doc.on.doc", kind: .secondary) {
+                        PlatformPasteboard.copy(model.ble.whoop5AuditReport())
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            if let snap = live.whoop5AuditSnapshot {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(snap.checks, id: \.id) { check in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: auditIcon(check.verdict))
+                                .foregroundStyle(auditColor(check.verdict))
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(auditTitle(check.id))
+                                    .font(StrandFont.caption)
+                                    .foregroundStyle(StrandPalette.textPrimary)
+                                Text(check.detail)
+                                    .font(StrandFont.caption)
+                                    .foregroundStyle(StrandPalette.textTertiary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }
+    }
+
+    private func auditIcon(_ v: Whoop5SessionAudit.Verdict) -> String {
+        switch v {
+        case .pass:    return "checkmark.circle.fill"
+        case .partial: return "exclamationmark.circle.fill"
+        case .fail:    return "xmark.circle.fill"
+        case .skip:    return "circle.dotted"
+        }
+    }
+
+    private func auditColor(_ v: Whoop5SessionAudit.Verdict) -> Color {
+        switch v {
+        case .pass:    return StrandPalette.statusPositive
+        case .partial: return StrandPalette.statusWarning
+        case .fail:    return StrandPalette.statusCritical
+        case .skip:    return StrandPalette.textTertiary
+        }
+    }
+
+    /// Localized display names for the report's stable snake_case check ids.
+    private func auditTitle(_ id: String) -> String {
+        switch id {
+        case "handshake":  return String(localized: "Handshake (CLIENT_HELLO)")
+        case "bond":       return String(localized: "Encrypted bond")
+        case "live_hr":    return String(localized: "Live heart rate (0x2A37)")
+        case "clock":      return String(localized: "Strap clock (GET_CLOCK)")
+        case "framing":    return String(localized: "Frame CRCs (CRC16 + CRC32)")
+        case "commands":   return String(localized: "Command channel")
+        case "r22_unlock": return String(localized: "R22 enable sequence")
+        case "offload":    return String(localized: "History offload")
+        case "decode":     return String(localized: "Record decode (type-47)")
+        default:           return id
         }
     }
 

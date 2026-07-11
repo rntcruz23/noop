@@ -577,6 +577,11 @@ public final class BLEManager: NSObject, ObservableObject {
     /// streams live HR fine) reads as "history sync experimental on 5.0" instead of a sync error, and the
     /// 120s bounce loop backs off while live HR is flowing. Reset on connect / a banking offload.
     private var whoop5EmptyOffload = Whoop5EmptyOffloadTracker()
+    /// EXPERIMENTAL (#174/#103): the user-runnable 5/MG protocol health check. A pure aggregator
+    /// (WhoopProtocol, parity-twinned with Android) fed from the existing session seams ONLY while
+    /// `LiveState.whoop5AuditActive` — one Bool read per event when off, mirroring TestCentre.active.
+    /// Read-only with respect to the strap: it observes the session the app was already having.
+    private let whoop5Audit = Whoop5SessionAudit()
     /// When true, SKIP arming the R10/R11 raw realtime stream on connect — the radio couldn't sustain
     /// it (see MarginalRadioDetector). Live HR then comes only from the already-subscribed low-bandwidth
     /// 0x2A37 standard-HR profile. Per-session: set by the detector, cleared on a clean reconnect (a
@@ -1770,6 +1775,16 @@ public final class BLEManager: NSObject, ObservableObject {
                 state.lastSyncError = "Sync interrupted - the strap went quiet. It will retry on the next sync."
             }
         }
+        // Protocol check (#103): fold this offload's outcome into the running 5/MG audit. The
+        // rejected tally is connection-cumulative (rejectedFramesThisSession), so the audit keeps
+        // the latest value rather than summing.
+        if selectedModel.deviceFamily == .whoop5, reason == "timeout" || reason == "HISTORY_COMPLETE" {
+            let rows = backfiller?.sessionRowsPersisted ?? 0
+            let rejected = state.rejectedFramesThisSession + state.rejectedFramesUnarchived
+            auditNote { $0.noteOffloadEnded(reason: reason == "HISTORY_COMPLETE" ? .completed : .timedOut,
+                                            bankedRows: rows,
+                                            rejectedRecordsThisConnection: rejected) }
+        }
         checkStrapLiveness()         // safety-net: strap ahead of us AND our frontier frozen ⇒ stuck?
         // #364 / #25: a session that ended on the 60s IDLE cap OR on a true HISTORY_COMPLETE while still
         // connected, with more backlog to fetch and the trim still advancing, immediately re-kicks another
@@ -2032,6 +2047,7 @@ public final class BLEManager: NSObject, ObservableObject {
         guard frame.count > 10 else { return }
         if frame[8] == 0x24, frame[10] == WhoopCommand.setConfig.rawValue {
             state.r22FlagsAccepted += 1
+            auditNote { $0.noteR22FlagAck() }   // protocol check (#103): one enable_r22 flag acked
             let total = Whoop5Config.enableR22Sequence.count
             if state.r22FlagsAccepted == total {
                 log("Deep-data: strap ACCEPTED all \(total)/\(total) R22 flags ✓ — keep it on; watching for deep packets.")
@@ -2059,6 +2075,58 @@ public final class BLEManager: NSObject, ObservableObject {
                 log("Deep-data: type-0x2F received outside our offload — this is historical-offload data (another BLE client pulling the strap's history, or a trailing flush), not a live R22 stream (#494).")
             } else if state.deepPacketsThisSession.isMultiple(of: 50) {
                 log("Deep-data: \(state.deepPacketsThisSession) type-0x2F historical-offload frames seen outside our session.")
+            }
+        }
+    }
+
+    // MARK: - WHOOP 5/MG protocol health check (#174/#103)
+
+    /// Feed one event into the 5/MG protocol check and republish the snapshot when it changed.
+    /// Zero-cost while the check isn't running (one Bool read); snapshot equality keeps SwiftUI
+    /// from re-rendering on every heartbeat.
+    private func auditNote(_ feed: (Whoop5SessionAudit) -> Void) {
+        guard state.whoop5AuditActive else { return }
+        feed(whoop5Audit)
+        let snap = whoop5Audit.snapshot()
+        if snap != state.whoop5AuditSnapshot { state.whoop5AuditSnapshot = snap }
+    }
+
+    /// Start the read-only 5/MG protocol health check (Settings → Experimental). Seeds the checks
+    /// this connection has ALREADY proved (handshake/bond/clock state is per-connection, not
+    /// per-event), so a check started mid-session doesn't show [SKIP] for steps that already ran.
+    public func startWhoop5Audit() {
+        whoop5Audit.reset()
+        state.whoop5AuditActive = true
+        if selectedModel.deviceFamily == .whoop5, state.connected {
+            if connectHandshakeDone { whoop5Audit.noteHandshake() }
+            if state.bonded || state.encryptedBond { whoop5Audit.noteBond(encrypted: state.encryptedBond) }
+        }
+        state.whoop5AuditSnapshot = whoop5Audit.snapshot()
+        log("Protocol check: started (5/MG session audit; read-only, see #103)")
+    }
+
+    /// Stop feeding the check. The last snapshot (and its report) stays visible for copy/share.
+    public func stopWhoop5Audit() {
+        state.whoop5AuditActive = false
+        log("Protocol check: stopped")
+    }
+
+    /// The shareable plain-text report for the current/most recent check run.
+    public func whoop5AuditReport() -> String { whoop5Audit.report() }
+
+    /// Protocol-check per-frame feed (#103): CRC-verify and classify ONE reassembled puffin frame.
+    /// Only called while the check is running, so the extra CRC16/CRC32 pass costs nothing otherwise.
+    /// The GET_CLOCK COMMAND_RESPONSE doubles as the clock-path proof on a 5/MG (identity clock ref;
+    /// there is no WHOOP4-style correlation step). Layout: packet_type @8, responded-to cmd @10.
+    private func auditNotePuffinFrame(_ frame: [UInt8]) {
+        let chk = verifyFrame(frame, family: .whoop5)
+        auditNote { a in
+            a.notePuffinFrame(crcOK: chk.ok,
+                              typeByte: frame.count > 8 ? Int(frame[8]) : -1,
+                              versionByte: frame.count > 9 ? Int(frame[9]) : -1)
+            if chk.ok, frame.count > 10, frame[8] == 0x24,
+               frame[10] == WhoopCommand.getClock.rawValue {
+                a.noteClockCorrelated()
             }
         }
     }
@@ -2091,6 +2159,7 @@ public final class BLEManager: NSObject, ObservableObject {
         }
         state.r22FlagsAccepted = 0   // fresh attempt — count this send's ACKs from zero
         let frames = Whoop5Config.enableR22Sequence
+        auditNote { $0.noteR22SequenceSent(totalFlags: frames.count) }   // protocol check (#103)
         log("Deep-data: sending the \(frames.count)-flag enable_r22 sequence (experimental, reversible)…")
         for (i, flag) in frames.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(80 * i)) { [weak self] in
@@ -2752,6 +2821,10 @@ public final class BLEManager: NSObject, ObservableObject {
         if m.hr >= 30 && m.hr <= 220, state.heartRate != m.hr { state.heartRate = m.hr }
         // Record it continuously — independent of the realtime stream or the open screen.
         collector?.ingestStandardHR(hr: m.hr, rr: m.rr, at: Int(Date().timeIntervalSince1970))
+        // Protocol check (#103): count plausible 0x2A37 samples on a 5/MG (the live-HR proof).
+        if selectedModel.deviceFamily == .whoop5, m.hr >= 30, m.hr <= 220 {
+            auditNote { $0.noteLiveHeartRateSample() }
+        }
     }
 }
 
@@ -3317,6 +3390,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 noteGenuineBond(of: peripheral)   // #52: this strap bonds fine; clears any pin-refusal streak
                 emitConnectionBondState("encryptedBond family=whoop5 (CLIENT_HELLO acked)")
                 log("WHOOP 5/MG: CLIENT_HELLO acked — link established; subscribing notify chars (experimental).")
+                auditNote { $0.noteBond(encrypted: true) }   // protocol check (#103)
             }
             for c in whoop5NotifyCharacteristics where !c.isNotifying {
                 requestNotify(c, on: peripheral, reason: "post-bond puffin")
@@ -3347,6 +3421,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 whoop5SessionStarted = true
                 connectHandshakeDone = true     // unblocks beginBackfill()'s guard
                 log("WHOOP 5/MG: connect handshake done — backfill unblocked")
+                auditNote { $0.noteHandshake() }   // protocol check (#103)
                 noteRebootReconnectIfNeeded()
                 // Re-apply the Broadcast-HR device-config flag if the user opted in (#181).
                 if PuffinExperiment.broadcastHrEnabled { setBroadcastHr(true) }
@@ -3538,6 +3613,8 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
             if selectedModel.deviceFamily == .whoop5, !state.bonded {
                 state.bonded = true
                 log("WHOOP 5/MG: live HR streaming — marking the link established (experimental).")
+                // Protocol check (#103): HR without the CLIENT_HELLO ack is the live-HR-only link.
+                if !state.encryptedBond { auditNote { $0.noteBond(encrypted: false) } }
             }
         case BLEManager.batteryChar:
             // 0x2A19 = percent — 5/MG ONLY. The WHOOP 4.0's 0x2A19 is a stub constant 100 (real value =
@@ -3663,6 +3740,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                 for frame in reassembler.feed(bytes) {
                     let isOffload = backfilling && BLEManager.isOffloadFrame(frame, family: .whoop5)
                     noteWhoop5R22Telemetry(frame, duringOffload: isOffload)   // #174 deep-data telemetry
+                    if state.whoop5AuditActive { auditNotePuffinFrame(frame) }   // protocol check (#103)
                     if isOffload {
                         // Same policy as WHOOP4: historical offload frames are bulk sync traffic.
                         // Keep them out of the live UI parser during backfill and let Backfiller

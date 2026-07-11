@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Brightness6
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
@@ -47,10 +48,12 @@ import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Storage
@@ -84,7 +87,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -101,6 +106,7 @@ import com.noop.ble.WhoopModel
 import com.noop.data.DataBackup
 import com.noop.ingest.RawSensorExport
 import com.noop.ingest.WhoopCsvExporter
+import com.noop.protocol.Whoop5SessionAudit
 import com.noop.update.UpdateCheck
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -379,6 +385,7 @@ fun SettingsScreen(
     onOpenBackupSync: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val live by vm.live.collectAsStateWithLifecycle()
 
@@ -1695,6 +1702,64 @@ fun SettingsScreen(
                     fullWidth = true,
                     onClick = { scope.launch { LogExport.shareRawAndLog(context, vm.ble.exportLogText(), live.whoop5Detected) } },
                 )
+
+                // --- Protocol health check (#174/#103) — read-only; one 5/MG session → verdicts. ---
+                Text(
+                    "Protocol health check",
+                    style = NoopType.subhead,
+                    color = Palette.textPrimary,
+                )
+                Text(
+                    "Checks what your strap actually does with NOOP: handshake, bond, live heart rate, clock, frame CRCs, command channel, R22 flag acks, history offload, and record decode. Read-only — nothing is written to the strap. Connect your 5/MG, let it sync (and optionally send the R22 sequence above), then copy the report and attach it with your strap log to the deep-data issue.",
+                    style = NoopType.caption,
+                    color = Palette.textTertiary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    NoopButton(
+                        text = if (live.whoop5AuditActive) "Stop check" else "Start check",
+                        leadingIcon = if (live.whoop5AuditActive) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                        kind = if (live.whoop5AuditActive) NoopButtonKind.Secondary else NoopButtonKind.Primary,
+                        onClick = {
+                            if (live.whoop5AuditActive) vm.ble.stopWhoop5Audit() else vm.ble.startWhoop5Audit()
+                        },
+                    )
+                    if (live.whoop5AuditSnapshot != null) {
+                        NoopButton(
+                            text = "Copy report",
+                            leadingIcon = Icons.Filled.ContentCopy,
+                            kind = NoopButtonKind.Secondary,
+                            onClick = { clipboard.setText(AnnotatedString(vm.ble.whoop5AuditReport())) },
+                        )
+                    }
+                }
+                live.whoop5AuditSnapshot?.let { snap ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for (check in snap.checks) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    auditGlyph(check.verdict),
+                                    style = NoopType.caption,
+                                    color = auditColor(check.verdict),
+                                )
+                                Column {
+                                    Text(
+                                        auditTitle(check.id),
+                                        style = NoopType.caption,
+                                        color = Palette.textPrimary,
+                                    )
+                                    Text(
+                                        check.detail,
+                                        style = NoopType.caption,
+                                        color = Palette.textTertiary,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         } // end if (showFiveMGControls)
@@ -2919,4 +2984,36 @@ private fun AttributionRow(repo: String, note: String) {
         Text(repo, style = NoopType.mono(12f), color = Palette.textPrimary)
         Text("· $note", style = NoopType.footnote, color = Palette.textTertiary)
     }
+}
+
+// MARK: - 5/MG protocol health check rendering (#174/#103)
+
+/** Status glyph for a protocol-check verdict (text, not an icon, so the row stays one line of caption
+ *  type at any font scale). Colors via [auditColor]. */
+private fun auditGlyph(v: Whoop5SessionAudit.Verdict): String = when (v) {
+    Whoop5SessionAudit.Verdict.PASS -> "✓"
+    Whoop5SessionAudit.Verdict.PARTIAL -> "!"
+    Whoop5SessionAudit.Verdict.FAIL -> "✗"
+    Whoop5SessionAudit.Verdict.SKIP -> "·"
+}
+
+private fun auditColor(v: Whoop5SessionAudit.Verdict): Color = when (v) {
+    Whoop5SessionAudit.Verdict.PASS -> Palette.statusPositive
+    Whoop5SessionAudit.Verdict.PARTIAL -> Palette.statusWarning
+    Whoop5SessionAudit.Verdict.FAIL -> Palette.statusCritical
+    Whoop5SessionAudit.Verdict.SKIP -> Palette.textTertiary
+}
+
+/** Display names for the report's stable snake_case check ids (twin of the iOS auditTitle). */
+private fun auditTitle(id: String): String = when (id) {
+    "handshake" -> "Handshake (CLIENT_HELLO)"
+    "bond" -> "Encrypted bond"
+    "live_hr" -> "Live heart rate (0x2A37)"
+    "clock" -> "Strap clock (GET_CLOCK)"
+    "framing" -> "Frame CRCs (CRC16 + CRC32)"
+    "commands" -> "Command channel"
+    "r22_unlock" -> "R22 enable sequence"
+    "offload" -> "History offload"
+    "decode" -> "Record decode (type-47)"
+    else -> id
 }

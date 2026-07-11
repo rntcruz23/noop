@@ -2597,7 +2597,15 @@ internal fun selectNight(
     // above, so it is never mislabelled as a nap. `session` (the edit anchor) is already the main block, so
     // the bedtime label and the pencil were aligned — this aligns the chart to that same bedtime. (#736/#555)
     val onsetTsForHero = session.effectiveStartTs
-    val heroGroup = group.dropWhile { it.effectiveStartTs < onsetTsForHero && isPreOnsetAwakeStub(it) }
+    // #259: reference size for the "minor relative to the main block" stub test = the largest asleep span in
+    // the group (≈ the main block). A genuine biphasic first sleep is comparable to it and is kept; only a
+    // small stray lead carrying a few minutes of sleep is dropped, so the onset no longer jumps hours early.
+    val groupRefAsleepMin = group.maxOfOrNull { frag ->
+        parseSessionStages(frag.stagesJSON)?.let { it.light + it.deep + it.rem } ?: 0.0
+    } ?: 0.0
+    val heroGroup = group.dropWhile {
+        it.effectiveStartTs < onsetTsForHero && isPreOnsetAwakeStub(it, groupRefAsleepMin)
+    }
     val utcKey = AnalyticsEngine.dayString(session.endTs)
     val localKey = localDayString(session.endTs)
     val dayKey = listOf(utcKey, localKey).firstOrNull { key ->
@@ -2607,13 +2615,16 @@ internal fun selectNight(
     // hypnogram, and SUM their stage minutes for the hero. Built from `heroGroup` (the group minus a leading
     // spurious stub, #736) so the chart and minutes start at the displayed bedtime. Null for a single-block
     // hero → prior behaviour.
+    // #259: clamp each fragment's timeline to its effective onset too (matching the stage-minute clamp
+    // and the iOS decodeSegments clamp), so the hypnogram starts where the edited bedtime does instead of
+    // drawing pre-onset bars that contradict the clamped asleep total. No-op for non-edited nights.
     val groupSegments = if (heroGroup.size > 1) {
-        heroGroup.flatMap { parsePersistedSegments(it.stagesJSON).orEmpty() }
+        heroGroup.flatMap { parsePersistedSegments(SleepStageTotals.clampStagesToOnset(it.stagesJSON, it.effectiveStartTs)).orEmpty() }
             .sortedBy { it.start }
             .takeIf { it.size >= 2 }
     } else null
     val groupStages = if (heroGroup.size > 1) sumGroupStages(heroGroup) else null
-    val segments = (groupSegments ?: parsePersistedSegments(session.stagesJSON))
+    val segments = (groupSegments ?: parsePersistedSegments(SleepStageTotals.clampStagesToOnset(session.stagesJSON, session.effectiveStartTs)))
         ?.map { seg -> seg.stage to ((seg.end - seg.start) / 60f) }
     // #407: lay the GROUP's per-epoch motion fragment-by-fragment in `heroGroup` order (the same order
     // `groupSegments` lays the stage timeline), reading the already-chosen group's stored series. The
@@ -2681,17 +2692,30 @@ private const val PRE_ONSET_STUB_MAX_MIN = 240.0
  *  first sleep fragment of a biphasic night carries far more. Mirrors iOS SleepView.preOnsetStubAsleepMaxMin.
  *  (#736) */
 private const val PRE_ONSET_STUB_ASLEEP_MAX_MIN = 3.0
+/** A leading pre-onset fragment that carries SOME sleep is still spurious when it is minor RELATIVE to the
+ *  night's main block: its asleep minutes are below this fraction of the largest fragment's. A genuine
+ *  biphasic first sleep is comparable in size to the main block (well above this), so it is never dropped;
+ *  only a small stray lead (e.g. a brief early doze hours before the real sleep) is. This extends the
+ *  essentially-sleepless [PRE_ONSET_STUB_ASLEEP_MAX_MIN] rule (#736), which missed a lead carrying a few
+ *  minutes more than 3. Mirrors iOS SleepView.preOnsetStubMinorFrac. (#259) */
+private const val PRE_ONSET_STUB_MINOR_FRAC = 0.15
 
 /** A fragment is a spurious pre-onset awake stub when it is within the lie-in cap (<= [PRE_ONSET_STUB_MAX_MIN])
- *  and carries essentially no sleep (asleep minutes <= [PRE_ONSET_STUB_ASLEEP_MAX_MIN]). Used only to skip such
- *  a stub when it leads the main-night group, so the hero's hypnogram and minutes start at the displayed
- *  bedtime (the main block's onset) rather than before it. Mirrors iOS SleepView.isPreOnsetAwakeStub. (#736) */
-internal fun isPreOnsetAwakeStub(frag: SleepSession): Boolean {
+ *  and EITHER carries essentially no sleep (asleep minutes <= [PRE_ONSET_STUB_ASLEEP_MAX_MIN]) OR is minor
+ *  relative to the night's main block ([refAsleepMin], the group's largest asleep span): asleep minutes below
+ *  [PRE_ONSET_STUB_MINOR_FRAC] of it. Used only to skip such a stub when it leads the main-night group, so the
+ *  hero's hypnogram and minutes start at the displayed bedtime (the main block's onset) rather than before it.
+ *  [refAsleepMin] defaults to 0 (relative test off) so existing callers/tests are byte-identical. Mirrors iOS
+ *  SleepView.isPreOnsetAwakeStub. (#736 / #259) */
+internal fun isPreOnsetAwakeStub(frag: SleepSession, refAsleepMin: Double = 0.0): Boolean {
     val spanMin = (frag.endTs - frag.effectiveStartTs) / 60.0
     if (spanMin > PRE_ONSET_STUB_MAX_MIN) return false
     val stages = parseSessionStages(frag.stagesJSON)
     val asleepMin = stages?.let { it.light + it.deep + it.rem } ?: 0.0
-    return asleepMin <= PRE_ONSET_STUB_ASLEEP_MAX_MIN
+    if (asleepMin <= PRE_ONSET_STUB_ASLEEP_MAX_MIN) return true
+    // #259: also spurious when it carries some sleep but is minor relative to the main block (largest
+    // fragment). A genuine biphasic first sleep is comparable in size, so it stays and its onset stands.
+    return refAsleepMin > 0.0 && asleepMin < PRE_ONSET_STUB_MINOR_FRAC * refAsleepMin
 }
 
 /** SUM the per-stage minutes across a bridged main-night group, so the hero's stage breakdown reflects the
@@ -2700,7 +2724,8 @@ internal fun isPreOnsetAwakeStub(frag: SleepSession): Boolean {
 private fun sumGroupStages(group: List<SleepSession>): StageMins? {
     var aw = 0.0; var li = 0.0; var dp = 0.0; var rm = 0.0; var any = false
     for (frag in group) {
-        val s = parseSessionStages(frag.stagesJSON) ?: continue
+        // #259: each fragment's stages trimmed to its effective onset before summing (see buildSleepModel).
+        val s = parseSessionStages(SleepStageTotals.clampStagesToOnset(frag.stagesJSON, frag.effectiveStartTs)) ?: continue
         aw += s.awake; li += s.light; dp += s.deep; rm += s.rem; any = true
     }
     return if (any) StageMins(aw, li, dp, rm) else null
@@ -2823,7 +2848,10 @@ internal fun buildSleepModel(
     // (StagesVsTypical, Hypnogram footer) immediately without waiting on a rescore.
     val sessionStageMins = session
         ?.takeIf { AnalyticsEngine.dayString(it.endTs) == latest.day || localDayString(it.endTs) == latest.day }
-        ?.let { parseSessionStages(it.stagesJSON) }
+        // #259: trim to the EFFECTIVE onset before summing, so a hand-edited bedtime the raw was too sparse
+        // to re-stage (WHOOP 4.0) can't show pre-onset stages that push asleep past time-in-bed. No-op when
+        // the session already starts at its onset (the common case). Matches the analytics-side clamp.
+        ?.let { parseSessionStages(SleepStageTotals.clampStagesToOnset(it.stagesJSON, it.effectiveStartTs)) }
     val deep = heroStages?.deep ?: sessionStageMins?.deep ?: latest.deepMin ?: 0.0
     val rem = heroStages?.rem ?: sessionStageMins?.rem ?: latest.remMin ?: 0.0
     val light = heroStages?.light ?: sessionStageMins?.light ?: latest.lightMin ?: 0.0

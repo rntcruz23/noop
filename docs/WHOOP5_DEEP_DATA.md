@@ -96,7 +96,14 @@ that otherwise reproduced flags 1–15 byte-for-byte in this order.
 2. With the strap **on and bonded**, tap **Send enable sequence to strap**.
 3. Keep wearing it, let it sync, then **share your strap log** on [#103](https://github.com/ryanbr/noop/issues/103) — we're looking for new deep
    records (type `0x2F`) to start arriving.
-4. Even better: a Bluetooth HCI capture of the **official app syncing a full night's history** shows the deep
+4. **Run the protocol health check** (Settings → Experimental → WHOOP 5/MG → *Protocol health
+   check*): tap **Start check**, let the strap connect and sync (send the enable sequence too if you
+   opted in), then **Copy report** and paste it on [#103](https://github.com/ryanbr/noop/issues/103). It condenses the whole session into
+   per-feature verdicts — handshake, bond, live HR, clock, frame CRCs, command acks, R22 flag acks,
+   offload outcome, and which type-`0x2F` layout versions your firmware emits — in a format that is
+   byte-identical between iOS/macOS and Android, so reports are directly comparable. It is read-only:
+   it never writes to the strap.
+5. Even better: a Bluetooth HCI capture of the **official app syncing a full night's history** shows the deep
    packets actually flowing and their layout. Method: iOS **PacketLogger** (Bluetooth diagnostic profile → `.pklg`)
    or Android **Developer Options → Bluetooth HCI snoop log** → `btsnoop_hci.log`, opened in Wireshark — the
    same iOS-HCI approach the [judes.club write-up](https://judes.club/writing/cracking-the-whoop-5-bluetooth-protocol/)

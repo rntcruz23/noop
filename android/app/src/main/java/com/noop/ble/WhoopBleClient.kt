@@ -41,6 +41,7 @@ import com.noop.protocol.Reassembler
 import com.noop.protocol.RebootProbeVariant
 import com.noop.protocol.Streams
 import com.noop.protocol.Whoop5Config
+import com.noop.protocol.Whoop5SessionAudit
 import com.noop.protocol.extractStreams
 import com.noop.analytics.Baselines
 import com.noop.analytics.BatterySocLine
@@ -187,6 +188,13 @@ data class LiveState(
      *  channel), NOT a separate live R22 stream — type-0x2F is only ever the historical offload. Kept as a
      *  diagnostic counter, not a "deep stream unlocked" signal. Twin of macOS LiveState.deepPacketsThisSession. (#174) */
     val deepPacketsThisSession: Int = 0,
+    /** EXPERIMENTAL 5/MG protocol health check (#174/#103). `whoop5AuditActive` is the run switch —
+     *  the client feeds the pure [com.noop.protocol.Whoop5SessionAudit] only while it's true (one
+     *  Boolean read per event when off). The snapshot re-publishes only when a verdict or counter
+     *  actually changed (data-class equality), so a steady HR stream doesn't recompose Settings
+     *  every second. Twin of macOS LiveState.whoop5AuditActive/whoop5AuditSnapshot. */
+    val whoop5AuditActive: Boolean = false,
+    val whoop5AuditSnapshot: com.noop.protocol.Whoop5SessionAudit.Snapshot? = null,
     /** #580: TRUE when a connected WHOOP 5/MG is streaming live HR fine but its firmware hands over NO
      *  history offload (it acks SEND_HISTORICAL_DATA but emits zero type-0x2F frames). The home/Settings
      *  surface then reads "connected, history sync experimental on 5.0" instead of a sync error, and the
@@ -1256,6 +1264,7 @@ class WhoopBleClient(
         // so finishChunk holds the cursor/ack and the strap re-sends. The throw is mapped to the
         // boolean contract HERE so nothing can escape into the offload drain loop.
         rejectedSink = { frames, trim ->
+            rejectedFramesThisConnection += frames.size   // protocol check (#103): decode-quality tally
             try {
                 val r = rawHistoryArchive.append(frames, trim, connectedFamily)
                 if (r.written) log("Backfill: ${frames.size} undecodable frame(s) archived before ack")
@@ -1451,6 +1460,14 @@ class WhoopBleClient(
      *  live HR fine) reads as "history sync experimental on 5.0" instead of a sync error, and the 120s
      *  bounce loop backs off while live HR is flowing. Reset on connect / a banking offload. Twin of macOS. */
     private val whoop5EmptyOffload = Whoop5EmptyOffloadTracker()
+    /** EXPERIMENTAL (#174/#103): the user-runnable 5/MG protocol health check. A pure aggregator
+     *  (com.noop.protocol, parity-twinned with the Swift Whoop5SessionAudit) fed from the existing
+     *  session seams ONLY while `LiveState.whoop5AuditActive` — one Boolean read per event when off.
+     *  Read-only with respect to the strap: it observes the session the client was already having. */
+    private val whoop5Audit = Whoop5SessionAudit()
+    /** Undecodable HISTORICAL_DATA record frames archived this CONNECTION (tallied in rejectedSink) —
+     *  the protocol check's decode-quality input. Reset alongside the #174 per-session counters. */
+    private var rejectedFramesThisConnection = 0
     /** Genuine offload frames seen this session — zero at timeout means the strap never answered
      *  the history request at all (5/MG retry trigger, #78 fork). Main-looper only. */
     private var offloadFramesThisSession = 0
@@ -1862,6 +1879,7 @@ class WhoopBleClient(
         _state.update { it.copy(connected = false, bonded = false, encryptedBond = false,
                                 streamingLiveHR = false,   // #56: a device switch drops any external stream too
                                 r22FlagsAccepted = 0, deepPacketsThisSession = 0) }   // #174 reset per session
+        rejectedFramesThisConnection = 0   // protocol check (#103): fresh strap, fresh decode tally
     }
 
     /**
@@ -3362,6 +3380,7 @@ class WhoopBleClient(
                 bondedAtMs = System.currentTimeMillis()   // #617: stamp the bond so handleDisconnect can spot a bond-then-quick-timeout loop
                 emitConnectionBondState("encryptedBond family=whoop5 (CLIENT_HELLO acked)")
                 log("WHOOP 5/MG: CLIENT_HELLO acked — link established; subscribing notify chars (experimental).")
+                auditNote { it.noteBond(encrypted = true) }   // protocol check (#103)
                 g.getService(WHOOP5_SERVICE)?.let { svc ->
                     for (u in WHOOP5_NOTIFY_CHARS) svc.getCharacteristic(u)?.let { cccdQueue.add(it) }
                 }
@@ -3495,6 +3514,10 @@ class WhoopBleClient(
                     // every offloaded frame for nothing. (The Swift 5/MG inbound loop already hoists this.)
                     val offloadFrame = backfilling && isOffloadFrame(frame, connectedFamily)
                     noteWhoop5R22Telemetry(frame, offloadFrame)  // #174
+                    // Protocol check (#103): CRC + classification feed, 5/MG frames only.
+                    if (connectedFamily == DeviceFamily.WHOOP5 && _state.value.whoop5AuditActive) {
+                        auditNotePuffinFrame(frame)
+                    }
                     // #47: decode this frame ONCE and thread it to both consumers (the router below and the
                     // live collector) instead of each re-parsing it — steady-state drops 2→1 parse per live
                     // frame. Family-aware, so it's correct for WHOOP4 and 5/MG alike.
@@ -3625,6 +3648,7 @@ class WhoopBleClient(
         if (type == 0x24 && (frame[10].toInt() and 0xFF) == CommandNumber.SET_CONFIG.rawValue) {
             val n = _state.value.r22FlagsAccepted + 1
             _state.update { it.copy(r22FlagsAccepted = n) }
+            auditNote { it.noteR22FlagAck() }   // protocol check (#103): one enable_r22 flag acked
             val total = Whoop5Config.enableR22Sequence.size
             if (n == total) log("Deep-data: strap ACCEPTED all $n/$total R22 flags ✓ — keep it on; watching for deep packets.")
         }
@@ -3911,6 +3935,8 @@ class WhoopBleClient(
         // HR: accept only physiologically plausible values; reject 0/garbage (off-wrist).
         if (hr in 30..220) {
             _state.update { it.copy(heartRate = hr) }
+            // Protocol check (#103): count plausible 0x2A37 samples on a 5/MG (the live-HR proof).
+            if (connectedFamily == DeviceFamily.WHOOP5) auditNote { it.noteLiveHeartRateSample() }
             // EXPERIMENTAL WHOOP 5.0/MG: there is no confirmed-write bond for a 5/MG strap, so once
             // live HR actually streams over the standard profile we treat the link as established —
             // otherwise the UI sits on "Connecting…" forever even though data is flowing (issue #8).
@@ -3918,6 +3944,8 @@ class WhoopBleClient(
                 // atomic update: LiveState is written from multiple threads (binder/main/IO).
                 _state.update { it.copy(bonded = true) }
                 log("WHOOP 5/MG: live HR streaming — marking the link established (experimental).")
+                // Protocol check (#103): HR without the CLIENT_HELLO ack is the live-HR-only link.
+                if (!_state.value.encryptedBond) auditNote { it.noteBond(encrypted = false) }
                 // 5/MG has no WHOOP4 confirmed-write handshake, so the keep-alive (re-subscribe +
                 // 120s liveness bounce) is started here, on the bonded transition, instead of in
                 // runConnectHandshake. Handler.postDelayed is thread-safe to call from this callback.
@@ -4227,6 +4255,64 @@ class WhoopBleClient(
         log("Broadcast HR: wrote whoop_live_hr_in_adv_ind_pkt=" + (if (on) "1" else "0"))
     }
 
+    // MARK: - WHOOP 5/MG protocol health check (#174/#103)
+
+    /** Feed one event into the 5/MG protocol check and republish the snapshot when it changed.
+     *  Zero-cost while the check isn't running (one read); data-class equality keeps Compose from
+     *  recomposing on every heartbeat. @Synchronized because feeds arrive from the GATT binder
+     *  thread AND the main looper (the audit itself is deliberately unsynchronized/pure). */
+    @Synchronized
+    private fun auditNote(feed: (Whoop5SessionAudit) -> Unit) {
+        if (!_state.value.whoop5AuditActive) return
+        feed(whoop5Audit)
+        val snap = whoop5Audit.snapshot()
+        if (snap != _state.value.whoop5AuditSnapshot) _state.update { it.copy(whoop5AuditSnapshot = snap) }
+    }
+
+    /** Protocol-check per-frame feed (#103): CRC-verify and classify ONE reassembled puffin frame.
+     *  Only called while the check is running, so the extra CRC16/CRC32 pass costs nothing otherwise.
+     *  The GET_CLOCK COMMAND_RESPONSE doubles as the clock-path proof on a 5/MG (identity clock ref;
+     *  there is no WHOOP4-style correlation step). Layout: packet_type @8, responded-to cmd @10. */
+    private fun auditNotePuffinFrame(frame: ByteArray) {
+        val chk = Framing.verifyFrame(frame, DeviceFamily.WHOOP5)
+        auditNote { a ->
+            a.notePuffinFrame(
+                crcOK = chk.ok,
+                typeByte = if (frame.size > 8) frame[8].toInt() and 0xFF else -1,
+                versionByte = if (frame.size > 9) frame[9].toInt() and 0xFF else -1,
+            )
+            if (chk.ok && frame.size > 10 && (frame[8].toInt() and 0xFF) == 0x24 &&
+                (frame[10].toInt() and 0xFF) == CommandNumber.GET_CLOCK.rawValue
+            ) {
+                a.noteClockCorrelated()
+            }
+        }
+    }
+
+    /** Start the read-only 5/MG protocol health check (Settings → Experimental). Seeds the checks
+     *  this connection has ALREADY proved (handshake/bond state is per-connection, not per-event),
+     *  so a check started mid-session doesn't show [SKIP] for steps that already ran. Port of
+     *  BLEManager.startWhoop5Audit. */
+    fun startWhoop5Audit() {
+        whoop5Audit.reset()
+        val s = _state.value
+        if (connectedFamily == DeviceFamily.WHOOP5 && s.connected) {
+            if (connectHandshakeDone) whoop5Audit.noteHandshake()
+            if (s.bonded || s.encryptedBond) whoop5Audit.noteBond(encrypted = s.encryptedBond)
+        }
+        _state.update { it.copy(whoop5AuditActive = true, whoop5AuditSnapshot = whoop5Audit.snapshot()) }
+        log("Protocol check: started (5/MG session audit; read-only, see #103)")
+    }
+
+    /** Stop feeding the check. The last snapshot (and its report) stays visible for copy/share. */
+    fun stopWhoop5Audit() {
+        _state.update { it.copy(whoop5AuditActive = false) }
+        log("Protocol check: stopped")
+    }
+
+    /** The shareable plain-text report for the current/most recent check run. */
+    fun whoop5AuditReport(): String = whoop5Audit.report()
+
     /**
      * EXPERIMENTAL (#174): write the official app's `enable_r22_*` SET_CONFIG sequence to a bonded
      * WHOOP 5/MG to switch on the deep biometric (type-0x2F "R22") streams the strap withholds from a
@@ -4257,6 +4343,7 @@ class WhoopBleClient(
         }
         _state.update { it.copy(r22FlagsAccepted = 0) }   // fresh attempt
         val flags = Whoop5Config.enableR22Sequence
+        auditNote { it.noteR22SequenceSent(totalFlags = flags.size) }   // protocol check (#103)
         log("Deep-data: sending the ${flags.size}-flag enable_r22 sequence (experimental, reversible)…")
         flags.forEachIndexed { i, flag ->
             handler.postDelayed({
@@ -4489,6 +4576,7 @@ class WhoopBleClient(
             // once-per-connection (keep-alive resubscribes also land here). (#78 fork, hardware-proven)
             if (connectedFamily == DeviceFamily.WHOOP5 && didBond && !connectHandshakeDone) {
                 connectHandshakeDone = true
+                auditNote { it.noteHandshake() }   // protocol check (#103)
                 noteRebootReconnectIfNeeded()
                 send(CommandNumber.SET_CLOCK, setClockPayload(), withResponse = true)
                 send(CommandNumber.GET_CLOCK, byteArrayOf(), withResponse = true)
@@ -4908,6 +4996,18 @@ class WhoopBleClient(
             // A real HISTORY_COMPLETE with banked records proves the 5/MG offload IS working — recover.
             whoop5EmptyOffload.reset()
             whoop5HistoryExperimental = false
+        }
+        // Protocol check (#103): fold this offload's outcome into the running 5/MG audit. The
+        // rejected tally is connection-cumulative, so the audit keeps the latest value, not a sum.
+        if (isWhoop5 && (reason == "timeout" || reason == "HISTORY_COMPLETE")) {
+            auditNote {
+                it.noteOffloadEnded(
+                    reason = if (reason == "HISTORY_COMPLETE") Whoop5SessionAudit.OffloadReason.COMPLETED
+                             else Whoop5SessionAudit.OffloadReason.TIMED_OUT,
+                    bankedRows = backfiller.sessionRowsPersisted,
+                    rejectedRecordsThisConnection = rejectedFramesThisConnection,
+                )
+            }
         }
         _state.update { when (reason) {
             "HISTORY_COMPLETE" -> it.copy(

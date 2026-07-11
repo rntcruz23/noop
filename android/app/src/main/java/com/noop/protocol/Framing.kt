@@ -145,8 +145,10 @@ class Reassembler(private val family: DeviceFamily = DeviceFamily.WHOOP4) {
     }
 }
 
-/** Outcome of validating a frame envelope and its CRCs. */
-private data class FrameCheck(
+/** Outcome of validating a frame envelope and its CRCs. Widened from file-private when
+ *  [Framing.verifyFrame] became the public CRC-only entry point for the 5/MG protocol health
+ *  check (#103) — twin of the Swift public `FrameCheck`. */
+data class FrameCheck(
     val ok: Boolean,
     val length: Int? = null,
     val headerCrcOk: Boolean? = null,
@@ -203,6 +205,13 @@ object Framing {
             crc32Ok = want == got
         }
         return FrameCheck(ok = headerOk && (crc32Ok == true), length = declaredLength, headerCrcOk = headerOk, crc32Ok = crc32Ok)
+    }
+
+    /** Family-aware frame validation — public twin of the Swift `verifyFrame(_:family:)`: CRC-checks
+     *  a complete frame WITHOUT decoding it. Used by the 5/MG protocol health check (#103). */
+    fun verifyFrame(frame: ByteArray, family: DeviceFamily): FrameCheck = when (family) {
+        DeviceFamily.WHOOP4 -> verifyWhoop4(frame)
+        DeviceFamily.WHOOP5 -> verifyWhoop5(frame)
     }
 
     // MARK: - type / enum naming

@@ -1417,7 +1417,7 @@ struct SettingsView: View {
             Text("Protocol health check")
                 .font(StrandFont.subhead)
                 .foregroundStyle(StrandPalette.textPrimary)
-            Text("Checks what your strap actually does with NOOP: handshake, bond, live heart rate, clock, frame CRCs, command channel, R22 flag acks, history offload, and record decode. Read-only — nothing is written to the strap. Connect your 5/MG, let it sync (and optionally send the R22 sequence above), then copy the report and attach it with your strap log to the deep-data issue.")
+            Text("Checks what your strap actually does with NOOP: handshake, bond, live heart rate, clock, frame CRCs, command channel, R22 flag acks, history offload, and record decode. It never changes strap state; starting it sends a single GET_CLOCK read so the clock row can grade. Connect your 5/MG, let it sync (and optionally send the R22 sequence above), then copy the report and attach it with your strap log to the deep-data issue.")
                 .font(StrandFont.caption)
                 .foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

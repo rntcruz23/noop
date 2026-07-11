@@ -14,6 +14,20 @@
 name: Release build (fork)
 
 on:
+  # Auto-release on every code push to main: each push patch-bumps the version and cuts a full
+  # v<VERSION> release (Android + macOS + iOS). Safe against self-triggering: the bump job's own
+  # commit back to main is pushed with the default GITHUB_TOKEN, which GitHub never re-triggers
+  # `on: push` workflows from — and the bump job's `if` guard below is a second fence. Docs-only
+  # pushes (and the workflow's own manifest/bump file churn) don't release. For a minor/major bump
+  # or an explicit version, use the manual dispatch instead.
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'marketing/**'
+      - '.github/**'
+      - 'altstore-source.json'
   workflow_dispatch:
     inputs:
       bump:
@@ -35,6 +49,13 @@ concurrency:
 
 jobs:
   bump:
+    # Second fence against a release loop (the first is GITHUB_TOKEN pushes never re-triggering
+    # push workflows): if the head commit IS this workflow's own version-bump or AltStore-manifest
+    # commit — e.g. someone later swaps the token for a PAT, which WOULD re-trigger — skip outright.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!startsWith(github.event.head_commit.message, 'Release ') &&
+       github.event.head_commit.author.username != 'github-actions[bot]')
     runs-on: ubuntu-latest
     outputs:
       ver: ${{ steps.b.outputs.ver }}

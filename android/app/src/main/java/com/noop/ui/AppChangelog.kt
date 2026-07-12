@@ -25,7 +25,7 @@ object AppChangelog {
      * Bump this when you add a release below. The "What's New" sheet shows automatically when the
      * stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
      */
-    const val CURRENT_VERSION = "8.7.0"
+    const val CURRENT_VERSION = "8.7.1"
 
     data class Release(
         val version: String,
@@ -36,6 +36,15 @@ object AppChangelog {
 
     /** Newest first. */
     val releases: List<Release> = listOf(
+        Release(
+            version = "8.7.1",
+            title = "Upstream 8.7.0 merged, plus a clear warning for a strap that stops answering",
+            date = "July 2026",
+            items = listOf(
+                "**Everything from NOOP 8.7.0.** The sync chip on Today, the clear warning when a strap's clock is set wrong, the more reliable WHOOP 4.0 wake alarm, tidier menus, and the completed German translation - all merged into this fork.",
+                "**A clear warning when your strap stops answering (Android).** A strap whose Bluetooth firmware wedges keeps advertising but never answers connection requests (error 147), which used to look like an endless silent search. NOOP now explains what is happening and how to recover: charge-kick the strap, toggle Bluetooth, restart the phone - no re-pairing needed.",
+            ),
+        ),
         Release(
             version = "8.7.0",
             title = "A sync chip on Today, clearer strap-clock warnings, and complete German",

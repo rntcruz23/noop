@@ -10,6 +10,9 @@ import WhoopStore
 //   1. HERO ChartCard "Last night" — the stage breakdown (Hypnogram if intervals
 //      reconstruct from stagesJSON, else a clean proportional stacked stage bar),
 //      trailing = total asleep, footer = REM/Deep/Light/Awake each "Xh Ym · NN%".
+//   1b. "Sleep cycles" ChartCard — the SAME night as ONE Apple-Health-style staircase
+//      timeline (the shared StrandDesign Hypnogram: Awake top → Deep bottom, risers
+//      between stages). Additive under the stage rows; only when intervals reconstruct.
 //   2. A uniform grid of fixed StatTiles, each with a sparkline and a "vs typical"
 //      caption: Performance, Efficiency, Consistency, Hours vs Needed, Restorative,
 //      Respiratory, Sleep Debt.
@@ -672,6 +675,16 @@ struct SleepView: View {
             if intervals.count >= 2 {
                 motionStrip(night)
             }
+            // SLEEP CYCLES (additive): the whole night as ONE Apple-Health-style staircase timeline
+            // stepping between the Awake/REM/Light/Deep lanes — the "how the night flowed between
+            // stages" read the per-stage rows above deliberately split apart. Drawn with the shared
+            // StrandDesign Hypnogram (display-smoothed at render time; totals, percentages and
+            // stored data untouched) and following the rows' tap-a-stage highlight. Only when a
+            // real timeline reconstructs — the proportional stage-bar fallback has no per-epoch
+            // order to step through.
+            if intervals.count >= 2 {
+                sleepCyclesCard(night, intervals: intervals)
+            }
             // H9 — when the engine's Rest confidence flags this night's staging as low-confidence (a
             // high-efficiency night whose deep+REM share is implausibly low → a likely staging miss, not
             // a real night with no restorative sleep), say so honestly under the breakdown rather than
@@ -1077,6 +1090,32 @@ struct SleepView: View {
                 .frame(height: 30, alignment: .topLeading)
                 .padding(.horizontal, 2)
         }
+    }
+
+    /// The Apple-Health-style "Sleep cycles" card: the night as ONE staircase timeline (Awake at
+    /// the top stepping down through REM/Light to Deep, quiet risers tracing the transitions),
+    /// rendered by the shared design-system `Hypnogram` with its stage axis, hover tooltip, and
+    /// onset · midpoint · wake clock labels. Follows `selectedStage` so tapping a stage row above
+    /// highlights the same stage here. Purely additive presentation over the SAME intervals the
+    /// per-stage rows draw — the Hypnogram display-smooths at render time (default 300s), so
+    /// totals, percentages and stored data are untouched.
+    @ViewBuilder
+    private func sleepCyclesCard(_ night: Night, intervals: [SleepInterval]) -> some View {
+        ChartCard(
+            title: "Sleep cycles",
+            subtitle: String(localized: "The night's path through the stages on one timeline"),
+            height: 200,
+            tint: StrandPalette.restColor,
+            chart: {
+                Hypnogram(intervals: intervals,
+                          height: 168,
+                          showsStageAxis: true,
+                          showsHover: true,
+                          nightStart: night.onsetDate,
+                          showsTimeAxis: true,
+                          highlightedStage: selectedStage)
+            }
+        )
     }
 
     /// WHOOP's hero pair for the night: HOURS OF SLEEP and RESTORATIVE SLEEP (deep + REM), each

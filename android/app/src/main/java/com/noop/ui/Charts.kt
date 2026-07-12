@@ -69,8 +69,9 @@ private fun seriesSummary(values: List<Double>, noun: String): String {
         "low ${formatLineValue(lo)}, high ${formatLineValue(hi)}"
 }
 
-/** Per-stage total summary for the Hypnogram (deep · REM · light · awake, naming only stages present). */
-private fun hypnogramSummary(stages: List<Pair<String, Float>>): String {
+/** Per-stage total summary for the Hypnogram (deep · REM · light · awake, naming only stages present).
+ *  Internal so the SleepScreen sleep-cycles staircase reuses the SAME collapsed a11y summary. */
+internal fun hypnogramSummary(stages: List<Pair<String, Float>>): String {
     if (stages.isEmpty()) return "Sleep stages, no data"
     // Weights are relative widths, not minutes, so report the share of the night in each stage.
     val total = stages.map { if (it.second.isFinite() && it.second > 0f) it.second else 0f }.sum()

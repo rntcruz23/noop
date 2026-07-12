@@ -90,6 +90,15 @@ that otherwise reproduced flags 1–15 byte-for-byte in this order.
   we map the type-`0x2F` layout (documented as HR @ byte 14, accel x/y/z float32 @ 37/41/45) and feed the
   motion into NOOP's existing v25-style sleep stager.
 
+## What your strap has proven (in-app)
+
+Capabilities a 5/MG demonstrates in a real session — live HR, a banking history sync, a fully-mapped
+record decode, an accepted R22 sequence — are remembered per strap and surfaced on the **Devices**
+card ("Verified on this strap") and atop **Settings → Experimental → WHOOP 5/MG**, alongside a
+"what feeds your scores" readout of which sensor inputs actually arrived in the last 24 hours. The
+claims are evidence-scoped: they are keyed to the registry strap id, cleared with the device's data,
+never restored from a backup, and everything unproven keeps the blanket experimental wording.
+
 ## How to help (5.0 / MG owners)
 
 1. Update to the latest NOOP, **Settings → Experimental → "Unlock WHOOP 5/MG deep data (R22)"**.

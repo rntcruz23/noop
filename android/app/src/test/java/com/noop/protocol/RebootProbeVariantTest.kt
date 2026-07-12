@@ -67,8 +67,8 @@ class RebootProbeVariantTest {
         assertEquals("00", e.payload.hex())
     }
 
-    /** The two restart candidates carry the real, distinct wire opcodes (29 reboot, 32 power-cycle) — a
-     *  guard against a candidate silently pointing at the wrong CommandNumber. */
+    /** Each candidate carries the real, distinct wire opcode (29 reboot, 32 power-cycle) — a guard
+     *  against a candidate silently pointing at the wrong CommandNumber. */
     @Test fun candidatesUseExpectedWireOpcodes() {
         assertEquals(29, RebootProbeVariant.REBOOT_29_EMPTY.command.rawValue)
         assertEquals(32, RebootProbeVariant.POWER_CYCLE_32_EMPTY.command.rawValue)

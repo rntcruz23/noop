@@ -862,6 +862,28 @@ private fun Hero(
                     )
                 }
             }
+            // SLEEP CYCLES (additive): the whole night as ONE Apple-Health-style staircase timeline
+            // stepping between the Awake/REM/Light/Deep lanes — the "how the night flowed between
+            // stages" read the proportional strip above compresses away. Only for REAL persisted
+            // per-epoch segments (the synthesized architecture fallback has no true order to step
+            // through). Mirrors iOS SleepView.sleepCyclesCard; presentation-only — display smoothing
+            // happens at render time, totals and stored data untouched.
+            val cycleSegments = display.realSegments
+            if (cycleSegments != null && cycleSegments.size >= 2) {
+                ChartCard(
+                    title = "Sleep cycles",
+                    subtitle = "The night's path through the stages on one timeline",
+                    trailing = null,
+                    footer = {},
+                    tint = Palette.restColor,
+                ) {
+                    SleepCyclesChart(
+                        segments = cycleSegments,
+                        onsetTs = session?.effectiveStartTs,
+                        wakeTs = session?.endTs,
+                    )
+                }
+            }
         }
         // Naps card (#508/#518): the day's blocks OTHER than the main night, each editable / deletable
         // with the SAME mechanism main sleep uses, plus a Main / Nap(s) / Total split so what drives the
@@ -1342,6 +1364,191 @@ private fun HypnogramWithAxis(
             }
         }
     }
+}
+
+/**
+ * Apple-Health-style SLEEP CYCLES staircase: four stage lanes (Awake top → REM → Light → Deep
+ * bottom) with each segment drawn as a slim ribbon at its true time position and quiet vertical
+ * risers connecting consecutive stages, so the night reads as one continuous stepped line.
+ * [segments] are the ordered persisted per-epoch (stage, minutes) weights the strip above already
+ * draws; they are display-smoothed here exactly like the Swift Hypnogram (short fragments absorbed
+ * into the longer neighbour at render time — totals, percentages and stored data untouched). An
+ * onset · midpoint · wake clock row anchors the timeline when the session supplies timestamps.
+ * Mirrors iOS StrandDesign.Hypnogram / SleepView.sleepCyclesCard. Presentation-only.
+ */
+@Composable
+private fun SleepCyclesChart(
+    segments: List<Pair<String, Float>>,
+    onsetTs: Long?,
+    wakeTs: Long?,
+) {
+    // 5 min mirrors the Swift Hypnogram's default displaySmoothed(300s) — weights are minutes here.
+    val smoothed = remember(segments) { displaySmoothedWeights(segments, minMinutes = 5f) }
+    // The Swift Hypnogram's lane order (stagesTopToBottom): awake rank 0 (top) → deep rank 3 (bottom).
+    val laneNames = listOf("awake", "rem", "light", "deep")
+    val laneLabels = listOf("Awake", "REM", "Light", "Deep")
+    // ONE collapsed semantics node (per-stage share of the night) — the twin of the iOS Hypnogram's
+    // single collapsed VoiceOver element; the a11y walk never visits per-segment children.
+    val axSummary = hypnogramSummary(smoothed)
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.space6)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Metrics.space12)) {
+            // Stage axis: one label per lane, centred on its band (the Swift Hypnogram's 44pt column).
+            Column(modifier = Modifier.width(44.dp).height(168.dp)) {
+                laneLabels.forEach { label ->
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        Text(label, style = NoopType.footnote, color = Palette.textTertiary, maxLines = 1)
+                    }
+                }
+            }
+            Canvas(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(168.dp)
+                    .clearAndSetSemantics { contentDescription = axSummary },
+            ) {
+                val w = size.width
+                val h = size.height
+                if (w <= 0f || h <= 0f || smoothed.isEmpty()) return@Canvas
+                val step = h / 4f
+                fun laneRank(name: String): Int = when (name.trim().lowercase()) {
+                    "awake", "wake" -> 0
+                    "rem" -> 1
+                    "deep" -> 3
+                    else -> 2 // "light" + unknown → the light lane (stageColorFor's fallback tone)
+                }
+                fun laneY(rank: Int): Float = step * (rank + 0.5f)
+                // Faint per-stage lane bands so the eye maps height → stage even across gaps.
+                laneNames.forEachIndexed { rank, name ->
+                    val bandH = step * 0.74f
+                    drawRoundRect(
+                        color = stageColorFor(name).copy(alpha = 0.07f),
+                        topLeft = Offset(0f, laneY(rank) - bandH / 2f),
+                        size = Size(w, bandH),
+                        cornerRadius = CornerRadius(7.dp.toPx(), 7.dp.toPx()),
+                    )
+                }
+                val weights = smoothed.map { if (it.second.isFinite() && it.second > 0f) it.second else 0f }
+                val total = weights.sum()
+                if (total <= 0f) return@Canvas
+                // Slim uniform ribbons at their TRUE time position — no width floor beyond a hairline,
+                // so a brief stage stays a visible tick, never inflated into a dot (the Swift bandRect).
+                val thickness = 12.dp.toPx()
+                val radius = CornerRadius(2.5.dp.toPx(), 2.5.dp.toPx())
+                var x = 0f
+                smoothed.forEachIndexed { i, (name, _) ->
+                    val segW = w * (weights[i] / total)
+                    val rank = laneRank(name)
+                    drawRoundRect(
+                        color = stageColorFor(name),
+                        topLeft = Offset(x, laneY(rank) - thickness / 2f),
+                        size = Size(maxOf(segW, 2f), thickness),
+                        cornerRadius = radius,
+                    )
+                    // Quiet round-capped riser tracing the step to the NEXT stage's lane (Swift risers).
+                    if (i < smoothed.lastIndex) {
+                        val nextRank = laneRank(smoothed[i + 1].first)
+                        if (nextRank != rank) {
+                            drawLine(
+                                color = Palette.textTertiary.copy(alpha = 0.35f),
+                                start = Offset(x + segW, laneY(rank)),
+                                end = Offset(x + segW, laneY(nextRank)),
+                                strokeWidth = 1.5.dp.toPx(),
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                    }
+                    x += segW
+                }
+            }
+        }
+        // onset · midpoint · wake clock labels, inset past the 44dp axis column + the row spacing
+        // so the label row sits under the plot, not the axis.
+        if (onsetTs != null && wakeTs != null) {
+            Row(modifier = Modifier.fillMaxWidth().padding(start = 44.dp + Metrics.space12)) {
+                Text(
+                    clockTimeLabel(onsetTs),
+                    style = NoopType.footnote,
+                    color = Palette.textTertiary,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    clockTimeLabel((onsetTs + wakeTs) / 2L),
+                    style = NoopType.footnote,
+                    color = Palette.textTertiary,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    clockTimeLabel(wakeTs),
+                    style = NoopType.footnote,
+                    color = Palette.textTertiary,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Display smoothing for the sleep-cycles staircase — the Kotlin twin of the Swift
+ * `Hypnogram.displaySmoothed`, operating on ordered contiguous (stage, minutes) weights instead of
+ * start/end intervals: coalesce adjacent same-stage runs, then repeatedly absorb the SHORTEST
+ * sub-threshold fragment into its LONGER neighbour (ties into the previous one, matching Swift),
+ * re-coalescing after each pass, until every remaining block clears [minMinutes]. Render-only —
+ * totals and stored data are computed from the raw segments elsewhere; the summed weight is
+ * preserved exactly. Pure + unit-tested (SleepCyclesSmoothingTest).
+ */
+internal fun displaySmoothedWeights(
+    segments: List<Pair<String, Float>>,
+    minMinutes: Float,
+): List<Pair<String, Float>> {
+    val clean = segments.map { (n, w) -> n to (if (w.isFinite() && w > 0f) w else 0f) }
+    if (clean.size <= 2) return clean
+
+    fun coalesce(list: List<Pair<String, Float>>): MutableList<Pair<String, Float>> {
+        val out = ArrayList<Pair<String, Float>>(list.size)
+        for (seg in list) {
+            val last = out.lastOrNull()
+            if (last != null && last.first == seg.first) {
+                out[out.size - 1] = last.first to (last.second + seg.second)
+            } else {
+                out.add(seg)
+            }
+        }
+        return out
+    }
+
+    var ivs = coalesce(clean)
+    while (ivs.size > 1) {
+        val idx = ivs.indices
+            .filter { ivs[it].second < minMinutes }
+            .minByOrNull { ivs[it].second } ?: break
+        val victim = ivs[idx]
+        val prev = if (idx > 0) ivs[idx - 1] else null
+        val next = if (idx < ivs.size - 1) ivs[idx + 1] else null
+        when {
+            prev != null && next != null ->
+                // Absorb into the longer neighbour so the dominant surrounding stage wins.
+                if (prev.second >= next.second) {
+                    ivs[idx - 1] = prev.first to (prev.second + victim.second)
+                } else {
+                    ivs[idx + 1] = next.first to (next.second + victim.second)
+                }
+            prev != null -> ivs[idx - 1] = prev.first to (prev.second + victim.second)
+            next != null -> ivs[idx + 1] = next.first to (next.second + victim.second)
+            else -> return ivs
+        }
+        ivs.removeAt(idx)
+        ivs = coalesce(ivs)
+    }
+    return ivs
 }
 
 /**
@@ -2597,7 +2804,15 @@ internal fun selectNight(
     // above, so it is never mislabelled as a nap. `session` (the edit anchor) is already the main block, so
     // the bedtime label and the pencil were aligned — this aligns the chart to that same bedtime. (#736/#555)
     val onsetTsForHero = session.effectiveStartTs
-    val heroGroup = group.dropWhile { it.effectiveStartTs < onsetTsForHero && isPreOnsetAwakeStub(it) }
+    // #259: reference size for the "minor relative to the main block" stub test = the largest asleep span in
+    // the group (≈ the main block). A genuine biphasic first sleep is comparable to it and is kept; only a
+    // small stray lead carrying a few minutes of sleep is dropped, so the onset no longer jumps hours early.
+    val groupRefAsleepMin = group.maxOfOrNull { frag ->
+        parseSessionStages(frag.stagesJSON)?.let { it.light + it.deep + it.rem } ?: 0.0
+    } ?: 0.0
+    val heroGroup = group.dropWhile {
+        it.effectiveStartTs < onsetTsForHero && isPreOnsetAwakeStub(it, groupRefAsleepMin)
+    }
     val utcKey = AnalyticsEngine.dayString(session.endTs)
     val localKey = localDayString(session.endTs)
     val dayKey = listOf(utcKey, localKey).firstOrNull { key ->
@@ -2607,13 +2822,16 @@ internal fun selectNight(
     // hypnogram, and SUM their stage minutes for the hero. Built from `heroGroup` (the group minus a leading
     // spurious stub, #736) so the chart and minutes start at the displayed bedtime. Null for a single-block
     // hero → prior behaviour.
+    // #259: clamp each fragment's timeline to its effective onset too (matching the stage-minute clamp
+    // and the iOS decodeSegments clamp), so the hypnogram starts where the edited bedtime does instead of
+    // drawing pre-onset bars that contradict the clamped asleep total. No-op for non-edited nights.
     val groupSegments = if (heroGroup.size > 1) {
-        heroGroup.flatMap { parsePersistedSegments(it.stagesJSON).orEmpty() }
+        heroGroup.flatMap { parsePersistedSegments(SleepStageTotals.clampStagesToOnset(it.stagesJSON, it.effectiveStartTs)).orEmpty() }
             .sortedBy { it.start }
             .takeIf { it.size >= 2 }
     } else null
     val groupStages = if (heroGroup.size > 1) sumGroupStages(heroGroup) else null
-    val segments = (groupSegments ?: parsePersistedSegments(session.stagesJSON))
+    val segments = (groupSegments ?: parsePersistedSegments(SleepStageTotals.clampStagesToOnset(session.stagesJSON, session.effectiveStartTs)))
         ?.map { seg -> seg.stage to ((seg.end - seg.start) / 60f) }
     // #407: lay the GROUP's per-epoch motion fragment-by-fragment in `heroGroup` order (the same order
     // `groupSegments` lays the stage timeline), reading the already-chosen group's stored series. The
@@ -2681,17 +2899,30 @@ private const val PRE_ONSET_STUB_MAX_MIN = 240.0
  *  first sleep fragment of a biphasic night carries far more. Mirrors iOS SleepView.preOnsetStubAsleepMaxMin.
  *  (#736) */
 private const val PRE_ONSET_STUB_ASLEEP_MAX_MIN = 3.0
+/** A leading pre-onset fragment that carries SOME sleep is still spurious when it is minor RELATIVE to the
+ *  night's main block: its asleep minutes are below this fraction of the largest fragment's. A genuine
+ *  biphasic first sleep is comparable in size to the main block (well above this), so it is never dropped;
+ *  only a small stray lead (e.g. a brief early doze hours before the real sleep) is. This extends the
+ *  essentially-sleepless [PRE_ONSET_STUB_ASLEEP_MAX_MIN] rule (#736), which missed a lead carrying a few
+ *  minutes more than 3. Mirrors iOS SleepView.preOnsetStubMinorFrac. (#259) */
+private const val PRE_ONSET_STUB_MINOR_FRAC = 0.15
 
 /** A fragment is a spurious pre-onset awake stub when it is within the lie-in cap (<= [PRE_ONSET_STUB_MAX_MIN])
- *  and carries essentially no sleep (asleep minutes <= [PRE_ONSET_STUB_ASLEEP_MAX_MIN]). Used only to skip such
- *  a stub when it leads the main-night group, so the hero's hypnogram and minutes start at the displayed
- *  bedtime (the main block's onset) rather than before it. Mirrors iOS SleepView.isPreOnsetAwakeStub. (#736) */
-internal fun isPreOnsetAwakeStub(frag: SleepSession): Boolean {
+ *  and EITHER carries essentially no sleep (asleep minutes <= [PRE_ONSET_STUB_ASLEEP_MAX_MIN]) OR is minor
+ *  relative to the night's main block ([refAsleepMin], the group's largest asleep span): asleep minutes below
+ *  [PRE_ONSET_STUB_MINOR_FRAC] of it. Used only to skip such a stub when it leads the main-night group, so the
+ *  hero's hypnogram and minutes start at the displayed bedtime (the main block's onset) rather than before it.
+ *  [refAsleepMin] defaults to 0 (relative test off) so existing callers/tests are byte-identical. Mirrors iOS
+ *  SleepView.isPreOnsetAwakeStub. (#736 / #259) */
+internal fun isPreOnsetAwakeStub(frag: SleepSession, refAsleepMin: Double = 0.0): Boolean {
     val spanMin = (frag.endTs - frag.effectiveStartTs) / 60.0
     if (spanMin > PRE_ONSET_STUB_MAX_MIN) return false
     val stages = parseSessionStages(frag.stagesJSON)
     val asleepMin = stages?.let { it.light + it.deep + it.rem } ?: 0.0
-    return asleepMin <= PRE_ONSET_STUB_ASLEEP_MAX_MIN
+    if (asleepMin <= PRE_ONSET_STUB_ASLEEP_MAX_MIN) return true
+    // #259: also spurious when it carries some sleep but is minor relative to the main block (largest
+    // fragment). A genuine biphasic first sleep is comparable in size, so it stays and its onset stands.
+    return refAsleepMin > 0.0 && asleepMin < PRE_ONSET_STUB_MINOR_FRAC * refAsleepMin
 }
 
 /** SUM the per-stage minutes across a bridged main-night group, so the hero's stage breakdown reflects the
@@ -2700,7 +2931,8 @@ internal fun isPreOnsetAwakeStub(frag: SleepSession): Boolean {
 private fun sumGroupStages(group: List<SleepSession>): StageMins? {
     var aw = 0.0; var li = 0.0; var dp = 0.0; var rm = 0.0; var any = false
     for (frag in group) {
-        val s = parseSessionStages(frag.stagesJSON) ?: continue
+        // #259: each fragment's stages trimmed to its effective onset before summing (see buildSleepModel).
+        val s = parseSessionStages(SleepStageTotals.clampStagesToOnset(frag.stagesJSON, frag.effectiveStartTs)) ?: continue
         aw += s.awake; li += s.light; dp += s.deep; rm += s.rem; any = true
     }
     return if (any) StageMins(aw, li, dp, rm) else null
@@ -2823,7 +3055,10 @@ internal fun buildSleepModel(
     // (StagesVsTypical, Hypnogram footer) immediately without waiting on a rescore.
     val sessionStageMins = session
         ?.takeIf { AnalyticsEngine.dayString(it.endTs) == latest.day || localDayString(it.endTs) == latest.day }
-        ?.let { parseSessionStages(it.stagesJSON) }
+        // #259: trim to the EFFECTIVE onset before summing, so a hand-edited bedtime the raw was too sparse
+        // to re-stage (WHOOP 4.0) can't show pre-onset stages that push asleep past time-in-bed. No-op when
+        // the session already starts at its onset (the common case). Matches the analytics-side clamp.
+        ?.let { parseSessionStages(SleepStageTotals.clampStagesToOnset(it.stagesJSON, it.effectiveStartTs)) }
     val deep = heroStages?.deep ?: sessionStageMins?.deep ?: latest.deepMin ?: 0.0
     val rem = heroStages?.rem ?: sessionStageMins?.rem ?: latest.remMin ?: 0.0
     val light = heroStages?.light ?: sessionStageMins?.light ?: latest.lightMin ?: 0.0

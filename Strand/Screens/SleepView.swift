@@ -10,6 +10,9 @@ import WhoopStore
 //   1. HERO ChartCard "Last night" — the stage breakdown (Hypnogram if intervals
 //      reconstruct from stagesJSON, else a clean proportional stacked stage bar),
 //      trailing = total asleep, footer = REM/Deep/Light/Awake each "Xh Ym · NN%".
+//   1b. "Sleep cycles" ChartCard — the SAME night as ONE Apple-Health-style staircase
+//      timeline (the shared StrandDesign Hypnogram: Awake top → Deep bottom, risers
+//      between stages). Additive under the stage rows; only when intervals reconstruct.
 //   2. A uniform grid of fixed StatTiles, each with a sparkline and a "vs typical"
 //      caption: Performance, Efficiency, Consistency, Hours vs Needed, Restorative,
 //      Respiratory, Sleep Debt.
@@ -672,6 +675,16 @@ struct SleepView: View {
             if intervals.count >= 2 {
                 motionStrip(night)
             }
+            // SLEEP CYCLES (additive): the whole night as ONE Apple-Health-style staircase timeline
+            // stepping between the Awake/REM/Light/Deep lanes — the "how the night flowed between
+            // stages" read the per-stage rows above deliberately split apart. Drawn with the shared
+            // StrandDesign Hypnogram (display-smoothed at render time; totals, percentages and
+            // stored data untouched) and following the rows' tap-a-stage highlight. Only when a
+            // real timeline reconstructs — the proportional stage-bar fallback has no per-epoch
+            // order to step through.
+            if intervals.count >= 2 {
+                sleepCyclesCard(night, intervals: intervals)
+            }
             // H9 — when the engine's Rest confidence flags this night's staging as low-confidence (a
             // high-efficiency night whose deep+REM share is implausibly low → a likely staging miss, not
             // a real night with no restorative sleep), say so honestly under the breakdown rather than
@@ -1077,6 +1090,32 @@ struct SleepView: View {
                 .frame(height: 30, alignment: .topLeading)
                 .padding(.horizontal, 2)
         }
+    }
+
+    /// The Apple-Health-style "Sleep cycles" card: the night as ONE staircase timeline (Awake at
+    /// the top stepping down through REM/Light to Deep, quiet risers tracing the transitions),
+    /// rendered by the shared design-system `Hypnogram` with its stage axis, hover tooltip, and
+    /// onset · midpoint · wake clock labels. Follows `selectedStage` so tapping a stage row above
+    /// highlights the same stage here. Purely additive presentation over the SAME intervals the
+    /// per-stage rows draw — the Hypnogram display-smooths at render time (default 300s), so
+    /// totals, percentages and stored data are untouched.
+    @ViewBuilder
+    private func sleepCyclesCard(_ night: Night, intervals: [SleepInterval]) -> some View {
+        ChartCard(
+            title: "Sleep cycles",
+            subtitle: String(localized: "The night's path through the stages on one timeline"),
+            height: 200,
+            tint: StrandPalette.restColor,
+            chart: {
+                Hypnogram(intervals: intervals,
+                          height: 168,
+                          showsStageAxis: true,
+                          showsHover: true,
+                          nightStart: night.onsetDate,
+                          showsTimeAxis: true,
+                          highlightedStage: selectedStage)
+            }
+        )
     }
 
     /// WHOOP's hero pair for the night: HOURS OF SLEEP and RESTORATIVE SLEEP (deep + REM), each
@@ -1904,9 +1943,13 @@ struct SleepView: View {
     private func nightOnsetTs(_ group: [CachedSleepSession]) -> Int {
         // group is ascending by effective onset; first is the earliest fragment.
         guard let first = group.first else { return 0 }
+        // #259: reference size for the "minor relative to the main block" test = the group's largest asleep
+        // span (≈ the main block). A genuine biphasic first sleep is comparable and is kept; a small stray
+        // lead is skipped, so the onset no longer jumps hours early.
+        let refAsleepMin = group.map { decodeStages($0.stagesJSON)?.asleep ?? 0 }.max() ?? 0
         // Walk past any leading spurious pre-onset awake stubs to the first real-sleep fragment.
         for frag in group {
-            if !isPreOnsetAwakeStub(frag) { return frag.effectiveStartTs }
+            if !isPreOnsetAwakeStub(frag, refAsleepMin: refAsleepMin) { return frag.effectiveStartTs }
         }
         // Whole group is stub-like (shouldn't reach the hero, mergeDay gates on stages.asleep > 0): keep the
         // earliest onset rather than inventing one.
@@ -1916,10 +1959,10 @@ struct SleepView: View {
     /// A fragment is a spurious pre-onset awake stub when it's within the lie-in cap (<= `preOnsetStubMaxMin`)
     /// and carries essentially no sleep (asleep minutes <= `preOnsetStubAsleepMaxMin`). Used only to skip such
     /// a stub when it leads the main-night group, so the displayed bedtime tracks where real sleep began. (#736)
-    private func isPreOnsetAwakeStub(_ frag: CachedSleepSession) -> Bool {
+    private func isPreOnsetAwakeStub(_ frag: CachedSleepSession, refAsleepMin: Double = 0) -> Bool {
         let spanMin = Double(frag.endTs - frag.effectiveStartTs) / 60.0
         let asleepMin = decodeStages(frag.stagesJSON)?.asleep ?? 0
-        return SleepView.isPreOnsetAwakeStub(spanMin: spanMin, asleepMin: asleepMin)
+        return SleepView.isPreOnsetAwakeStub(spanMin: spanMin, asleepMin: asleepMin, refAsleepMin: refAsleepMin)
     }
 
     /// Longest a leading block can be and still be treated as a spurious pre-sleep awake stub (lying in bed
@@ -1931,11 +1974,22 @@ struct SleepView: View {
     /// Most asleep minutes a fragment can carry and still count as a (sleepless) pre-onset awake stub. A real
     /// first sleep fragment of a biphasic night carries far more, so it's never mistaken for a stub. (#736)
     static let preOnsetStubAsleepMaxMin: Double = 3
+    /// A leading pre-onset fragment carrying SOME sleep is still spurious when it is minor RELATIVE to the
+    /// night's main block: its asleep minutes are below this fraction of the largest fragment's. A genuine
+    /// biphasic first sleep is comparable to the main block (well above this) and is kept; only a small stray
+    /// lead is dropped. Extends the essentially-sleepless `preOnsetStubAsleepMaxMin` rule (#736), which missed
+    /// a lead carrying a few minutes more than 3. Mirrors Android PRE_ONSET_STUB_MINOR_FRAC. (#259)
+    static let preOnsetStubMinorFrac: Double = 0.15
 
     /// Pure stub test on a fragment's span + asleep minutes, so the rule is unit-testable without decoding
-    /// JSON or building a view. BRIEF and essentially sleepless = a spurious pre-onset awake stub. (#736)
-    static func isPreOnsetAwakeStub(spanMin: Double, asleepMin: Double) -> Bool {
-        spanMin <= preOnsetStubMaxMin && asleepMin <= preOnsetStubAsleepMaxMin
+    /// JSON or building a view. Spurious when BRIEF and EITHER essentially sleepless OR minor relative to the
+    /// main block (`refAsleepMin`, the group's largest asleep span): asleep below `preOnsetStubMinorFrac` of
+    /// it. `refAsleepMin` defaults to 0 (relative test off) so existing callers/tests are byte-identical.
+    /// (#736 / #259)
+    static func isPreOnsetAwakeStub(spanMin: Double, asleepMin: Double, refAsleepMin: Double = 0) -> Bool {
+        guard spanMin <= preOnsetStubMaxMin else { return false }
+        if asleepMin <= preOnsetStubAsleepMaxMin { return true }
+        return refAsleepMin > 0 && asleepMin < preOnsetStubMinorFrac * refAsleepMin
     }
 
     /// The index into an ascending-by-onset group whose fragment supplies the DISPLAYED bedtime: the first
@@ -1943,9 +1997,10 @@ struct SleepView: View {
     /// stub-like. Pure mirror of `nightOnsetTs`'s walk, driven by per-fragment (spanMin, asleepMin) so a
     /// golden test can pin the #736 behaviour without view internals. (#736)
     static func nightOnsetIndex(spansMin: [Double], asleepsMin: [Double]) -> Int {
+        let refAsleepMin = asleepsMin.max() ?? 0
         for i in spansMin.indices {
             let asleep = i < asleepsMin.count ? asleepsMin[i] : 0
-            if !isPreOnsetAwakeStub(spanMin: spansMin[i], asleepMin: asleep) { return i }
+            if !isPreOnsetAwakeStub(spanMin: spansMin[i], asleepMin: asleep, refAsleepMin: refAsleepMin) { return i }
         }
         return 0
     }
@@ -2403,9 +2458,14 @@ struct SleepView: View {
         var stages = Stages(awake: 0, light: 0, deep: 0, rem: 0)
         var intervals: [SleepInterval] = []
         for seg in arr {
-            guard let start = (seg["start"] as? NSNumber)?.intValue,
-                  let end = (seg["end"] as? NSNumber)?.intValue, end > start,
+            guard let rawStart = (seg["start"] as? NSNumber)?.intValue,
+                  let end = (seg["end"] as? NSNumber)?.intValue,
                   let name = seg["stage"] as? String else { continue }
+            // #259: trim each segment to the effective onset (`sessionStart`) so a hand-edited bedtime the
+            // raw was too sparse to re-stage (WHOOP 4.0) can't sum pre-onset stages past time-in-bed — nor
+            // draw bars before the onset. No-op when segments already start at/after it (the common case).
+            let start = max(rawStart, sessionStart)
+            guard end > start else { continue }
             let minutes = Double(end - start) / 60.0
             let stage: SleepStage
             switch name {

@@ -18,6 +18,42 @@
       "screenshotURLs": [],
       "versions": [
         {
+          "version": "8.6.5",
+          "buildVersion": "187",
+          "date": "2026-07-12",
+          "localizedDescription": "NOOP 8.6.5. See the release notes for what changed.",
+          "downloadURL": "https://github.com/rntcruz23/noop/releases/download/v8.6.5/NOOP-ios-unsigned-v8.6.5.ipa",
+          "size": 15062091,
+          "minOSVersion": "17.0"
+        },
+        {
+          "version": "8.6.4",
+          "buildVersion": "186",
+          "date": "2026-07-12",
+          "localizedDescription": "NOOP 8.6.4. See the release notes for what changed.",
+          "downloadURL": "https://github.com/rntcruz23/noop/releases/download/v8.6.4/NOOP-ios-unsigned-v8.6.4.ipa",
+          "size": 15061464,
+          "minOSVersion": "17.0"
+        },
+        {
+          "version": "8.6.3",
+          "buildVersion": "185",
+          "date": "2026-07-11",
+          "localizedDescription": "NOOP 8.6.3. See the release notes for what changed.",
+          "downloadURL": "https://github.com/rntcruz23/noop/releases/download/v8.6.3/NOOP-ios-unsigned-v8.6.3.ipa",
+          "size": 15059644,
+          "minOSVersion": "17.0"
+        },
+        {
+          "version": "8.6.2",
+          "buildVersion": "184",
+          "date": "2026-07-11",
+          "localizedDescription": "NOOP 8.6.2. See the release notes for what changed.",
+          "downloadURL": "https://github.com/ryanbr/noop/releases/download/v8.6.2/NOOP-ios-unsigned-v8.6.2.ipa",
+          "size": 15028423,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "8.6.1",
           "buildVersion": "183",
           "date": "2026-07-10",
@@ -1261,12 +1297,12 @@
           "NSHealthUpdateUsageDescription": "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         }
       },
-      "version": "8.6.1",
-      "buildVersion": "183",
-      "versionDate": "2026-07-10",
-      "versionDescription": "NOOP 8.6.1. See the release notes for what changed.",
-      "downloadURL": "https://github.com/ryanbr/noop/releases/download/v8.6.1/NOOP-ios-unsigned-v8.6.1.ipa",
-      "size": 14964263,
+      "version": "8.6.5",
+      "buildVersion": "187",
+      "versionDate": "2026-07-12",
+      "versionDescription": "NOOP 8.6.5. See the release notes for what changed.",
+      "downloadURL": "https://github.com/rntcruz23/noop/releases/download/v8.6.5/NOOP-ios-unsigned-v8.6.5.ipa",
+      "size": 15062091,
       "minOSVersion": "17.0"
     }
   ],

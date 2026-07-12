@@ -1131,6 +1131,15 @@ class WhoopBleClient(
     @Volatile
     private var connectHandshakeDone = false
 
+    /** A GET_CLOCK COMMAND_RESPONSE arrived on THIS 5/MG connection. The reply fires once, right at
+     *  the connect handshake — before a protocol check started mid-session could observe it — so a
+     *  real-hardware run graded the clock FAIL on a strap that was banking dated history (the
+     *  impossible-if-unclocked proof). startWhoop5Audit seeds from this. Reset in [reset]. @Volatile:
+     *  written on the GATT binder thread, read from startWhoop5Audit (main). Twin of macOS
+     *  BLEManager.whoop5ClockReplySeen. */
+    @Volatile
+    private var whoop5ClockReplySeen = false
+
     /** True when the user asked to disconnect; suppresses the auto-rescan (Swift `intentionalDisconnect`).
      *  Written on the main looper (connect/disconnect/keep-alive bounce) and read on the GATT binder
      *  thread (handleDisconnect), so it must be @Volatile for cross-thread visibility. */
@@ -3640,6 +3649,11 @@ class WhoopBleClient(
         if (connectedFamily != DeviceFamily.WHOOP5) return
         if (frame.size <= 10) return
         val type = frame[8].toInt() and 0xFF
+        // Clock-path proof, remembered per connection (not audit-gated): the GET_CLOCK reply fires
+        // once at the connect handshake, so a protocol check started later must seed from this flag.
+        if (type == 0x24 && (frame[10].toInt() and 0xFF) == CommandNumber.GET_CLOCK.rawValue) {
+            whoop5ClockReplySeen = true
+        }
         if (type == 0x24 && (frame[10].toInt() and 0xFF) == CommandNumber.SET_CONFIG.rawValue) {
             val n = _state.value.r22FlagsAccepted + 1
             _state.update { it.copy(r22FlagsAccepted = n) }
@@ -4294,6 +4308,13 @@ class WhoopBleClient(
         if (connectedFamily == DeviceFamily.WHOOP5 && s.connected) {
             if (connectHandshakeDone) whoop5Audit.noteHandshake()
             if (s.bonded || s.encryptedBond) whoop5Audit.noteBond(encrypted = s.encryptedBond)
+            if (whoop5ClockReplySeen) whoop5Audit.noteClockCorrelated()
+            // Grade the clock LIVE too: GET_CLOCK is a pure read (it changes no strap state) and is
+            // the same request every connect already sends. Covers a check started on a connection
+            // whose one handshake-time reply predates this process remembering it.
+            if (s.encryptedBond) {
+                send(CommandNumber.GET_CLOCK, byteArrayOf(), withResponse = true)
+            }
         }
         _state.update { it.copy(whoop5AuditActive = true, whoop5AuditSnapshot = whoop5Audit.snapshot()) }
         log("Protocol check: started (5/MG session audit; read-only, see #103)")
@@ -5552,6 +5573,7 @@ class WhoopBleClient(
     private fun reset() {
         didBond = false
         connectHandshakeDone = false
+        whoop5ClockReplySeen = false   // per-connection; the next connect's GET_CLOCK re-proves it
         seq.set(0)
         writeQueue.clear()
         cccdQueue.clear()

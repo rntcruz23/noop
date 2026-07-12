@@ -676,6 +676,11 @@ public final class BLEManager: NSObject, ObservableObject {
     /// startBackfillTimer). Stops the HISTORY_END acks re-entering didWriteValueFor from re-triggering
     /// the offload mid-stream (the 5/MG twin of the WHOOP4 connectHandshakeDone ack-storm guard).
     private var whoop5SessionStarted = false
+    /// A GET_CLOCK COMMAND_RESPONSE arrived on THIS 5/MG connection. The reply fires once, right at
+    /// the connect handshake — before a protocol check started mid-session could observe it — so a
+    /// real-hardware run graded the clock FAIL on a strap that was banking dated history (the
+    /// impossible-if-unclocked proof). startWhoop5Audit seeds from this instead. Reset on disconnect.
+    private var whoop5ClockReplySeen = false
     /// Backfill ACKs can arrive hundreds or thousands of times in one offload. Keep the strap log
     /// readable and avoid forcing SwiftUI to auto-scroll on every ACK row.
     private var historicalAckLogCounter = 0
@@ -2045,6 +2050,11 @@ public final class BLEManager: NSObject, ObservableObject {
         // entirely, so counting it as a "deep packet" gave 4.0 owners a bogus deep-data counter (#346).
         guard selectedModel.deviceFamily == .whoop5 else { return }
         guard frame.count > 10 else { return }
+        // Clock-path proof, remembered per connection (not audit-gated): the GET_CLOCK reply fires
+        // once at the connect handshake, so a protocol check started later must seed from this flag.
+        if frame[8] == 0x24, frame[10] == WhoopCommand.getClock.rawValue {
+            whoop5ClockReplySeen = true
+        }
         if frame[8] == 0x24, frame[10] == WhoopCommand.setConfig.rawValue {
             state.r22FlagsAccepted += 1
             auditNote { $0.noteR22FlagAck() }   // protocol check (#103): one enable_r22 flag acked
@@ -2100,6 +2110,13 @@ public final class BLEManager: NSObject, ObservableObject {
         if selectedModel.deviceFamily == .whoop5, state.connected {
             if connectHandshakeDone { whoop5Audit.noteHandshake() }
             if state.bonded || state.encryptedBond { whoop5Audit.noteBond(encrypted: state.encryptedBond) }
+            if whoop5ClockReplySeen { whoop5Audit.noteClockCorrelated() }
+            // Grade the clock LIVE too: GET_CLOCK is a pure read (it changes no strap state) and is
+            // the same request every connect already sends. Covers a check started on a connection
+            // whose one handshake-time reply predates this process remembering it.
+            if state.encryptedBond {
+                send(.getClock, payload: [])
+            }
         }
         state.whoop5AuditSnapshot = whoop5Audit.snapshot()
         log("Protocol check: started (5/MG session audit; read-only, see #103)")
@@ -3029,6 +3046,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         // stream comes back automatically.
         realtimeArmed = false
         whoop5SessionStarted = false
+        whoop5ClockReplySeen = false   // per-connection; the next connect's GET_CLOCK re-proves it
         clockRequested = false
         connectHandshakeDone = false
         realtimeArmedAt = nil   // cleared after the marginal-radio detector above read it (#80)

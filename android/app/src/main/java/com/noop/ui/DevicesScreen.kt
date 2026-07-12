@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -115,6 +116,25 @@ fun DevicesScreen(
     }
     LaunchedEffect(Unit) { devices = viewModel.pairedDevices() }
 
+    // Evidence + input coverage for the ACTIVE strap card (#103): read on entry and again after
+    // each completed sync (lastSyncAt moves), so the card follows the data. Facts only exist for a
+    // strap that demonstrated them; coverage is WHOOP-only (a generic HR strap stores HR under a
+    // different source model and would read as misleading zeros). Twin of the iOS loadStrapInsights.
+    var activeVerified by remember { mutableStateOf<com.noop.ble.Whoop5Evidence.Facts?>(null) }
+    var activeInputsSummary by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(devices, live.lastSyncAt) {
+        val active = devices?.firstOrNull { it.status == DeviceStatus.active.name }
+        if (active == null || !SourceCoordinator.isWhoop(active)) {
+            activeVerified = null
+            activeInputsSummary = null
+            return@LaunchedEffect
+        }
+        val facts = viewModel.whoop5EvidenceFacts(active.id)
+        activeVerified = if (facts.anyVerified) facts else null
+        val rows = com.noop.analytics.InputCoverage.classify(viewModel.inputCoverageCounts())
+        activeInputsSummary = com.noop.analytics.InputCoverage.summary(rows)
+    }
+
     // Sheets / dialogs (mirror the Swift @State targets).
     var showAddWizard by remember { mutableStateOf(false) }
     var switchTarget by remember { mutableStateOf<PairedDeviceRow?>(null) }
@@ -172,6 +192,10 @@ fun DevicesScreen(
                 // Firmware version from the connect handshake: only for the active, connected strap.
                 liveFirmware = if (device.status == DeviceStatus.active.name && live.connected)
                     live.strapFirmware else null,
+                // Evidence + coverage belong to the ACTIVE strap card only (#103); both null
+                // elsewhere so paired-but-idle cards never carry another strap's proof.
+                verifiedFacts = if (device.status == DeviceStatus.active.name) activeVerified else null,
+                inputsSummary = if (device.status == DeviceStatus.active.name) activeInputsSummary else null,
                 onMakeActive = { switchTarget = device },
                 onRename = { renameTarget = device },
                 onRemove = { removeTarget = device },
@@ -351,6 +375,11 @@ private fun DeviceCard(
     /** The active+connected strap's firmware version (from the connect handshake). null when not
      *  active/connected, or for a source that reports no firmware (e.g. a non-WHOOP strap). */
     liveFirmware: String? = null,
+    /** Per-strap proven capability facts (#103) — the "Verified on this strap" section. null when
+     *  nothing is verified (or not the active card), so no section renders. */
+    verifiedFacts: com.noop.ble.Whoop5Evidence.Facts? = null,
+    /** "What feeds your scores": the last-24h input-coverage summary line (#103). Active WHOOP only. */
+    inputsSummary: String? = null,
     onMakeActive: () -> Unit,
     onRename: () -> Unit,
     onRemove: (() -> Unit)?,
@@ -432,6 +461,21 @@ private fun DeviceCard(
                 Text(profile.footnote, style = NoopType.footnote, color = Palette.textTertiary)
             }
 
+            // Evidence-based capability status (#103): what THIS strap has demonstrated, stated only
+            // as widely as the proof. Complements the static per-model profile above — the profile
+            // says what the model can do, this says what this unit has actually done.
+            if (verifiedFacts != null) {
+                VerifiedSection(verifiedFacts)
+            }
+            // "What feeds your scores": which sensor inputs actually arrived in the last 24 h, so
+            // the depth of sleep/recovery analysis can be judged instead of assumed.
+            if (inputsSummary != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Overline("Inputs · last 24h")
+                    Text(inputsSummary, style = NoopType.footnote, color = Palette.textTertiary)
+                }
+            }
+
             // Live battery as a small liquid TUBE — the active+connected device's reported % (WHOOP, a
             // generic strap or an FTMS machine all funnel into live.batteryPct). A genuine single-value
             // progress bar, so a static (posed) LiquidTube is exactly right; it replaces the "· Battery x%"
@@ -486,6 +530,40 @@ private fun DeviceCard(
         ) {
             body()
         }
+    }
+}
+
+/**
+ * The "Verified on this strap" rows (#103): each line exists only when the strap demonstrated the
+ * capability in a real session, so this section can never over-claim. Twin of the iOS
+ * DeviceCard.verifiedSection.
+ */
+@Composable
+private fun VerifiedSection(f: com.noop.ble.Whoop5Evidence.Facts) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Overline("Verified on this strap")
+        f.historyAt?.let {
+            VerifiedRow("History sync — ${f.historyRows} records banked ${relativeAgo(it)}")
+        }
+        if (f.decodeCleanAt != null) VerifiedRow("Record decode — every layout this strap sends is understood")
+        if (f.r22AcceptedAt != null) VerifiedRow("Deep-data flags (R22) — accepted by the strap")
+        if (f.liveHRAt != null) VerifiedRow("Live heart rate — streams over the standard profile")
+    }
+}
+
+@Composable
+private fun VerifiedRow(text: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Verified,
+            contentDescription = null,
+            tint = Palette.statusPositive,
+            modifier = Modifier.size(14.dp),
+        )
+        Text(text, style = NoopType.footnote, color = Palette.textSecondary)
     }
 }
 

@@ -527,6 +527,28 @@ final class Repository: ObservableObject {
     /// Expose the shared store handle (used by the importer to persist mapped rows).
     func storeHandle() async -> WhoopStore? { await ensureStore() }
 
+    /// Per-stream sample counts for the ACTIVE strap over the last 24 h, each capped at its
+    /// `InputCoverage.fetchLimit` (the cap is exactly the "regular" threshold, so no query ever
+    /// pulls a full day of ~1 Hz rows to render one card line). Feed for the Devices card's
+    /// "what feeds your scores" readout (#103). Pure store reads under the registry-resolved
+    /// `deviceId`; nil until the store opens. Twin: AppViewModel.inputCoverageCounts.
+    func inputCoverageCounts() async -> [String: Int]? {
+        guard let store = await ensureStore() else { return nil }
+        let to = Int(Date().timeIntervalSince1970)
+        let from = to - 24 * 3600
+        let id = deviceId
+        func cap(_ streamId: String) -> Int { InputCoverage.fetchLimit(streamId) }
+        var counts: [String: Int] = [:]
+        counts["hr"] = (try? await store.hrSamples(deviceId: id, from: from, to: to, limit: cap("hr")))?.count ?? 0
+        counts["rr"] = (try? await store.rrIntervals(deviceId: id, from: from, to: to, limit: cap("rr")))?.count ?? 0
+        counts["motion"] = (try? await store.gravitySamples(deviceId: id, from: from, to: to, limit: cap("motion")))?.count ?? 0
+        counts["skin_temp"] = (try? await store.skinTempSamples(deviceId: id, from: from, to: to, limit: cap("skin_temp")))?.count ?? 0
+        counts["resp"] = (try? await store.respSamples(deviceId: id, from: from, to: to, limit: cap("resp")))?.count ?? 0
+        counts["spo2"] = (try? await store.spo2Samples(deviceId: id, from: from, to: to, limit: cap("spo2")))?.count ?? 0
+        counts["steps"] = (try? await store.stepSamples(deviceId: id, from: from, to: to, limit: cap("steps")))?.count ?? 0
+        return counts
+    }
+
     /// CAPTURE-D (#797): the on-device DATA VOLUME read FRESH from the STORE (never the `@Published`
     /// dashboard caches), for the Display & Performance test mode's `dataVolume` line. dbRows is the raw
     /// decoded-stream footprint; importedDays is the count of imported daily-metric rows under the active

@@ -143,8 +143,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun renamePairedDevice(id: String, nickname: String?) =
         noopApp.deviceRegistry.rename(id, nickname)
 
+    /** Per-strap proven 5/MG capability facts (#103) for the Devices card + Settings summary. */
+    fun whoop5EvidenceFacts(id: String): com.noop.ble.Whoop5Evidence.Facts =
+        com.noop.ble.Whoop5Evidence.from(appContext).facts(id)
+
+    /** Per-stream sample counts for the ACTIVE strap over the last 24 h, each capped at its
+     *  [com.noop.analytics.InputCoverage.fetchLimit] (the cap is exactly the "regular" threshold,
+     *  so no query pulls a full day of ~1 Hz rows to render one card line). Feed for the Devices
+     *  card's "what feeds your scores" readout (#103). Twin of Repository.inputCoverageCounts. */
+    suspend fun inputCoverageCounts(): Map<String, Int> {
+        val to = System.currentTimeMillis() / 1000L
+        val from = to - 24 * 3600
+        val id = activeStrapId
+        fun cap(s: String) = com.noop.analytics.InputCoverage.fetchLimit(s)
+        return mapOf(
+            "hr" to repository.hrSamples(id, from, to, cap("hr")).size,
+            "rr" to repository.rrIntervals(id, from, to, cap("rr")).size,
+            "motion" to repository.gravitySamples(id, from, to, cap("motion")).size,
+            "skin_temp" to repository.skinTempSamples(id, from, to, cap("skin_temp")).size,
+            "resp" to repository.respSamples(id, from, to, cap("resp")).size,
+            "spo2" to repository.spo2Samples(id, from, to, cap("spo2")).size,
+            "steps" to repository.stepSamples(id, from, to, cap("steps")).size,
+        )
+    }
+
     /** Permanently delete all of a device's recorded data (its registry row is kept). */
-    suspend fun deletePairedDeviceData(id: String) = noopApp.deviceRegistry.deleteDeviceData(id)
+    suspend fun deletePairedDeviceData(id: String) {
+        noopApp.deviceRegistry.deleteDeviceData(id)
+        // Evidence goes with the data (#103): a later re-add must re-prove capabilities.
+        com.noop.ble.Whoop5Evidence.from(appContext).clear(id)
+    }
 
     /**
      * A DISCOVERY-ONLY [StandardHrSource] for the Add-a-strap wizard. It runs its OWN scan and never

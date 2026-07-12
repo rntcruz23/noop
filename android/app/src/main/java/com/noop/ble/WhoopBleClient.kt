@@ -1477,6 +1477,12 @@ class WhoopBleClient(
     /** Undecodable HISTORICAL_DATA record frames archived this CONNECTION (tallied in rejectedSink) —
      *  the protocol check's decode-quality input. Reset alongside the #174 per-session counters. */
     private var rejectedFramesThisConnection = 0
+    /** Per-strap proven 5/MG capability facts (#103) — see Whoop5Evidence for the honesty rules. */
+    private val whoop5Evidence by lazy { Whoop5Evidence.from(context) }
+    /** Once-per-connection guard for the Whoop5Evidence live-HR fact, so the ~1 Hz standard-HR path
+     *  pays one prefs write per connection, not one per heartbeat. Reset in [reset]. */
+    @Volatile
+    private var evidenceLiveHRRecorded = false
     /** Genuine offload frames seen this session — zero at timeout means the strap never answered
      *  the history request at all (5/MG retry trigger, #78 fork). Main-looper only. */
     private var offloadFramesThisSession = 0
@@ -3664,7 +3670,10 @@ class WhoopBleClient(
             _state.update { it.copy(r22FlagsAccepted = n) }
             auditNote { it.noteR22FlagAck() }   // protocol check (#103): one enable_r22 flag acked
             val total = Whoop5Config.enableR22Sequence.size
-            if (n == total) log("Deep-data: strap ACCEPTED all $n/$total R22 flags ✓ — keep it on; watching for deep packets.")
+            if (n == total) {
+                log("Deep-data: strap ACCEPTED all $n/$total R22 flags ✓ — keep it on; watching for deep packets.")
+                whoop5Evidence.recordR22Accepted(deviceId)   // per-strap evidence (#103)
+            }
         }
         if (type == 0x2F) {
             if (duringOffload) {
@@ -3950,7 +3959,14 @@ class WhoopBleClient(
         if (hr in 30..220) {
             _state.update { it.copy(heartRate = hr) }
             // Protocol check (#103): count plausible 0x2A37 samples on a 5/MG (the live-HR proof).
-            if (connectedFamily == DeviceFamily.WHOOP5) auditNote { it.noteLiveHeartRateSample() }
+            if (connectedFamily == DeviceFamily.WHOOP5) {
+                auditNote { it.noteLiveHeartRateSample() }
+                // Per-strap evidence: live HR demonstrably works on this strap (once per connection).
+                if (!evidenceLiveHRRecorded) {
+                    evidenceLiveHRRecorded = true
+                    whoop5Evidence.recordLiveHR(deviceId)
+                }
+            }
             // EXPERIMENTAL WHOOP 5.0/MG: there is no confirmed-write bond for a 5/MG strap, so once
             // live HR actually streams over the standard profile we treat the link as established —
             // otherwise the UI sits on "Connecting…" forever even though data is flowing (issue #8).
@@ -5017,6 +5033,14 @@ class WhoopBleClient(
             // A real HISTORY_COMPLETE with banked records proves the 5/MG offload IS working — recover.
             whoop5EmptyOffload.reset()
             whoop5HistoryExperimental = false
+            // Per-strap evidence (#103): this strap just banked decoded history — remember it so the
+            // Devices card can say "verified" instead of the blanket experimental note. A clean
+            // decode fact needs BOTH rows landed AND zero undecodable records this connection; an
+            // empty or partially-archived sync proves nothing and records nothing.
+            whoop5Evidence.recordHistory(backfiller.sessionRowsPersisted, deviceId)
+            if (rejectedFramesThisConnection == 0 && backfiller.sessionRowsPersisted > 0) {
+                whoop5Evidence.recordDecodeClean(deviceId)
+            }
         }
         // Protocol check (#103): fold this offload's outcome into the running 5/MG audit. The
         // rejected tally is connection-cumulative, so the audit keeps the latest value, not a sum.
@@ -5553,6 +5577,7 @@ class WhoopBleClient(
         didBond = false
         connectHandshakeDone = false
         whoop5ClockReplySeen = false   // per-connection; the next connect's GET_CLOCK re-proves it
+        evidenceLiveHRRecorded = false
         seq.set(0)
         writeQueue.clear()
         cccdQueue.clear()

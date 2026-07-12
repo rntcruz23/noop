@@ -681,6 +681,9 @@ public final class BLEManager: NSObject, ObservableObject {
     /// real-hardware run graded the clock FAIL on a strap that was banking dated history (the
     /// impossible-if-unclocked proof). startWhoop5Audit seeds from this instead. Reset on disconnect.
     private var whoop5ClockReplySeen = false
+    /// Once-per-connection guard for the Whoop5Evidence live-HR fact, so the ~1 Hz standard-HR path
+    /// pays one UserDefaults write per connection, not one per heartbeat. Reset on disconnect.
+    private var evidenceLiveHRRecorded = false
     /// Backfill ACKs can arrive hundreds or thousands of times in one offload. Keep the strap log
     /// readable and avoid forcing SwiftUI to auto-scroll on every ACK row.
     private var historicalAckLogCounter = 0
@@ -1744,6 +1747,15 @@ public final class BLEManager: NSObject, ObservableObject {
             if selectedModel.deviceFamily == .whoop5, bankedSensorRecords {
                 whoop5EmptyOffload.reset()
                 state.historySyncExperimental = false
+                // Per-strap evidence (#103): this strap just banked decoded history — remember it so
+                // the Devices card can say "verified" instead of the blanket experimental note. A
+                // clean decode fact needs BOTH rows landed AND zero undecodable records; an empty or
+                // partially-archived sync proves nothing and records nothing.
+                Whoop5Evidence.recordHistory(rows: backfiller?.sessionRowsPersisted ?? 0,
+                                             deviceId: deviceId)
+                if archived + unarchived == 0, (backfiller?.sessionRowsPersisted ?? 0) > 0 {
+                    Whoop5Evidence.recordDecodeClean(deviceId: deviceId)
+                }
             }
             UserDefaults.standard.set(state.lastSyncedAt, forKey: "lastSyncedAt")
             // NOTE: the auto-continue streak is NOT reset here. A HISTORY_COMPLETE is no longer assumed to
@@ -2061,6 +2073,7 @@ public final class BLEManager: NSObject, ObservableObject {
             let total = Whoop5Config.enableR22Sequence.count
             if state.r22FlagsAccepted == total {
                 log("Deep-data: strap ACCEPTED all \(total)/\(total) R22 flags ✓ — keep it on; watching for deep packets.")
+                Whoop5Evidence.recordR22Accepted(deviceId: deviceId)   // per-strap evidence (#103)
             }
         }
         if frame[8] == 0x2F {
@@ -2841,6 +2854,11 @@ public final class BLEManager: NSObject, ObservableObject {
         // Protocol check (#103): count plausible 0x2A37 samples on a 5/MG (the live-HR proof).
         if selectedModel.deviceFamily == .whoop5, m.hr >= 30, m.hr <= 220 {
             auditNote { $0.noteLiveHeartRateSample() }
+            // Per-strap evidence: live HR demonstrably works on this strap (once per connection).
+            if !evidenceLiveHRRecorded {
+                evidenceLiveHRRecorded = true
+                Whoop5Evidence.recordLiveHR(deviceId: deviceId)
+            }
         }
     }
 }
@@ -3039,6 +3057,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         realtimeArmed = false
         whoop5SessionStarted = false
         whoop5ClockReplySeen = false   // per-connection; the next connect's GET_CLOCK re-proves it
+        evidenceLiveHRRecorded = false
         clockRequested = false
         connectHandshakeDone = false
         realtimeArmedAt = nil   // cleared after the marginal-radio detector above read it (#80)

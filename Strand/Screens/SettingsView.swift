@@ -1266,6 +1266,21 @@ struct SettingsView: View {
             blurb: "Live heart rate already works on a WHOOP 5/MG strap. These probes go further and try to coax more out of it. They are guesses, off by default, and only ever touch a 5/MG strap. WHOOP 4.0 is never affected."
         ) {
             VStack(alignment: .leading, spacing: NoopMetrics.rowSpacing) {
+                // Evidence-based status (#103): once THIS strap has demonstrated a capability, say so
+                // here — the blanket "experimental" framing above stays for everything unproven.
+                if let verified = fiveMGVerifiedLine {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundStyle(StrandPalette.statusPositive)
+                            .accessibilityHidden(true)
+                        Text(verified)
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.statusPositive)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Divider().overlay(StrandPalette.hairline)
+                }
+
                 Toggle(isOn: $puffinExperiments) {
                     Text("Try WHOOP 5/MG protocol probes")
                         .font(StrandFont.subhead)
@@ -1405,6 +1420,19 @@ struct SettingsView: View {
                 protocolCheckSection
             }
         }
+    }
+
+    /// The evidence summary for the ACTIVE strap (#103), nil when nothing is proven yet — so the
+    /// card leads with facts where they exist and stays generic where they don't.
+    private var fiveMGVerifiedLine: String? {
+        let f = Whoop5Evidence.facts(for: model.ble.deviceId)
+        guard f.anyVerified else { return nil }
+        var parts: [String] = []
+        if f.historyAt != nil { parts.append(String(localized: "history sync (\(f.historyRows) records)")) }
+        if f.decodeCleanAt != nil { parts.append(String(localized: "record decode")) }
+        if f.r22AcceptedAt != nil { parts.append(String(localized: "deep-data flags")) }
+        if f.liveHRAt != nil { parts.append(String(localized: "live heart rate")) }
+        return String(localized: "Verified on your strap: ") + parts.joined(separator: " · ")
     }
 
     // MARK: - 5/MG protocol health check (#174/#103)

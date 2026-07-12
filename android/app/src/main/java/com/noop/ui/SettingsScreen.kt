@@ -58,12 +58,14 @@ import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -1504,6 +1506,21 @@ fun SettingsScreen(
             blurb = "Live heart rate already works on a WHOOP 5/MG strap. These probes go further and try to coax more out of it. They are guesses, off by default, and only ever touch a 5/MG strap. WHOOP 4.0 is never affected.",
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // Evidence-based status (#103): once THIS strap has demonstrated a capability, say so
+                // here — the blanket "experimental" framing above stays for everything unproven.
+                // remember: one prefs read per screen entry, not one per recomposition.
+                remember { fiveMGVerifiedLine(vm) }?.let { verified ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                        Icon(
+                            imageVector = Icons.Filled.Verified,
+                            contentDescription = null,
+                            tint = Palette.statusPositive,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(verified, style = NoopType.caption, color = Palette.statusPositive)
+                    }
+                    HorizontalDivider(color = Palette.hairline)
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -2984,6 +3001,20 @@ private fun AttributionRow(repo: String, note: String) {
         Text(repo, style = NoopType.mono(12f), color = Palette.textPrimary)
         Text("· $note", style = NoopType.footnote, color = Palette.textTertiary)
     }
+}
+
+/** The evidence summary for the ACTIVE strap (#103), null when nothing is proven yet — so the
+ *  5/MG card leads with facts where they exist and stays generic where they don't. Twin of the
+ *  iOS fiveMGVerifiedLine. */
+private fun fiveMGVerifiedLine(vm: AppViewModel): String? {
+    val f = vm.whoop5EvidenceFacts(vm.activeStrapId)
+    if (!f.anyVerified) return null
+    val parts = mutableListOf<String>()
+    if (f.historyAt != null) parts.add("history sync (${f.historyRows} records)")
+    if (f.decodeCleanAt != null) parts.add("record decode")
+    if (f.r22AcceptedAt != null) parts.add("deep-data flags")
+    if (f.liveHRAt != null) parts.add("live heart rate")
+    return "Verified on your strap: " + parts.joinToString(" · ")
 }
 
 // MARK: - 5/MG protocol health check rendering (#174/#103)

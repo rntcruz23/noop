@@ -62,6 +62,12 @@ private struct DevicesContent: View {
     /// After removing the ACTIVE device with other devices still paired, prompt to pick a new active one.
     @State private var pickNewActive = false
 
+    /// Per-strap proven capability facts for the ACTIVE strap (#103) — nil when nothing is verified
+    /// (a 4.0, a fresh 5/MG, a generic strap), so the card shows no section rather than empty proof.
+    @State private var activeVerified: Whoop5Evidence.Facts?
+    /// "What feeds your scores": the last-24h input-coverage summary for the ACTIVE WHOOP strap.
+    @State private var activeInputsSummary: String?
+
     private var activeDevices: [PairedDevice] { registry.devices.filter { $0.status != .archived } }
     private var removedDevices: [PairedDevice] { registry.devices.filter { $0.status == .archived } }
 
@@ -80,6 +86,26 @@ private struct DevicesContent: View {
         let warning = ConnectionReadout.rtcWarning(deviceClockUnix: deviceClock,
                                                    strapNewestUnix: live.strapRange?.newestUnix)
         return (String(localized: "Clock latched: \(latched) · last frame \(frame)"), warning)
+    }
+
+    /// Read the ACTIVE strap's persisted evidence + last-24h stream counts (#103). Pure reads
+    /// (UserDefaults + capped store queries); facts only ever exist for a strap that demonstrated
+    /// them, so a 4.0 or a fresh 5/MG simply yields no section. Coverage is WHOOP-only — a generic
+    /// HR strap stores HR under a different source model and would read as misleading zeros.
+    private func loadStrapInsights() async {
+        guard let active = activeDevices.first(where: { $0.status == .active }),
+              SourceCoordinator.isWhoop(active) else {
+            activeVerified = nil
+            activeInputsSummary = nil
+            return
+        }
+        let facts = Whoop5Evidence.facts(for: active.id)
+        activeVerified = facts.anyVerified ? facts : nil
+        if let counts = await model.repo.inputCoverageCounts() {
+            activeInputsSummary = InputCoverage.summary(rows: InputCoverage.classify(counts: counts))
+        } else {
+            activeInputsSummary = nil
+        }
     }
 
     var body: some View {
@@ -105,6 +131,10 @@ private struct DevicesContent: View {
                     // #987: clock latch + frame freshness + the 1970/71 RTC warning, active card only.
                     liveClockLine: device.status == .active ? strapClockState?.line : nil,
                     liveClockWarning: device.status == .active ? strapClockState?.warning : nil,
+                    // Evidence + coverage belong to the ACTIVE strap card only (#103); both nil
+                    // elsewhere so paired-but-idle cards never carry another strap's proof.
+                    verifiedFacts: device.status == .active ? activeVerified : nil,
+                    inputsSummary: device.status == .active ? activeInputsSummary : nil,
                     onMakeActive: { switchTarget = device },
                     onRename: { renameDraft = device.nickname ?? device.displayName; renameTarget = device },
                     onRemove: { removeTarget = device },
@@ -125,6 +155,9 @@ private struct DevicesContent: View {
 
             whoopFirstFooter
         }
+        // Evidence + input coverage for the active strap card (#103): read once on appear and again
+        // after each completed sync (lastSyncedAt moves), so the card follows the data.
+        .task(id: live.lastSyncedAt) { await loadStrapInsights() }
         // Add a device — guided, branching wizard (asks the device TYPE first, then runs the right
         // scan/register path: WHOOP present-scan for WHOOP families, StandardHRSource for HR straps).
         .sheet(isPresented: $showAddWizard) {
@@ -208,6 +241,8 @@ private struct DevicesContent: View {
                     guard let store = await model.repo.storeHandle() else { return }
                     await registry.deleteDeviceData(deviceId, store: store)
                 }
+                // Evidence goes with the data (#103): a later re-add must re-prove capabilities.
+                Whoop5Evidence.clear(deviceId: deviceId)
                 deleteDataTarget = nil
             }
         } message: { device in
@@ -327,6 +362,11 @@ private struct DeviceCard: View {
     /// #987: the plain-words warning when the strap RTC reads ~1970/71 (never set, so it banks no
     /// history) - the single most common "no history" root cause, surfaced where the user looks first.
     var liveClockWarning: String? = nil
+    /// Per-strap proven capability facts (#103) — the "Verified on this strap" section. nil when
+    /// nothing is verified (or not the active card), so no section renders.
+    var verifiedFacts: Whoop5Evidence.Facts? = nil
+    /// "What feeds your scores": the last-24h input-coverage summary line (#103). Active WHOOP only.
+    var inputsSummary: String? = nil
     var dimmed: Bool = false
     var onMakeActive: () -> Void
     var onRename: () -> Void
@@ -390,6 +430,25 @@ private struct DeviceCard: View {
                         .font(StrandFont.footnote)
                         .foregroundStyle(StrandPalette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Evidence-based capability status (#103): what THIS strap has demonstrated, stated
+                // only as widely as the proof. Complements the static per-model profile above — the
+                // profile says what the model can do, this says what this unit has actually done.
+                if let facts = verifiedFacts {
+                    verifiedSection(facts)
+                }
+                // "What feeds your scores": which sensor inputs actually arrived in the last 24 h,
+                // so the depth of sleep/recovery analysis can be judged instead of assumed.
+                if let inputs = inputsSummary {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Inputs · last 24h")
+                            .strandOverline()
+                        Text(inputs)
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
 
                 // Live battery for the active+connected device, shown as a liquid tube that fills to the
@@ -603,6 +662,42 @@ private struct DeviceCard: View {
         if device.status == .archived { return String(localized: "Removed · data kept") }
         if isLiveConnected { return String(localized: "Connected now") }
         return String(localized: "Last seen \(relativeAgo(TimeInterval(device.lastSeenAt)))")
+    }
+
+    /// The "Verified on this strap" rows (#103): each line exists only when the strap demonstrated
+    /// the capability in a real session, so this section can never over-claim.
+    private func verifiedSection(_ f: Whoop5Evidence.Facts) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Verified on this strap")
+                .strandOverline()
+            if let at = f.historyAt {
+                verifiedRow(String(localized: "History sync — \(f.historyRows) records banked \(relativeAgo(at.timeIntervalSince1970))"))
+            }
+            if f.decodeCleanAt != nil {
+                verifiedRow(String(localized: "Record decode — every layout this strap sends is understood"))
+            }
+            if f.r22AcceptedAt != nil {
+                verifiedRow(String(localized: "Deep-data flags (R22) — accepted by the strap"))
+            }
+            if f.liveHRAt != nil {
+                verifiedRow(String(localized: "Live heart rate — streams over the standard profile"))
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func verifiedRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.statusPositive)
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// Honest paired-but-not-connected note for a locally-adopted Oura ring. Amber heads-up, no fabricated

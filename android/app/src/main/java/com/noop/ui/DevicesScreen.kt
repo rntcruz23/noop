@@ -491,6 +491,8 @@ private fun DeviceCard(
                     Overline("Inputs · last 24h")
                     Text(inputsSummary, style = NoopType.footnote, color = Palette.textTertiary)
                 }
+            }
+
             // #221: the full #78 pairing-refusal guidance, self-service right on the card instead of
             // buried in the strap log — only when the bond was genuinely refused.
             if (bondRefused && pairingHint != null) {

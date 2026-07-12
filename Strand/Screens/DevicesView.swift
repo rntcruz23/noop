@@ -491,6 +491,8 @@ private struct DeviceCard: View {
                             .foregroundStyle(StrandPalette.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                }
+
                 // #221: the full #78 pairing-refusal guidance, self-service right on the card instead of
                 // buried in the strap log — only when the bond was genuinely refused.
                 if bondRefused, let hint = pairingHint {

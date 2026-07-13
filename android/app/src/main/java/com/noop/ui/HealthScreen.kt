@@ -578,10 +578,6 @@ private fun ContributorBar(
 // "Unlocks your VO₂max", never as if they sharpen the age. When no value exists yet we show the
 // readiness checklist instead, so the user knows exactly what's still needed.
 
-/** The computed ("-noop") source the IntelligenceEngine persists fitness_age + vo2max_est under, the
- *  same convention every screen uses for on-device-computed series (imported is plain "my-whoop"). */
-private const val COMPUTED_SOURCE = "my-whoop-noop"
-
 /** Fitness Age readiness from what a screen can see: RHR coverage over the last 7 merged daily rows
  *  (drives the "N more nights" countdown), a scored-strain day as the activity signal, and the profile
  *  basics. Shared by the Health hub's [FitnessAgeSection] and the Today card's [VitalDetailScreen]
@@ -616,12 +612,13 @@ private fun FitnessAgeSection(vm: AppViewModel, days: List<DailyMetric>, profile
     var refreshTick by remember { mutableStateOf(0) }
     var refreshing by remember { mutableStateOf(false) }
     LaunchedEffect(days, refreshTick) {
+        // Latest-value reads (LIMIT-1 per source) — the full-series `.lastOrNull()` scan is gone (perf).
         val fa = runCatching {
-            vm.repo.metricSeries(COMPUTED_SOURCE, "fitness_age", "0000-01-01", "9999-12-31")
-        }.getOrDefault(emptyList()).lastOrNull()?.value
+            vm.repo.latestMetricComputedUnion(vm.activeStrapId, "fitness_age")?.value
+        }.getOrNull()
         val vo2 = runCatching {
-            vm.repo.metricSeries(COMPUTED_SOURCE, "vo2max_est", "0000-01-01", "9999-12-31")
-        }.getOrDefault(emptyList()).lastOrNull()?.value
+            vm.repo.latestMetricComputedUnion(vm.activeStrapId, "vo2max_est")?.value
+        }.getOrNull()
         fitnessAge = fa
         vo2max = vo2
     }
@@ -683,12 +680,13 @@ private fun VitalitySection(vm: AppViewModel, days: List<DailyMetric>, profile: 
     var vitality by remember { mutableStateOf<Double?>(null) }
     var bodyAge by remember { mutableStateOf<Double?>(null) }
     LaunchedEffect(days) {
+        // Latest-value reads (LIMIT-1 per source) — the full-series `.lastOrNull()` scan is gone (perf).
         vitality = runCatching {
-            vm.repo.metricSeries(COMPUTED_SOURCE, "vitality", "0000-01-01", "9999-12-31")
-        }.getOrDefault(emptyList()).lastOrNull()?.value
+            vm.repo.latestMetricComputedUnion(vm.activeStrapId, "vitality")?.value
+        }.getOrNull()
         bodyAge = runCatching {
-            vm.repo.metricSeries(COMPUTED_SOURCE, "body_age", "0000-01-01", "9999-12-31")
-        }.getOrDefault(emptyList()).lastOrNull()?.value
+            vm.repo.latestMetricComputedUnion(vm.activeStrapId, "body_age")?.value
+        }.getOrNull()
     }
     val contributions = remember(days, profile.age) {
         val last7 = days.takeLast(7)
@@ -1922,6 +1920,18 @@ internal data class VitalReading(
     val source: String,
 )
 
+/** #377: merge the three step stores into one per-day series with the SAME precedence as the Today
+ *  Steps tile — a REAL on-device count ([real], WHOOP 5/MG @57 → DailyMetric.steps) wins, else an
+ *  [imported] Health Connect / Apple Health count, else the motion-model [est] (`steps_est`). The three
+ *  are disjoint stores so the `?:` chain never double-counts. Ascending by day. Pure for testability. */
+internal fun mergeStepsReadings(
+    real: Map<String, VitalReading>,
+    imported: Map<String, VitalReading>,
+    est: Map<String, VitalReading>,
+): List<VitalReading> =
+    (real.keys + imported.keys + est.keys).toSortedSet()
+        .mapNotNull { d -> real[d] ?: imported[d] ?: est[d] }
+
 private data class VitalDetailModel(
     val key: String,
     val title: String,
@@ -2484,7 +2494,7 @@ private suspend fun buildSeriesVitalDetail(vm: AppViewModel, key: String): Vital
         title = "Fitness Age",
         unit = "yrs",
         color = Palette.chargeColor,
-        readings = vm.repo.metricSeries(COMPUTED_SOURCE, "fitness_age", "0000-01-01", "9999-12-31")
+        readings = vm.repo.metricSeriesComputedUnion(vm.activeStrapId, "fitness_age", "0000-01-01", "9999-12-31")
             .map { VitalReading(it.day, it.value, it.deviceId) },
         format = { it.roundToInt().toString() },
     )
@@ -2493,20 +2503,42 @@ private suspend fun buildSeriesVitalDetail(vm: AppViewModel, key: String): Vital
         title = "Vitality",
         unit = "",
         color = Palette.metricPurple,
-        readings = vm.repo.metricSeries(COMPUTED_SOURCE, "vitality", "0000-01-01", "9999-12-31")
+        readings = vm.repo.metricSeriesComputedUnion(vm.activeStrapId, "vitality", "0000-01-01", "9999-12-31")
             .map { VitalReading(it.day, it.value, it.deviceId) },
         format = { it.roundToInt().toString() },
     )
-    "steps_est" -> VitalDetailModel(
-        key = key,
-        title = "Steps",
-        unit = "steps",
-        color = Palette.metricCyan,
-        readings = vm.repo.resolvedSeries("steps_est", "my-whoop", "0000-00-00", "9999-99-99",
+    "steps_est" -> {
+        // #377: the Today Steps tile resolves a REAL step count FIRST — the WHOOP 5/MG on-device @57
+        // counter (DailyMetric.steps) ?: imported Health Connect / Apple Health ?: the motion-model
+        // estimate (TodayScreen: `day?.steps ?: importedStepsForDay ?: estimatedStepsForDay`). This
+        // detail read the estimate ALONE, so a WHOOP 5.0 with a real count saw the estimate history —
+        // clamped flat at StepsEstimateEngine.MAX_DAILY_STEPS = 60,000 when the motion fit over-shoots —
+        // instead of its real steps. Resolve per day with the SAME precedence so the graph + Readings
+        // match the card. iOS already routes this detail through the real "steps" metric (not the
+        // estimate); this brings Android to parity. Real strap steps live in DailyMetric.steps; imported
+        // steps in AppleDaily; the estimate in the "steps_est" series — three disjoint stores, so the
+        // per-day `?:` chain never double-counts.
+        val real = vm.repo.resolvedSeries("steps", "my-whoop", "0000-00-00", "9999-99-99",
             strapDeviceId = vm.activeStrapId)
-            .points.map { VitalReading(it.day, it.value, it.source) },
-        format = { it.roundToInt().toString() },
-    )
+            .points.associateBy({ it.day }, { VitalReading(it.day, it.value, it.source) })
+        val imported = LinkedHashMap<String, VitalReading>()
+        for (r in vm.repo.appleDaily("apple-health", "0000-01-01", "9999-12-31") +
+            vm.repo.appleDaily("health-connect", "0000-01-01", "9999-12-31")) {
+            val s = r.steps
+            if (s != null && s > 0) imported.putIfAbsent(r.day, VitalReading(r.day, s.toDouble(), r.deviceId))
+        }
+        val est = vm.repo.resolvedSeries("steps_est", "my-whoop", "0000-00-00", "9999-99-99",
+            strapDeviceId = vm.activeStrapId)
+            .points.associateBy({ it.day }, { VitalReading(it.day, it.value, it.source) })
+        VitalDetailModel(
+            key = key,
+            title = "Steps",
+            unit = "steps",
+            color = Palette.metricCyan,
+            readings = mergeStepsReadings(real, imported, est),
+            format = { it.roundToInt().toString() },
+        )
+    }
     "active_kcal" -> {
         // Read active energy from the SAME apple-health ∪ health-connect union the Today Calories card uses.
         // Health Connect (the common Android source) writes activeKcal only into the AppleDaily table under

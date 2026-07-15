@@ -68,6 +68,24 @@ enum PuffinExperiment {
             : UserDefaults.standard.bool(forKey: experimentalSleepV2Key)
     }
 
+    /// Opt-in "HR-from-PPG sub-lag interpolation" (default off): the v26 optical-PPG gap-fill HR estimator
+    /// (`PpgHr`) refines its integer autocorrelation lag with a parabolic (Variant A) interpolation of the
+    /// ACF peak, removing the ~±8 bpm lag-quantization near a high HR. Pure opt-in research variant: default
+    /// OFF is byte-identical to the integer-lag estimate, and it only ever fills seconds the strap never
+    /// reported an HR for (it NEVER overrides a WHOOP-stored HR). The pure `PpgHr` package cannot read prefs,
+    /// so the app-layer call site (the Backfiller / archive replay) reads this flag and threads it into the
+    /// estimator. Mirrors the Android `PuffinExperiment.KEY_PPG_HR_SUBLAG_INTERP`.
+    static let ppgHrSubLagInterpKey = "noopPpgHrSubLagInterp"
+
+    static var ppgHrSubLagInterpEnabled: Bool { UserDefaults.standard.bool(forKey: ppgHrSubLagInterpKey) }
+
+    /// Opt-in experimental "HRV readiness (Plews/Altini)" tier readout (default off): a read-only Test Centre
+    /// readout of the SWC log-HRV tier (`HRVReadiness`). It changes NOTHING downstream — the Charge ring stays
+    /// byte-identical whether on or off; it only surfaces the tier + baseline band in the Experimental
+    /// algorithms card. Rough / early (n=1, not yet validated against varying real data). Read directly by the
+    /// Test Centre view via @AppStorage on this key. Mirrors the Android `PuffinExperiment.KEY_HRV_READINESS`.
+    static let hrvReadinessKey = "noopHrvReadiness"
+
     /// Opt-in "Auto-detect workouts": after a sync / on Today appear, scan the last day or two of HR for a
     /// SUSTAINED-ELEVATED window (resting HR + 30 bpm held ≥ 12 min) that doesn't overlap a saved workout,
     /// and surface ONE dismissible Today card offering to save it as a manual-style workout. Pure read +
@@ -76,4 +94,21 @@ enum PuffinExperiment {
     static let autoDetectWorkoutsKey = "noopAutoDetectWorkouts"
 
     static var autoDetectWorkoutsEnabled: Bool { UserDefaults.standard.bool(forKey: autoDetectWorkoutsKey) }
+
+    /// Opt-in "Motion-aware wake refinement" (default OFF, #364 "Proposal 2" follow-up): a post-pass
+    /// (`WakeMotionRefinement`) over the already-staged hypnogram that reclassifies a scored WAKE segment
+    /// to `light` when its per-minute step-tick cadence shows no locomotion AND its per-minute gravity
+    /// posture stays stable outside a minority of isolated "turn-over" burst minutes (which are kept as
+    /// wake). Targets the HR-led wake call misreading a hot-but-still/atonic stretch as an awakening — a
+    /// real anonymized night scored 194 min wake from single-minute turn-over bursts with zero walking
+    /// cadence between them. Self-gates on the OBSERVED gravity + step-sample density (never on strap
+    /// family/model, per #345): a WHOOP 4.0 night (sparse gravity, no step stream at all) fails the gate
+    /// and is left untouched every time; a WHOOP 5.0/MG night, which streams both densely, is the expected
+    /// beneficiary. Pure analysis switch — it only ever SHRINKS an already-scored wake segment, never
+    /// invents wake time; detection and the V1/V2 staging engines are untouched either way. Read at the
+    /// staging call sites (`Repository.restageFromRaw`, `IntelligenceEngine`, threaded through
+    /// `AnalyticsEngine.analyzeDay`). Mirrors the Android `PuffinExperiment.KEY_MOTION_AWARE_WAKE`.
+    static let motionAwareWakeKey = "noopMotionAwareWake"
+
+    static var motionAwareWakeEnabled: Bool { UserDefaults.standard.bool(forKey: motionAwareWakeKey) }
 }

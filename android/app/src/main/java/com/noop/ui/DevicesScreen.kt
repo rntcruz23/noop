@@ -108,6 +108,7 @@ fun DevicesScreen(
     // default ON). Off falls back to the flat dark canvas, so the setting governs every liquid screen alike.
     val context = LocalContext.current
     val showDayCycleBackground = remember { NoopPrefs.showDayCycleBackground(context) }
+    val skyBehindCards = remember { NoopPrefs.skyBehindCards(context) }
 
     // The current device list, reloaded after each registry op. Null while the first read is in flight.
     var devices by remember { mutableStateOf<List<PairedDeviceRow>?>(null) }
@@ -165,7 +166,10 @@ fun DevicesScreen(
         // into the flat canvas behind the top of the screen so the frosted device cards float over it. The
         // static sky (LiquidSkyStatic inside the helper) carries no per-frame cost on this scrolling list.
         // Gated on the same "Day-cycle background" setting as Today; off passes null for the plain canvas.
-        topBackground = if (showDayCycleBackground) { { LiquidScreenSky() } } else null,
+        topBackground = if (showDayCycleBackground) { { LiquidScreenSky(fillHeight = skyBehindCards) } } else null,
+        // Sky-behind-cards fills the viewport so the transparent cards reveal the sky the whole way
+        // down (Today / Trends / Sleep / metric-detail parity - same two prefs, same two behaviours).
+        fullBleedBackground = showDayCycleBackground && skyBehindCards,
     ) {
         if (devices == null) {
             // The registry resolves a beat after launch. Show a calm pending note in that brief window.
@@ -205,6 +209,9 @@ fun DevicesScreen(
                 // elsewhere so paired-but-idle cards never carry another strap's proof.
                 verifiedFacts = if (device.status == DeviceStatus.active.name) activeVerified else null,
                 inputsSummary = if (device.status == DeviceStatus.active.name) activeInputsSummary else null,
+                // Historical record layout from the current backfill, distinct from strap firmware.
+                liveHistoryLayout = if (device.status == DeviceStatus.active.name && live.connected)
+                    live.historyLayoutVersion else null,
                 onMakeActive = { switchTarget = device },
                 onRename = { renameTarget = device },
                 onRemove = { removeTarget = device },
@@ -401,6 +408,8 @@ private fun DeviceCard(
     verifiedFacts: com.noop.ble.Whoop5Evidence.Facts? = null,
     /** "What feeds your scores": the last-24h input-coverage summary line (#103). Active WHOOP only. */
     inputsSummary: String? = null,
+    /** The active+connected strap's observed banked-history record layout (`hist_version`). */
+    liveHistoryLayout: Int? = null,
     onMakeActive: () -> Unit,
     onRename: () -> Unit,
     onRemove: (() -> Unit)?,
@@ -514,7 +523,8 @@ private fun DeviceCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     lastSeenLine(device, isLiveConnected, bondRefused) +
-                        (liveFirmware?.let { " · FW $it" } ?: ""),
+                        (liveFirmware?.let { " · FW $it" } ?: "") +
+                        (historyLayoutLine(liveHistoryLayout)?.let { " · $it" } ?: ""),
                     style = NoopType.footnote,
                     color = Palette.textTertiary,
                     modifier = Modifier.weight(1f),
@@ -1181,6 +1191,9 @@ private fun lastSeenLine(device: PairedDeviceRow, isLiveConnected: Boolean, bond
     isLiveConnected -> "Connected now"
     else -> "Last seen ${relativeAgo(device.lastSeenAt)}"
 }
+
+internal fun historyLayoutLine(version: Int?): String? =
+    version?.let { "v$it history" }
 
 /** Best-effort brand from the advertised name. Falls back to a neutral label. Mirrors Swift brandGuess.
  *  Delegates to the pure [com.noop.data.DeviceBrandCatalog] (single source of truth) so the token table

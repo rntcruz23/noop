@@ -108,6 +108,15 @@ class Backfiller(
      */
     private val connectionActive: () -> Boolean = { false },
     private val connectionLog: (String) -> Unit = {},
+    /**
+     * Opt-in "HR-from-PPG sub-lag interpolation" (Test Centre → Experimental algorithms, default OFF).
+     * Read as a live provider so a toggle flip mid-session takes effect on the next decoded chunk. Passed
+     * straight into [extractHistoricalStreams] so the pure decoder never reaches for prefs. Default inert
+     * (always-off) keeps the untraced/test path byte-identical. Mirrors the Swift Backfiller extract seam.
+     */
+    private val ppgHrSubLagInterp: () -> Boolean = { false },
+    /** Live UI/export observation of the historical record layout (`hist_version`). */
+    private val firmwareLayout: (Int) -> Unit = {},
 ) {
 
     /**
@@ -345,6 +354,7 @@ class Backfiller(
             val decoded = extractHistoricalStreams(
                 frames, ref.device, ref.wall, family,
                 sessionOldestUnix = sessionOldestUnix, sessionNewestUnix = sessionNewestUnix,
+                ppgHrSubLagInterp = ppgHrSubLagInterp(),
             )
             // Observability (PR #241): which historical layout does this strap emit? Only the unmapped/
             // reject path logged a version before, so a healthy sync never revealed v24/v25 (4.0) or
@@ -354,6 +364,7 @@ class Backfiller(
                 ?.let { v ->
                     if (loggedLayoutVersions.add(v)) {
                         log("Backfill: historical records use layout v$v")
+                        firmwareLayout(v)
                         // Connection test mode: the firmware layout as a compact tagged line. A layout that
                         // decoded a signature field (heart_rate / gravity_x / ppg_waveform) is decodable.
                         // Gated zero-cost. Twin of the Swift Backfiller emit.

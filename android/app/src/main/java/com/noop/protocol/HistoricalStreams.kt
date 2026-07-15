@@ -5,6 +5,7 @@ import com.noop.data.EventEntry
 import com.noop.data.GravityRow
 import com.noop.data.HrRow
 import com.noop.data.PpgHrRow
+import com.noop.data.PpgWaveformRow
 import com.noop.data.RespRow
 import com.noop.data.RrRow
 import com.noop.data.SkinTempRow
@@ -508,6 +509,11 @@ fun extractHistoricalStreams(
     // (unchanged). Kept in lockstep with the Swift extractHistoricalStreams session args.
     sessionOldestUnix: Long? = null,
     sessionNewestUnix: Long? = null,
+    // Opt-in "HR-from-PPG sub-lag interpolation" (Test Centre → Experimental algorithms, default false):
+    // threaded straight into the v26 PPG-HR estimator below. The pure protocol package can't read prefs, so
+    // the app-layer caller (Backfiller / archive replay / capture import) reads PuffinExperiment.ppgHrSubLagInterp
+    // and passes it. Default false = byte-identical to today. Mirrors the Swift extractHistoricalStreams arg.
+    ppgHrSubLagInterp: Boolean = false,
 ): StreamBatch {
     // Count of records dropped by the #547 plausibility gate this batch, surfaced on the returned
     // StreamBatch so the Backfiller can log "bad strap clock" once per session via its existing seam.
@@ -592,6 +598,10 @@ fun extractHistoricalStreams(
     val battery = ArrayList<BatteryRow>()
     // v26 PPG samples accumulate across the chunk, then get turned into HR after the loop (#156).
     val ppgSamples = ArrayList<PpgHr.Sample>()
+    // The RAW v26 waveform kept PER RECORD (one row per strap-second) for durable storage (#156
+    // follow-up) — the same (ts, samples) the estimator above consumes, but grouped per second so it
+    // persists as its own `ppgWaveformSample` stream rather than being flattened into the HR buffer.
+    val ppgWaveform = ArrayList<PpgWaveformRow>()
 
     for (frame in rawFrames) {
         // Packet type byte: WHOOP 5/MG's longer puffin envelope puts it at frame[8]; WHOOP 4 at frame[4].
@@ -614,6 +624,10 @@ fun extractHistoricalStreams(
                         val baseTs = correctedWall(rec.unix.toLong() and 0xFFFFFFFFL)
                         if (baseTs != null) {
                             for (v in rec.samples) ppgSamples.add(PpgHr.Sample(ts = baseTs, value = v))
+                            // Persist the raw waveform itself too (#156 follow-up), keyed on the record's
+                            // corrected wall-second. Guard on non-empty so a truncated frame that decoded
+                            // zero samples never banks an empty row (mirrors the Swift `!samples.isEmpty`).
+                            if (rec.samples.isNotEmpty()) ppgWaveform.add(PpgWaveformRow(baseTs, rec.samples))
                         }
                     }
                 }
@@ -719,13 +733,15 @@ fun extractHistoricalStreams(
 
     // Derive HR from the accumulated v26 PPG waveform (8 s / 24 Hz autocorrelation, conf>=0.3). Empty
     // unless the strap sent v26 records; falls back gracefully (no rows) on noise (#156).
-    val ppgHr = PpgHr.estimate(ppgSamples).map { PpgHrRow(ts = it.ts, bpm = it.bpm, conf = it.conf) }
+    val ppgHr = PpgHr.estimate(ppgSamples, subLagInterp = ppgHrSubLagInterp)
+        .map { PpgHrRow(ts = it.ts, bpm = it.bpm, conf = it.conf) }
 
     return StreamBatch(
         hr = hr, rr = rr, events = events, battery = battery,
         spo2 = spo2, skinTemp = skinTemp, resp = resp, gravity = gravity, steps = steps,
         sleepState = sleepState,
         ppgHr = ppgHr,
+        ppgWaveform = ppgWaveform,
         droppedImplausibleTs = droppedImplausible,
         droppedImplausibleOldestTs = droppedOldest,   // #324 poisoned-range epoch span (diag only)
         droppedImplausibleNewestTs = droppedNewest,

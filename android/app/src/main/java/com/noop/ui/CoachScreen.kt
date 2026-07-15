@@ -227,7 +227,15 @@ private fun CoachChat(vm: CoachViewModel) {
         // Active-provider strip + reset-key affordance.
         NoopCard(padding = 14.dp, tint = Palette.chargeColor) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatePill(title = "${provider.displayName} · $model", tone = StrandTone.Accent, showsDot = true)
+                // weight(fill = false): the pill may shrink (its title ellipsizes) but can never grow
+                // past the leftover width - a long model id used to push "Disconnect" clean off the
+                // right edge of the screen, leaving no visible way to change the provider.
+                StatePill(
+                    title = "${provider.displayName} · $model",
+                    tone = StrandTone.Accent,
+                    showsDot = true,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
                 Spacer(Modifier.weight(1f))
                 val disconnectInteraction = remember { MutableInteractionSource() }
                 Text(

@@ -386,7 +386,16 @@ fun StatePill(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (showsDot) ConnectionDot(tone = tone, pulsing = pulsing, size = 7.dp)
-        Text(title, style = NoopType.overline.copy(letterSpacing = 0.4.sp), color = tone.color)
+        // A pill is a single-line chip by contract: under a width constraint it must ellipsize, never
+        // wrap to a second line (and unconstrained callers must bound it themselves - an unbounded long
+        // title, e.g. a long AI model id on the Coach card, pushed row siblings clean off the screen).
+        Text(
+            title,
+            style = NoopType.overline.copy(letterSpacing = 0.4.sp),
+            color = tone.color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

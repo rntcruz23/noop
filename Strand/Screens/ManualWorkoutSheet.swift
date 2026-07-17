@@ -1,5 +1,6 @@
 import SwiftUI
 import StrandDesign
+import StrandAnalytics
 import WhoopStore
 
 /// Carries the measured natural height of the Sport picker's floating suggestion panel up to the
@@ -34,6 +35,16 @@ struct ManualWorkoutSheet: View {
     @State private var durationMin: Int
     @State private var avgHrText: String
     @State private var kcalText: String
+
+    /// Body profile (age-derived HR-max, weight) feeding the reference pre-fill. Reads the same
+    /// UserDefaults truth Settings edits (the WorkoutDetailView pattern — no environment plumbing).
+    @StateObject private var profile = ProfileStore()
+
+    /// The last text this sheet auto-filled into Avg HR / Calories. A field is only ever overwritten
+    /// while it is empty or still showing exactly what we last auto-filled — the moment the user
+    /// types their own value, the pre-fill stops touching that field. Fresh adds only (never edits).
+    @State private var autoAvgHrText = ""
+    @State private var autoKcalText = ""
 
     /// Focus for the numeric (Avg HR / Calories) fields so the keyboard Done button can resign them —
     /// the decimal pad has no return key. iOS-only effect; the enum keeps both platforms compiling.
@@ -103,8 +114,15 @@ struct ManualWorkoutSheet: View {
             }
             if let validationNote { noteRow(validationNote) }
             if avgHrEditedNote { noteRow(String(localized: "Avg HR is shown as typed. The HR graph, zones and Effort stay from the recorded session.")) }
+            if showingReferenceValues {
+                infoRow(String(localized: "Avg HR and Calories are estimates from the sport, duration and your profile — adjust them freely."))
+            }
             footer
         }
+        // Reference pre-fill (fresh adds): picking a catalogue sport / changing the duration refreshes
+        // the estimated Avg HR + Calories, but only while each field is still empty or untouched.
+        .onChange(of: sport) { _ in refreshReferenceValues() }
+        .onChange(of: durationMin) { _ in refreshReferenceValues() }
         .padding(NoopMetrics.space6)
         // A fixed 420pt is right for the free-floating macOS sheet, but on iPhone it's wider than
         // the screen, so the Avg HR/Calories row, the Start DatePicker and the footer ran off the
@@ -305,6 +323,49 @@ struct ManualWorkoutSheet: View {
             .foregroundStyle(StrandPalette.statusWarning)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel(text)
+    }
+
+    /// Quiet informational footnote (tertiary, not the warning tint) — the reference-value disclosure.
+    private func infoRow(_ text: String) -> some View {
+        Text(text)
+            .font(StrandFont.footnote)
+            .foregroundStyle(StrandPalette.textTertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(text)
+    }
+
+    // MARK: - Reference pre-fill (Avg HR / Calories)
+    //
+    // A fresh add pre-fills the two optional fields with an editable REFERENCE from the shared
+    // ManualWorkoutEstimates table (MET × weight × hours for calories; a MET-mapped fraction of the
+    // age-derived HR-max for Avg HR), so the user starts from a plausible number instead of a blank.
+    // The estimate only ever writes into a field that is empty or still holding exactly the last
+    // auto-fill — a user-typed value is never overwritten. Edits of an existing row never pre-fill.
+    // Mirrors the Android ManualWorkoutDialog pre-fill behaviour.
+
+    /// True while either optional field is showing an untouched auto-filled reference — drives the
+    /// one-line disclosure so a pre-filled number is never mistaken for a measurement.
+    private var showingReferenceValues: Bool {
+        (!avgHrText.isEmpty && avgHrText == autoAvgHrText)
+            || (!kcalText.isEmpty && kcalText == autoKcalText)
+    }
+
+    /// Recompute the reference Avg HR / Calories for the current sport + duration and pour each into
+    /// its field iff the field is still auto-owned (empty, or equal to the last auto-fill). A sport
+    /// with no reference (free-text, "Other") clears a still-auto field back to blank.
+    private func refreshReferenceValues() {
+        guard editing == nil else { return }
+        let hrRef = ManualWorkoutEstimates.referenceAvgHr(sport: sport, hrMax: profile.hrMax)
+        let kcalRef = ManualWorkoutEstimates.referenceCalories(sport: sport, durationMin: durationMin,
+                                                               weightKg: profile.weightKg)
+        if avgHrText.isEmpty || avgHrText == autoAvgHrText {
+            autoAvgHrText = hrRef.map(String.init) ?? ""
+            avgHrText = autoAvgHrText
+        }
+        if kcalText.isEmpty || kcalText == autoKcalText {
+            autoKcalText = kcalRef.map(String.init) ?? ""
+            kcalText = autoKcalText
+        }
     }
 
     // MARK: - Validation / build

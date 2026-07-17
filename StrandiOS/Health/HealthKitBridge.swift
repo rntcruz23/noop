@@ -772,6 +772,12 @@ final class HealthKitBridge: ObservableObject {
         case "volleyball":    return .volleyball
         case "squash":        return .squash
         case "martial arts":  return .martialArts
+        // Named disciplines HK doesn't enumerate collapse to the closest HK type; the reverse map
+        // reads .martialArts back as the generic "Martial arts" (a documented forward collapse).
+        case "jiu-jitsu", "mma", "judo", "karate", "muay thai", "taekwondo":
+                              return .martialArts
+        case "kickboxing":    return .kickboxing
+        case "wrestling":     return .wrestling
         case "dancing":       return .dance
         case "golf":          return .golf
         case "climbing":      return .climbing
@@ -953,6 +959,7 @@ final class HealthKitBridge: ObservableObject {
         case .volleyball:                 return "Volleyball"
         case .squash, .racquetball:       return "Squash"
         case .martialArts, .taiChi:       return "Martial arts"
+        case .wrestling:                  return "Wrestling"
         case .dance, .cardioDance, .socialDance: return "Dancing"
         case .golf:                       return "Golf"
         case .climbing:                   return "Climbing"

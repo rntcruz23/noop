@@ -21,7 +21,8 @@ public func sportSymbol(_ sport: String) -> String {
     case s.contains("strength") || s.contains("weight") || s.contains("lift"):
                                                      return "dumbbell.fill"
     case s.contains("box"):                         return "figure.boxing"
-    case s.contains("martial") || s.contains("jiu") || s.contains("judo") || s.contains("karate"):
+    case s.contains("martial") || s.contains("jiu") || s.contains("judo") || s.contains("karate")
+        || s.contains("mma") || s.contains("muay") || s.contains("taekwondo") || s.contains("wrestl"):
                                                      return "figure.martial.arts"
     case s.contains("hiit") || s.contains("functional"):
                                                      return "figure.highintensity.intervaltraining"

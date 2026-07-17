@@ -56,8 +56,17 @@ enum WorkoutCatalog {
         Sport(name: "Racquetball", isDistanceSport: false),
         Sport(name: "Table tennis", isDistanceSport: false),
         Sport(name: "Volleyball", isDistanceSport: false),
-        // Martial arts covers the user-requested Jiu-Jitsu plus karate/judo/MMA etc. (#768)
+        // Martial arts stays the generic catch-all (#768); the named disciplines below let people who
+        // train several of them tell sessions apart. All mat/ring sports: no route, GPS off.
         Sport(name: "Martial arts", isDistanceSport: false),
+        Sport(name: "Jiu-Jitsu", isDistanceSport: false),
+        Sport(name: "MMA", isDistanceSport: false),
+        Sport(name: "Judo", isDistanceSport: false),
+        Sport(name: "Karate", isDistanceSport: false),
+        Sport(name: "Kickboxing", isDistanceSport: false),
+        Sport(name: "Muay Thai", isDistanceSport: false),
+        Sport(name: "Taekwondo", isDistanceSport: false),
+        Sport(name: "Wrestling", isDistanceSport: false),
         Sport(name: "Dancing", isDistanceSport: false),
         Sport(name: "Golf", isDistanceSport: false),
         Sport(name: "Climbing", isDistanceSport: false),

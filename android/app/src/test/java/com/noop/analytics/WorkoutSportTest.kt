@@ -64,6 +64,24 @@ class WorkoutSportTest {
         assertEquals("Other", names.last())
     }
 
+    /** Named martial-arts disciplines are EXTRAs (HC only enumerates the generic MARTIAL_ARTS) →
+     *  ride on MARTIAL_ARTS for writeback but keep their own label, spelled byte-for-byte the way
+     *  iOS persists them; no route (GPS off); the generic "Martial arts" catch-all stays. */
+    @Test fun martialArtsDisciplines_areExtras_fallBackToMartialArts() {
+        val names = WorkoutSport.all.map { it.name }
+        listOf(
+            "Jiu-Jitsu", "MMA", "Judo", "Karate", "Kickboxing",
+            "Muay Thai", "Taekwondo", "Wrestling",
+        ).forEach { name ->
+            val sport = WorkoutSport.all.firstOrNull { it.name == name }
+            assertTrue("$name must be in the catalogue", sport != null)
+            assertEquals(ExerciseSessionRecord.EXERCISE_TYPE_MARTIAL_ARTS, sport!!.exerciseType)
+            assertFalse("$name has no route, GPS defaults off", sport.isDistanceSport)
+            assertTrue(names.indexOf(name) < names.indexOf("Other"))
+        }
+        assertTrue("the generic catch-all stays", names.contains("Martial arts"))
+    }
+
     /** Bowling (D#850) is an EXTRA (no HC type) → rides on "Other" for writeback but keeps its own
      *  label, has no route (GPS off), and sits before the generic "Other" catch-all. */
     @Test fun bowling_isExtra_fallsBackToOther() {

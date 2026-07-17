@@ -1554,6 +1554,7 @@ private fun ManualWorkoutDialog(
     onSave: (row: WorkoutRow, replacing: WorkoutRow?) -> Unit,
 ) {
     val nowSec = System.currentTimeMillis() / 1000
+    val dialogContext = LocalContext.current
     // Pre-fill from the edited row ("detected" shown as "Activity" so a re-label starts clean).
     var sport by remember { mutableStateOf(editing?.let { WorkoutEditing.displaySport(it.sport) } ?: "") }
     // #598 — absolute start date+time (parity with the macOS/iOS sheet's DatePicker) instead of the old
@@ -1569,6 +1570,36 @@ private fun ManualWorkoutDialog(
     }
     var avgHr by remember { mutableStateOf(editing?.avgHr?.toString() ?: "") }
     var kcal by remember { mutableStateOf(editing?.energyKcal?.let { it.roundToInt().toString() } ?: "") }
+
+    // Reference pre-fill (fresh adds only): picking a catalogue sport / changing the duration
+    // refreshes an estimated Avg HR + Calories from the shared ManualWorkoutEstimates table
+    // (MET × weight × hours for calories; a MET-mapped fraction of the age-derived HR-max for
+    // Avg HR). A field is only ever overwritten while it is empty or still showing exactly the
+    // last auto-fill — a user-typed value is never touched. Mirrors macOS ManualWorkoutSheet.
+    val profile = remember { ProfileStore.from(dialogContext) }
+    var autoAvgHr by remember { mutableStateOf("") }
+    var autoKcal by remember { mutableStateOf("") }
+    if (editing == null) {
+        LaunchedEffect(sport, durationMin) {
+            val dur = durationMin.trim().toIntOrNull()
+            val hrRef = com.noop.analytics.ManualWorkoutEstimates.referenceAvgHr(sport, profile.hrMax)
+            val kcalRef = dur?.let {
+                com.noop.analytics.ManualWorkoutEstimates.referenceCalories(sport, it, profile.weightKg)
+            }
+            if (avgHr.isEmpty() || avgHr == autoAvgHr) {
+                autoAvgHr = hrRef?.toString() ?: ""
+                avgHr = autoAvgHr
+            }
+            if (kcal.isEmpty() || kcal == autoKcal) {
+                autoKcal = kcalRef?.toString() ?: ""
+                kcal = autoKcal
+            }
+        }
+    }
+    // True while either optional field still shows an untouched auto-filled reference — drives the
+    // one-line disclosure so a pre-filled number is never mistaken for a measurement.
+    val showingReferenceValues =
+        (avgHr.isNotEmpty() && avgHr == autoAvgHr) || (kcal.isNotEmpty() && kcal == autoKcal)
 
     // Build the validated row (null disables Save). Start = the chosen date+time. Captured fields preserved.
     val built: WorkoutRow? = run {
@@ -1641,6 +1672,14 @@ private fun ManualWorkoutDialog(
                     Text(
                         "Avg HR is shown as typed. The HR graph, zones and Effort stay from the recorded session.",
                         style = NoopType.footnote, color = Palette.statusWarning,
+                    )
+                }
+                // Quiet disclosure while a field still shows an untouched auto-filled reference, so
+                // a pre-filled number is never mistaken for a measurement.
+                if (showingReferenceValues) {
+                    Text(
+                        "Avg HR and Calories are estimates from the sport, duration and your profile — adjust them freely.",
+                        style = NoopType.footnote, color = Palette.textTertiary,
                     )
                 }
             }
@@ -2036,7 +2075,8 @@ internal fun sportIcon(sport: String): ImageVector {
         s.contains("row") -> Icons.Filled.Rowing
         s.contains("yoga") || s.contains("pilates") || s.contains("meditat") || s.contains("stretch") -> Icons.Filled.SelfImprovement
         s.contains("strength") || s.contains("weight") || s.contains("lift") -> Icons.Filled.FitnessCenter
-        s.contains("box") || s.contains("martial") || s.contains("jiu") || s.contains("judo") || s.contains("karate") -> Icons.Filled.SportsMartialArts
+        s.contains("box") || s.contains("martial") || s.contains("jiu") || s.contains("judo") || s.contains("karate") ||
+            s.contains("mma") || s.contains("muay") || s.contains("taekwondo") || s.contains("wrestl") -> Icons.Filled.SportsMartialArts
         s.contains("hiit") || s.contains("functional") || s.contains("gymnast") -> Icons.Filled.SportsGymnastics
         s.contains("snowboard") -> Icons.Filled.Snowboarding
         s.contains("ski") -> Icons.Filled.DownhillSkiing

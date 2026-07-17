@@ -72,6 +72,17 @@ object ExerciseTypes {
         // #714 bodybuilding. No dedicated HC type, so it rides on STRENGTH_TRAINING for writeback and
         // keeps "Bodybuilding" on our own rows. No route → GPS off.
         "Bodybuilding" to EX.EXERCISE_TYPE_STRENGTH_TRAINING,
+        // Named martial-arts disciplines, so people who train several can tell sessions apart.
+        // HC only enumerates the generic MARTIAL_ARTS (plus BOXING, already in NAMES), so these ride
+        // on MARTIAL_ARTS for writeback while keeping their own NOOP label. No route → GPS off.
+        "Jiu-Jitsu" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        "MMA" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        "Judo" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        "Karate" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        "Kickboxing" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        "Muay Thai" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        "Taekwondo" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        "Wrestling" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
     )
 
     /** Types where a route makes sense -> GPS defaults on. */

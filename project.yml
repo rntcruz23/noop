@@ -157,6 +157,7 @@ targets:
       - target: Strand
       - package: WhoopProtocol
       - package: WhoopStore
+      - package: StrandAnalytics
       - package: OuraProtocol
     settings:
       base:

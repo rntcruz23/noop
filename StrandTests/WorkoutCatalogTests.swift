@@ -1,4 +1,5 @@
 import XCTest
+import StrandAnalytics
 @testable import Strand
 
 /// Pins the suggestion catalogue (#714): the two new indoor presets exist, are spelled byte-for-byte
@@ -55,6 +56,31 @@ final class WorkoutCatalogTests: XCTestCase {
         }
         XCTAssertLessThan(pickle, other, "Pickleball extra must sit before the generic Other")
         XCTAssertEqual(names.last, "Other", "Other stays the final catch-all")
+    }
+
+    /// Named martial-arts disciplines: exist, are spelled byte-for-byte the way Android persists
+    /// them, and default GPS off (mat/ring sports have no route). "Martial arts" stays as the
+    /// generic catch-all, and every discipline carries a reference MET for the manual-sheet pre-fill.
+    func testMartialArtsDisciplinesExistWithGpsOff() {
+        let disciplines = ["Jiu-Jitsu", "MMA", "Judo", "Karate", "Kickboxing",
+                           "Muay Thai", "Taekwondo", "Wrestling"]
+        for name in disciplines {
+            let s = WorkoutCatalog.sport(named: name)
+            XCTAssertNotNil(s, "\(name) must be in the suggestion catalogue")
+            XCTAssertEqual(s?.name, name, "Name is persisted data, must match Android byte-for-byte")
+            XCTAssertEqual(s?.isDistanceSport, false, "\(name) has no route, GPS defaults off")
+        }
+        XCTAssertNotNil(WorkoutCatalog.sport(named: "Martial arts"), "the generic catch-all stays")
+    }
+
+    /// Every catalogue sport except the generic "Other" carries a reference MET, so the manual
+    /// sheet's Avg HR / Calories pre-fill covers the whole picker. Mirrors the Android
+    /// ManualWorkoutEstimatesTest coverage walk.
+    func testEveryCatalogueSportExceptOtherHasReferenceMet() {
+        for sport in WorkoutCatalog.all where sport.name != "Other" {
+            XCTAssertNotNil(ManualWorkoutEstimates.met(for: sport.name),
+                            "\(sport.name) must have a reference MET for the manual-sheet pre-fill")
+        }
     }
 
     /// Bowling (D#850): exists, is spelled byte-for-byte the way Android persists it, defaults GPS off

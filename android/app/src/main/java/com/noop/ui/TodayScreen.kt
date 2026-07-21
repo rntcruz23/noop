@@ -274,6 +274,9 @@ fun TodayScreen(
     // The liquid header battery ring taps through to Devices (iOS parity: the battery ring → router.openDevices()).
     // Defaulted to fall back to Settings so the call site stays compiling; AppRoot binds it to the Devices route.
     onOpenDevices: () -> Unit = onOpenSettings,
+    // The #627 journal-reminder card links straight to the journal (Insights). Defaulted to a no-op so
+    // the call site stays compiling; AppRoot binds it to nav.navigateTopLevel(Insights), same as Sleep.
+    onOpenJournal: () -> Unit = {},
 ) {
     val today by viewModel.today.collectAsStateWithLifecycle()
     val alert by viewModel.healthAlert.collectAsStateWithLifecycle()
@@ -538,17 +541,37 @@ fun TodayScreen(
         }
     }
 
-    // The latest active-energy figure (kcal) for the Calories card, the newest non-null activeKcal across
-    // the Apple-side daily aggregates, mirroring the Today Calories tile. Null hides the card's value.
-    var latestActiveKcal by remember { mutableStateOf<Double?>(null) }
+    // #616: ONE calorie definition across the card, the Key-Metrics tile and the detail — resolve per day,
+    // IMPORTED-FIRST (the phone's Apple/Health-Connect activeKcal, the figure these surfaces already showed),
+    // falling back to NOOP's on-device HR estimate (activeKcalEst) only for days the phone didn't cover.
+    // Keyed by day; `caloriesByDay` feeds the SELECTED-day value the dashboard card + Key-Metrics tile both
+    // read — day-scoped like every other card, and like steps.
+    var caloriesByDay by remember { mutableStateOf<Map<String, Double>>(emptyMap()) }
     LaunchedEffect(days) {
-        latestActiveKcal = runCatching {
-            (viewModel.repo.appleDaily("apple-health", "0000-01-01", "9999-12-31") +
-                viewModel.repo.appleDaily("health-connect", "0000-01-01", "9999-12-31"))
-                .filter { it.activeKcal != null }
-                .maxByOrNull { it.day }
-                ?.activeKcal
-        }.getOrNull()
+        caloriesByDay = runCatching {
+            val onDevice = viewModel.repo.resolvedSeries("active_kcal", "my-whoop", "0000-00-00", "9999-99-99",
+                strapDeviceId = viewModel.activeStrapId).points.associate { it.day to it.value }
+            val imported = LinkedHashMap<String, Double>()
+            for (r in viewModel.repo.appleDaily("apple-health", "0000-01-01", "9999-12-31") +
+                viewModel.repo.appleDaily("health-connect", "0000-01-01", "9999-12-31")) {
+                r.activeKcal?.takeIf { it > 0 }?.let { imported.putIfAbsent(r.day, it) }
+            }
+            (onDevice.keys + imported.keys)
+                .mapNotNull { day -> (imported[day] ?: onDevice[day])?.let { day to it } }.toMap()
+        }.getOrDefault(emptyMap())
+    }
+
+    // #616: the Calories tile's 14-day sparkline — the IMPORTED-FIRST resolved series (caloriesByDay),
+    // windowed to the trailing calendar window, so a Health-Connect / Apple-only calorie user gets a trend
+    // that matches the tile's value (not the on-device estimate alone). Mirrors restCompositeSpark's build.
+    var caloriesSpark by remember { mutableStateOf<List<Double>>(emptyList()) }
+    LaunchedEffect(caloriesByDay, selectedDay, keyMetricsWindowDays) {
+        val cutoff = selectedDay.minusDays((keyMetricsWindowDays - 1).toLong()).toString()
+        val end = selectedDay.toString()
+        caloriesSpark = caloriesByDay.entries
+            .filter { it.key in cutoff..end }
+            .sortedBy { it.key }
+            .map { it.value }
     }
 
     // HYDRATION (opt-in, default OFF), the Today "Hydration" card + its detail are hidden unless the user
@@ -606,6 +629,10 @@ fun TodayScreen(
     var showLiveSession by remember { mutableStateOf(false) }
     val liveSessionsEnabled = remember { LiveSessionPrefs.enabled(context) }
     val activeLiveSession by LiveSessionRunner.active.collectAsStateWithLifecycle()
+    // The journal widget's own opt-out (default ON). Read here too so its reorderable section emits no
+    // item when disabled — an always-present zero-height slot would leave a blank draggable gap. Same
+    // remember-once idiom the card uses; a resume/recompose re-reads it. (#656)
+    val journalReminderOn = remember { NoopPrefs.journalReminderEnabled(context) }
     // S4: the Synthesis card collapses to a one-liner that expands on tap (default collapsed). Mirrors iOS.
     var synthesisExpanded by remember { mutableStateOf(false) }
     // S5: the Key Metrics grid caps at the first METRICS_COLLAPSED_CAP tiles behind a "Show all metrics"
@@ -1304,6 +1331,8 @@ fun TodayScreen(
                     selectedDayOffset == 0 && (liveSessionsEnabled || activeLiveSession != null)
                 TodaySection.YOUR_CARDS ->
                     selectedDayOffset == 0 && visibleDashboardCards.isNotEmpty()
+                TodaySection.JOURNAL ->
+                    selectedDayOffset == 0 && journalReminderOn
                 else -> true
             }
             if (!sectionVisible) return@forEach
@@ -1417,22 +1446,15 @@ fun TodayScreen(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.Top) {
                                 Box(modifier = Modifier.weight(1f)) {
                                     SectionHeader("Key Metrics", overline = dayLabel, trailing = trendWindowLabel(keyMetricsWindowDays))
                                 }
-                                TextButton(
+                                TodayEditAction(
                                     onClick = { showMetricsEditor = true },
-                                    colors = ButtonDefaults.textButtonColors(contentColor = Palette.accent),
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Tune,
-                                        contentDescription = uiString(R.string.l10n_today_screen_edit_key_metrics_f95e61a4),
-                                        modifier = Modifier.size(Metrics.iconSmall),
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(uiString(R.string.l10n_today_screen_edit_5301648d), style = NoopType.footnote)
-                                }
+                                    contentDescription = uiString(R.string.l10n_today_screen_edit_key_metrics_f95e61a4),
+                                    contentAlignment = Alignment.TopCenter,
+                                )
                             }
                             Box(modifier = Modifier.fillMaxWidth().staggeredAppear(stagger)) {
                                 MetricGrid(
@@ -1448,6 +1470,8 @@ fun TodayScreen(
                                     profileWeightKg = profileWeightKg,
                                     importedStepsForDay = importedStepsForDay,
                                     estimatedStepsForDay = stepsEstForDay,
+                                    caloriesForDay = caloriesByDay[selectedDayKey],   // #616: imported-first per day
+                                    caloriesSpark = caloriesSpark,                    // #616: imported-first trend
                                     stepActivityClassForDay = stepActivityClassForDay,
                                     stepsEstimateCaption = stepsEstimateCaption(profileStore),
                                     restScore = restScoreForDay,
@@ -1497,7 +1521,7 @@ fun TodayScreen(
                             vitality = vitalityToday,
                             importedStepsForDay = importedStepsForDay,
                             estimatedStepsForDay = stepsEstForDay,
-                            latestActiveKcal = latestActiveKcal,
+                            caloriesForDay = caloriesByDay[selectedDayKey],
                             hydrationTotalMl = hydrationTotalMl,
                             hydrationGoalMl = hydrationGoalMl,
                             onOpenHydration = onOpenHydration,
@@ -1506,6 +1530,15 @@ fun TodayScreen(
                             onOpenSleep = onOpenSleep,
                             onOpenCoupled = onOpenCoupled,
                             onCustomise = { showDashboardEditor = true },
+                        )
+                        // #656: the persistent journal widget (last-7-days strip + tap-through). Now a
+                        // reorderable section like the others — hold-drag or Arrange moves it. Today-only
+                        // and enabled-gated at the loop level (sectionVisible) so it never leaves a blank
+                        // draggable slot. Twin of iOS LiquidTodayView's `.journal` arm.
+                        TodaySection.JOURNAL -> JournalReminderCard(
+                            viewModel = viewModel,
+                            days = days,
+                            onOpenJournal = onOpenJournal,
                         )
                     }
                 }
@@ -1529,10 +1562,16 @@ fun TodayScreen(
             )
         }
     }
-        PullToRefreshContainer(
-            state = pullToSyncState,
-            modifier = Modifier.align(Alignment.TopCenter),
-        )
+        // Material3's PullToRefreshContainer draws its indicator circle even at rest (progress 0, not
+        // refreshing), so an idle Today showed a permanent grey dot at the top (#582). Compose it only
+        // while a pull is in progress or a sync is running — the pull GESTURE flows through the Box's
+        // nestedScroll above, not this container, so gating the visual can't disable pull-to-sync.
+        if (pullToSyncState.progress > 0f || pullToSyncState.isRefreshing) {
+            PullToRefreshContainer(
+                state = pullToSyncState,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        }
     }
 
     // Scoring guide sheet, full-screen Dialog, mirroring Settings' What's-new presentation. Opened
@@ -2686,9 +2725,16 @@ private fun SynthesisHeroCard(
         // the SAME in both states, only the detail body and chrome fold, never the read (#506).
         val status = if (recoveryCalibration != null) "Calibrating" else synthesisWord(recovery)
         val detail = if (recoveryCalibration != null) {
-            // Comma (not the old em-dash) to match the Swift canonical synthesis copy VERBATIM
-            // (TodayView "Learning your baseline, N of M nights.") and the no-em-dash standing rule.
-            "Learning your baseline, $recoveryCalibration of ${Baselines.minNightsSeed} nights."
+            // #612: if the baseline aged out silently — connected, but no new night for > staleDays — say WHY
+            // it's calibrating instead of only "learning your baseline". `stale` is always > staleDays (14).
+            val stale = Baselines.nightsSinceNewestValidNight(days.map { it.day }, days.map { it.avgHrv }, logicalDayKeyNow())
+            if (stale != null && stale > Baselines.staleDays) {
+                uiString(R.string.l10n_today_screen_no_new_nights_from_your_strap_for_stale_days_8863bcfe, stale)
+            } else {
+                // Comma (not the old em-dash) to match the Swift canonical synthesis copy VERBATIM
+                // (TodayView "Learning your baseline, N of M nights.") and the no-em-dash standing rule.
+                "Learning your baseline, $recoveryCalibration of ${Baselines.minNightsSeed} nights."
+            }
         } else if (carriedDay != null) {
             // Carried prior-day read, summarise that day + stamp it so it isn't passed off as today's.
             synthesisDetail(carriedDay) + " ${carriedCaption(carriedDay.day)}."
@@ -2927,6 +2973,41 @@ private fun HeroVitalRow(label: String, value: String, tint: Color, fraction: Do
 // big white value + small unit + chevron on the right. A card with no value yet renders a dash rather than
 // vanishing. Mirrors iOS TodayView.yourCardsSection / pinnedCardRow / dashboardValue / dashboardTint.
 
+/** Shared Today section edit affordance. The 48dp box keeps the whole control easy to tap while its
+ *  visible content stays pinned to the overline instead of centring against a two-line header. */
+@Composable
+private fun TodayEditAction(
+    contentDescription: String,
+    onClick: () -> Unit,
+    contentAlignment: Alignment = Alignment.Center,
+) {
+    Box(
+        modifier = Modifier
+            .height(48.dp)
+            .clickable(onClick = onClick)
+            .semantics { this.contentDescription = contentDescription }
+            .padding(horizontal = Metrics.space12),
+    ) {
+        Row(
+            modifier = Modifier.align(contentAlignment),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Tune,
+                contentDescription = null,
+                tint = Palette.accent,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(Metrics.space4))
+            Text(
+                uiString(R.string.l10n_today_screen_edit_5301648d).uppercase(Locale.getDefault()),
+                style = NoopType.overline.copy(letterSpacing = 0.4.sp),
+                color = Palette.accent,
+            )
+        }
+    }
+}
+
 @Composable
 private fun YourCardsSection(
     cards: List<DashboardCard>,
@@ -2940,7 +3021,7 @@ private fun YourCardsSection(
     vitality: Double?,
     importedStepsForDay: Int?,
     estimatedStepsForDay: Int?,
-    latestActiveKcal: Double?,
+    caloriesForDay: Double?,
     hydrationTotalMl: Double,
     hydrationGoalMl: Int,
     onOpenHydration: () -> Unit,
@@ -2952,26 +3033,13 @@ private fun YourCardsSection(
 ) {
     Box(modifier = Modifier.fillMaxWidth().staggeredAppear(2)) {
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
-            // Header: "YOUR CARDS" overline + a right-aligned blue CUSTOMISE action (the WHOOP ✎ affordance).
+            // Header: "YOUR CARDS" overline + a right-aligned blue EDIT action (the WHOOP ✎ affordance).
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Overline("Your cards", modifier = Modifier.weight(1f))
-                TextButton(
+                TodayEditAction(
                     onClick = onCustomise,
-                    colors = ButtonDefaults.textButtonColors(contentColor = Palette.accent),
-                    modifier = Modifier.semantics { contentDescription = uiString(R.string.l10n_today_screen_customise_your_cards_2428d761) },
-                ) {
-                    Icon(
-                        Icons.Filled.Tune,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        uiString(R.string.l10n_today_screen_customise_b378dddc),
-                        style = NoopType.overline.copy(letterSpacing = 0.4.sp),
-                        color = Palette.accent,
-                    )
-                }
+                    contentDescription = uiString(R.string.l10n_today_screen_customise_your_cards_2428d761),
+                )
             }
             cards.forEach { card ->
                 DashboardCardRow(
@@ -2988,7 +3056,7 @@ private fun YourCardsSection(
                         vitality = vitality,
                         importedStepsForDay = importedStepsForDay,
                         estimatedStepsForDay = estimatedStepsForDay,
-                        latestActiveKcal = latestActiveKcal,
+                        caloriesForDay = caloriesForDay,
                         hydrationTotalMl = hydrationTotalMl,
                         hydrationGoalMl = hydrationGoalMl,
                     ),
@@ -3177,7 +3245,7 @@ private fun dashboardCardValue(
     vitality: Double?,
     importedStepsForDay: Int?,
     estimatedStepsForDay: Int?,
-    latestActiveKcal: Double?,
+    caloriesForDay: Double?,
     hydrationTotalMl: Double,
     hydrationGoalMl: Int,
 ): String {
@@ -3210,7 +3278,7 @@ private fun dashboardCardValue(
             real ?: est ?: NO_DATA
         }
         DashboardCard.CALORIES ->
-            withUnit(latestActiveKcal?.let { intStringGrouped(it) } ?: NO_DATA)
+            withUnit(caloriesForDay?.let { intStringGrouped(it) } ?: NO_DATA)
         DashboardCard.STRESS ->
             // #706/#684: Stress is baseline-relative, so until the strap has banked enough worn nights to
             // seed the 30-day RHR/HRV baseline StressScreen reads, the front card has no number to show. The
@@ -3936,7 +4004,10 @@ private fun RecoveryDriversSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         // Header row: section title + the SURFACED confidence pill (dot + tier tag) on the right.
-        Row(verticalAlignment = Alignment.Top) {
+        Row(
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(Metrics.space8),
+        ) {
             Box(modifier = Modifier.weight(1f)) {
                 SectionHeader("What shaped it", overline = overline, trailing = "vs your baseline")
             }
@@ -4672,6 +4743,13 @@ private fun MetricGrid(
     profileWeightKg: Double = 75.0,
     importedStepsForDay: Int? = null,
     estimatedStepsForDay: Int? = null,
+    // #616: the selected day's calorie value resolved imported-first (imported Apple/Health-Connect
+    // activeKcal ?: NOOP's on-device estimate), so the Calories tile matches the card + detail instead of
+    // reading the on-device estimate alone (which left it NO_DATA / inconsistent). Mirrors the steps params.
+    caloriesForDay: Double? = null,
+    // #616: the Calories tile's imported-first 14-day trend (see caloriesSpark above) — threaded like
+    // restSpark because it isn't a plain DailyMetric column (it unions the imported + on-device series).
+    caloriesSpark: List<Double> = emptyList(),
     // #316 / @63, the selected day's representative activity class (0=still, 1=walk, 2=run), shown as a small
     // still/walk/run glyph on a REAL (measured) Steps tile. null hides the icon (no classed sample for the day).
     stepActivityClassForDay: Int? = null,
@@ -4790,6 +4868,7 @@ private fun MetricGrid(
                 unit = "",
                 tint = Palette.metricCyan,
                 frac = steps?.let { (it / 10000.0).coerceIn(0.0, 1.0) },
+                spark = w.steps,   // #616: was missing → no trend line under the tile
             )
         },
         KeyMetric.WEIGHT to run {
@@ -4802,13 +4881,19 @@ private fun MetricGrid(
                 frac = null,
             )
         },
-        KeyMetric.CALORIES to KeyTileData(
-            label = uiString(R.string.l10n_today_screen_calories_3e62ecfe),
-            value = d?.activeKcalEst?.let { intString(it) } ?: NO_DATA,
-            unit = if (d?.activeKcalEst != null) "kcal" else "",
-            tint = Palette.metricAmber,
-            frac = d?.activeKcalEst?.let { (it / 800.0).coerceIn(0.0, 1.0) },
-        ),
+        KeyMetric.CALORIES to run {
+            // #616: the per-day resolved calorie value (caloriesForDay = imported Apple/Health-Connect
+            // first, else NOOP's on-device estimate) — one number across tile, card and detail.
+            val kcal = caloriesForDay
+            KeyTileData(
+                label = uiString(R.string.l10n_today_screen_calories_3e62ecfe),
+                value = kcal?.let { intString(it) } ?: NO_DATA,
+                unit = if (kcal != null) "kcal" else "",
+                tint = Palette.metricAmber,
+                frac = kcal?.let { (it / 800.0).coerceIn(0.0, 1.0) },
+                spark = caloriesSpark,   // #616: imported-first trend (was missing → no trend line)
+            )
+        },
     )
 
     // Resolve the enabled tiles to their descriptors (keeping the metric for the tap mapping), dropping
@@ -5880,6 +5965,7 @@ private fun TodaySourcesSection(
     onToggle: () -> Unit = {},
 ) {
     SectionHeader("Data Sources", overline = "Provenance")
+    Spacer(Modifier.height(Metrics.gap))
     val whoopPresent = (footer.whoopDays ?: 0) > 0 || strapBatteryPct != null
     val applePresent = (footer.appleDays ?: 0) > 0 || (footer.appleWorkouts ?: 0) > 0
     val hcPresent = (footer.hcDays ?: 0) > 0 || (footer.hcWorkouts ?: 0) > 0
@@ -6319,6 +6405,11 @@ private data class Window(
     val rhr: List<Double>,
     val spo2: List<Double>,
     val resp: List<Double>,
+    // #616: the Steps tile carried no `spark` series, so it drew no trend line while every other tile did.
+    // On-device DailyMetric.steps (the strap @57 count) — the same signal the Steps tile VALUE reads
+    // (on-device-first), matching iOS kSparks "steps". (Calories is imported-first, so its spark is threaded
+    // separately as caloriesSpark, not read off a DailyMetric column here.)
+    val steps: List<Double>,
 )
 
 /**
@@ -6347,6 +6438,7 @@ private fun rememberTrendWindow(
             rhr = series { it.restingHr?.toDouble() },
             spo2 = series { it.spo2Pct },
             resp = series { it.respRateBpm },
+            steps = series { it.steps?.toDouble() },   // #616
         )
     }
 

@@ -36,6 +36,8 @@ import com.noop.oura.OuraOuterFrame
 import com.noop.oura.OuraReassembler
 import com.noop.oura.OuraRingGen
 import com.noop.oura.OuraTransition
+import com.noop.oura.OuraWearState
+import com.noop.oura.OuraWearTracker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -160,6 +162,28 @@ class OuraLiveSource(
      *  to [AdoptPhase.Idle] on every connect/stop/disconnect so a stale outcome never drives a transition. */
     val adoptPhase: StateFlow<AdoptPhase> = _adoptPhase.asStateFlow()
 
+    // MARK: - Live wear/charge indicator (#628 twin) — On wrist / Off wrist / charging
+    //
+    // The ring emits no "worn" event, so wear is inferred: a LIVE-HR push (0x2F) means a finger; a silent
+    // live stream past a grace window means it came off; the ring's "chg. detected"/"stopped" STATE strings
+    // mean charging. All pure logic lives in [OuraWearTracker]; this source just feeds it the live signals.
+    // Faithful twin of Strand/BLE/OuraLiveSource.swift's wear wiring.
+    private val wearTracker = OuraWearTracker()
+    /** The last published wear state, so each TRANSITION is logged once (steady state is not). */
+    private var loggedWearState: OuraWearState? = null
+    /** When the last LIVE-HR beat arrived (epoch ms). If the stream goes quiet for [wornPulseTimeoutMs]
+     *  while we keep re-engaging it, the ring came off the finger -> NOT WORN. null until the first beat. */
+    private var lastLivePulseAt: Long? = null
+    /** Grace before a silent live-HR stream reads as "removed": the ring auto-reverts live HR ~20 s and we
+     *  re-engage every [reengageIntervalMs] (15 s), so a worn ring resumes beats well within this window;
+     *  exceeding it means no finger. Checked on the re-engage tick. Mirrors iOS `wornPulseTimeout` (40 s). */
+    private val wornPulseTimeoutMs = 40_000L
+
+    private val _ouraWearState = MutableStateFlow<OuraWearState?>(null)
+    /** The ring's live wear/charge state (worn/charging/off), or null before any evidence this session and
+     *  after disconnect (a stale badge must not outlive the link). Twin of iOS `LiveState.ouraWearState`. */
+    val ouraWearState: StateFlow<OuraWearState?> = _ouraWearState.asStateFlow()
+
     // MARK: - Adopt consent (gates the DANGEROUS post-factory-reset key install, OURA_PROTOCOL.md s3.2)
 
     /**
@@ -196,6 +220,11 @@ class OuraLiveSource(
     private val bluetoothManager: BluetoothManager? =
         appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private val adapter: BluetoothAdapter? = bluetoothManager?.adapter
+
+    /** Tier-B activity/MET research corpus writer (diagnostic JSONL sidecar; never scored, never a Streams
+     *  row). Null when there is no device id. The Kotlin twin of the Swift `OuraActivityDump`. */
+    private val activityDump: OuraActivityDump? =
+        if (deviceId.isNotEmpty()) OuraActivityDump(appContext, deviceId, log) else null
     private val scanner: BluetoothLeScanner? get() = adapter?.bluetoothLeScanner
 
     private var gatt: BluetoothGatt? = null
@@ -333,6 +362,15 @@ class OuraLiveSource(
             val d = driver ?: return
             if (d.phase == OuraDriverPhase.Streaming) {
                 for (cmd in d.reengageLiveHRCommands()) write(cmd)
+            }
+            // Removal watchdog (#628): if the live-HR stream has gone silent past the grace window while we
+            // keep re-engaging it, the ring came off the finger (there is no "removed" event). Downgrades
+            // WORN -> OFF; the tracker never overrides CHARGING. Mirrors the iOS re-engage-tick watchdog.
+            lastLivePulseAt?.let { last ->
+                if (System.currentTimeMillis() - last > wornPulseTimeoutMs) {
+                    wearTracker.noteLivePulseTimeout()
+                    publishWearState()
+                }
             }
             // Reschedule only while a session is live; stop() clears reengageScheduled + removes callbacks.
             if (reengageScheduled) handler.postDelayed(this, reengageIntervalMs)
@@ -523,6 +561,7 @@ class OuraLiveSource(
         reassembler.reset()
         pendingInstallKey = null       // a new connection starts with no install in flight
         _adoptPhase.value = AdoptPhase.Idle   // a stale outcome must never drive the wizard's transition
+        resetWear()   // #628: fresh session — clear any stale worn/charging badge
         // A fresh session: reset the one-shot streaming/anchor state, and never replay a stale-anchor guess.
         reachedStreaming = false
         loggedFirstTemp = false
@@ -584,6 +623,7 @@ class OuraLiveSource(
         if (_adoptPhase.value == AdoptPhase.InstallingKey) _adoptPhase.value = AdoptPhase.Failed
         pendingInstallKey = null
         _batteryPct.value = null   // a stale charge must not outlive the link
+        resetWear()                // #628: clear the wear badge too
         flush()
     }
 
@@ -695,6 +735,7 @@ class OuraLiveSource(
                     log("Oura: disconnected (status=$status)")
                     loggedFirstHr = false   // a reconnect should log its first sample again
                     _batteryPct.value = null
+                    resetWear()             // #628: the wear badge must not survive the link dropping
                     cancelReengage()
                     cancelHistoryFetch()
                     // Drain BEFORE the driver's anchor is gone (same reasoning as stop()): a pending event
@@ -1050,7 +1091,30 @@ class OuraLiveSource(
                     }
                     handler.post { guardedCallback("live-sink") { liveSink(bpm, emptyList()) } }
                 }
+                // A LIVE HR push (0x2F) exists only while the ring is measuring on a finger, so it is the
+                // sole safe "worn now" signal — fed unconditionally (even a gated-out bpm still proves the
+                // ring is on a finger). NEVER fed from OuraEvent.Ibi below: the history path decodes IBI
+                // tags to .Ibi only (never .Hr), so a past-night re-serve can't reach here and falsely
+                // flip the badge to worn. Mirrors iOS OuraLiveSource `.hr` case. Posted to the main looper
+                // (emit runs on the GATT binder thread) so ALL wear-tracker access — here + the re-engage
+                // watchdog — is single-threaded, matching how liveSink is posted just above.
+                val pulseAt = System.currentTimeMillis()
+                handler.post {
+                    lastLivePulseAt = pulseAt
+                    wearTracker.notePulse()
+                    publishWearState()
+                }
                 enqueue(listOf(e), now)
+            }
+            is OuraEvent.StateEvent -> {
+                // The ring's own lifecycle strings (0x45/0x53). Charger transitions drive the wear badge;
+                // never a durable Streams row. Posted to the main looper (see the .Hr note) so wear-tracker
+                // access stays single-threaded. Mirrors iOS OuraLiveSource `.state` case.
+                val st = e.value
+                handler.post {
+                    wearTracker.note(st)
+                    publishWearState()
+                }
             }
             is OuraEvent.Ibi -> {
                 val rr = e.value.ibiMs
@@ -1120,15 +1184,55 @@ class OuraLiveSource(
                     log("Oura: Tier-B ${e.value.kind} seen (tag 0x${e.value.tag.toString(16)}) - raw: $hex")
                 }
             }
-            is OuraEvent.ActivityInfo ->
+            is OuraEvent.ActivityInfo -> {
                 // INVESTIGATION ONLY (0x50 activity/MET, Tier B - a plausible third-party formula, NOT
                 // ground-truth-validated; see OuraActivityInfo). Logged with the DECODED state/MET values
                 // every time (not once-per-kind): this is the tag under active plausibility evaluation, so
                 // every real capture is evidence. Never persisted, never scored, and NEVER converted into
                 // steps (MET is not a step count; OuraStreamMapping drops ActivityInfo unconditionally).
                 log("Oura: activity (Tier-B) state=${e.value.state} met=${e.value.met}")
-            // Motion / state / rtcBeacon / debugText: not a durable Streams row (see OuraStreamMapping).
+                // Append the raw record to the Tier-B research corpus (anchored records only; deduped by
+                // ring-time in the writer). Diagnostic sidecar - never persisted to the DB, never scored.
+                d.unixSeconds(forRingTimestamp = e.value.ringTimestamp)?.let { utc ->
+                    activityDump?.record(
+                        ringTs = e.value.ringTimestamp, utc = utc, state = e.value.state,
+                        secPerSample = 60, met = e.value.met, // 60 s = assumed MET cadence (s6.13)
+                    )
+                }
+            }
+            // Motion / debugText / etc: not a durable Streams row (see OuraStreamMapping). StateEvent is
+            // handled above (wear badge only, also not a Streams row).
             else -> Unit
+        }
+    }
+
+    /** Mirror the tracker's current wear/charge state to [ouraWearState], logging each TRANSITION once (a
+     *  charger on/off or first pulse is worth a strap-log line; steady state is not). Twin of iOS
+     *  `publishWearState`. */
+    private fun publishWearState() {
+        val s = wearTracker.current
+        _ouraWearState.value = s
+        if (s != loggedWearState) {
+            loggedWearState = s
+            when (s) {
+                OuraWearState.WORN -> log("Oura: ring WORN - live HR streaming")
+                OuraWearState.CHARGING -> log("Oura: ring NOT WORN - on charger (HR/IBI paused until removed)")
+                OuraWearState.OFF -> log("Oura: ring NOT WORN - no live HR (removed / off charger)")
+                OuraWearState.UNKNOWN -> Unit
+            }
+        }
+    }
+
+    /** Reset the wear indicator on a fresh session / disconnect: a stale worn/charging badge must not
+     *  outlive the link. Twin of the iOS resets at connect/stop/disconnect. Posted to the main looper so
+     *  the wear-tracker mutation stays single-threaded even when called from the GATT-thread disconnect
+     *  handler — the queued reset lands in FIFO order relative to any pending live-pulse posts. */
+    private fun resetWear() {
+        handler.post {
+            wearTracker.reset()
+            loggedWearState = null
+            lastLivePulseAt = null
+            _ouraWearState.value = null
         }
     }
 

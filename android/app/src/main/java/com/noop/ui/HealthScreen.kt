@@ -1591,6 +1591,10 @@ private data class Vital(
     val readingDay: String? = null,
     val asOfLabel: String? = null,
     val rangeCaption: String? = null,
+    /** Metric-specific "no value" line, shown in place of a bare "No data" when nothing resolved, so an
+     *  empty tile still says WHY. Required (no default) so a new vital must state its own reason.
+     *  Kotlin twin of `BodyVitalReading.missingCaption` (VitalSignsSummary.swift) — same wording. */
+    val missingCaption: String,
     /** Personal-baseline banding (population fallback until 14 trusted nights). */
     val banding: VitalBands.Result,
     /** The metric's category colour (used only when in range). */
@@ -1614,9 +1618,13 @@ private data class Vital(
      *  The wording says which yardstick judged it: your baseline vs typical ranges. */
     val stateCaption: String = when {
         // Raw SpO₂ is a device-dependent ADC, not a clinical value — never claim an in/out-of-range
-        // judgment. Show a plain "uncalibrated" note when a value decoded, "No data" otherwise. (#93)
-        key == "spo2raw" -> if (banding.band == VitalBands.Band.NO_DATA) "No data" else "Uncalibrated"
-        banding.band == VitalBands.Band.NO_DATA -> "No data"
+        // judgment. Show a plain "uncalibrated" note when a value decoded. (#93)
+        key == "spo2raw" && banding.band != VitalBands.Band.NO_DATA -> "Uncalibrated"
+        // Nothing resolved: say WHY this tile is empty rather than a bare "No data", which reads as a
+        // bug for metrics NOOP cannot derive from a strap at all (the calibrated SpO₂ % is import-only:
+        // AnalyticsEngine writes spo2Pct = null on purpose, see Spo2ReTrace). Ports the Apple behaviour
+        // (`guard let day else { return missingCaption }`) — Android showed "No data" for every case.
+        banding.band == VitalBands.Band.NO_DATA -> missingCaption
         banding.basis == VitalBands.Basis.PERSONAL ->
             if (banding.band == VitalBands.Band.IN_RANGE) "In your range" else "Off your baseline"
         else ->
@@ -1723,6 +1731,7 @@ private fun vitalsFor(
     return listOf(
         Vital(
             key = "resp", label = uiString(R.string.l10n_health_screen_resp_rate_1c48dbd8), unit = "rpm",
+            missingCaption = "No respiratory-rate value",
             value = d?.respRateBpm, format = { String.format("%.1f", it) },
             deltaText = deltaText(d?.respRateBpm, previous { it.respRateBpm }),
             readingDay = todayKey,
@@ -1734,6 +1743,7 @@ private fun vitalsFor(
         ),
         Vital(
             key = "spo2", label = uiString(R.string.l10n_health_screen_blood_o_9bf5ed9b), unit = "%",
+            missingCaption = "No SpO₂ import or Health value",
             value = d?.spo2Pct, format = { String.format("%.0f", it) },
             deltaText = deltaText(d?.spo2Pct, previous { it.spo2Pct }, decimals = 0),
             readingDay = todayKey,
@@ -1752,6 +1762,7 @@ private fun vitalsFor(
             // full u16 span just keeps the tile cyan (never "off range"); `stateCaption` labels it
             // uncalibrated, so we never assert an in/out-of-range clinical judgment on raw sensor data.
             key = "spo2raw", label = uiString(R.string.l10n_health_screen_raw_spo_ccfe80c1), unit = "ADC",
+            missingCaption = "No raw SpO₂ decode for the night",
             value = d?.let(spo2RawMean), format = { String.format("%.0f", it) },
             deltaText = deltaText(d?.let(spo2RawMean), previous(spo2RawMean), decimals = 0),
             readingDay = todayKey,
@@ -1763,6 +1774,7 @@ private fun vitalsFor(
         ),
         Vital(
             key = "rhr", label = uiString(R.string.l10n_health_screen_resting_hr_26677094), unit = "bpm",
+            missingCaption = "No resting HR value",
             value = d?.restingHr?.toDouble(), format = { it.roundToInt().toString() },
             deltaText = deltaText(d?.restingHr?.toDouble(), previous { it.restingHr?.toDouble() }, decimals = 0),
             readingDay = todayKey,
@@ -1777,6 +1789,7 @@ private fun vitalsFor(
         ),
         Vital(
             key = "hrv", label = "HRV", unit = "ms",
+            missingCaption = "No HRV value",
             value = d?.avgHrv, format = { it.roundToInt().toString() },
             deltaText = deltaText(d?.avgHrv, previous { it.avgHrv }, decimals = 0),
             readingDay = todayKey,
@@ -1788,6 +1801,7 @@ private fun vitalsFor(
         ),
         Vital(
             key = "skin", label = uiString(R.string.l10n_health_screen_skin_temp_a4affc5a), unit = skinUnitLabel,
+            missingCaption = "No nightly skin-temp value",
             value = skin, format = skinFormat,
             deltaText = deltaText(skin, previousSkin),
             readingDay = todayKey,
@@ -1937,6 +1951,13 @@ internal fun mergeStepsReadings(
 ): List<VitalReading> =
     (real.keys + imported.keys + est.keys).toSortedSet()
         .mapNotNull { d -> real[d] ?: imported[d] ?: est[d] }
+
+/** #616: per-day precedence merge for a metric with disjoint stores (first non-null per day wins),
+ *  ascending. The N-store generalisation of [mergeStepsReadings]; calories reuse it as the two-store
+ *  on-device (`activeKcalEst`) ?: imported (Apple/Health-Connect `activeKcal`) union. Pure for testability. */
+internal fun mergeReadings(vararg stores: Map<String, VitalReading>): List<VitalReading> =
+    stores.flatMap { it.keys }.toSortedSet()
+        .mapNotNull { day -> stores.firstNotNullOfOrNull { it[day] } }
 
 private data class VitalDetailModel(
     val key: String,
@@ -2595,21 +2616,28 @@ private suspend fun buildSeriesVitalDetail(vm: AppViewModel, key: String): Vital
         )
     }
     "active_kcal" -> {
-        // Read active energy from the SAME apple-health ∪ health-connect union the Today Calories card uses.
-        // Health Connect (the common Android source) writes activeKcal only into the AppleDaily table under
-        // "health-connect", not as an active_kcal metricSeries row, so reading metricSeries("apple-health") alone
-        // opened an empty detail for a Health-Connect-only user whose card DID show a number. One point per day,
-        // apple-health winning a tie (matching the card's newest-value read), ascending.
-        val rows = vm.repo.appleDaily("apple-health", "0000-01-01", "9999-12-31") +
-            vm.repo.appleDaily("health-connect", "0000-01-01", "9999-12-31")
-        val byDay = LinkedHashMap<String, VitalReading>()
-        for (r in rows) r.activeKcal?.let { byDay.putIfAbsent(r.day, VitalReading(r.day, it, r.deviceId)) }
+        // #616: calories, like steps (#377), come from TWO disjoint stores — the on-device HR estimate
+        // (DailyMetric.activeKcalEst, exposed by resolvedSeries("active_kcal")) and imported Apple/Health-
+        // Connect active energy (AppleDaily.activeKcal, where Health Connect writes it — NOT an active_kcal
+        // metricSeries row). Reading imports ALONE opened an empty / HealthConnect-only detail for a WHOOP
+        // 5.0 user whose calories are on-device, and disagreed with the Key-Metrics tile. Resolve per day
+        // IMPORTED-FIRST (the phone's activeKcal, else NOOP's on-device estimate) — matching the tile + card
+        // so the chart + Readings agree, while keeping every imported day in the union.
+        val real = vm.repo.resolvedSeries("active_kcal", "my-whoop", "0000-00-00", "9999-99-99",
+            strapDeviceId = vm.activeStrapId)
+            .points.associateBy({ it.day }, { VitalReading(it.day, it.value, it.source) })
+        val imported = LinkedHashMap<String, VitalReading>()
+        for (r in vm.repo.appleDaily("apple-health", "0000-01-01", "9999-12-31") +
+            vm.repo.appleDaily("health-connect", "0000-01-01", "9999-12-31")) {
+            val k = r.activeKcal
+            if (k != null && k > 0) imported.putIfAbsent(r.day, VitalReading(r.day, k, r.deviceId))
+        }
         VitalDetailModel(
             key = key,
             title = uiString(R.string.l10n_health_screen_active_energy_2d3288f9),
             unit = "kcal",
             color = Palette.metricAmber,
-            readings = byDay.entries.sortedBy { it.key }.map { it.value },
+            readings = mergeReadings(imported, real),   // imported wins its day, else on-device estimate
             format = { it.roundToInt().toString() },
         )
     }

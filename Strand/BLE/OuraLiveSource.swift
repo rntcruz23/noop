@@ -143,6 +143,20 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Reassembles notification fragments into complete TLV inner records across feeds.
     private let reassembler = OuraReassembler()
 
+    /// Live wear/charge indicator: a LIVE-HR push (.hr) means the ring is on a finger; the ring's own "chg.
+    /// detected"/"stopped" STATE strings bracket a charging period. Fed ONLY from the live push and STATE
+    /// (never a banked .ibi, which can be a past-night re-serve) and only while `feedsLive`. Mirrored to
+    /// `live.ouraWearState` for the On-wrist / Off-wrist UI.
+    private let wearTracker = OuraWearTracker()
+    private var loggedWearState: OuraWearState?
+    /// When the last LIVE-HR beat arrived. If the stream goes quiet for `wornPulseTimeout` while we are
+    /// still re-engaging it, the ring came off the finger (there is no "removed" event) -> NOT WORN.
+    private var lastLivePulseAt: Date?
+    /// Grace before a silent live-HR stream means "removed": the ring auto-reverts DHR ~20 s and we
+    /// re-engage every `reengageInterval` (15 s), so a worn ring resumes beats well within this; exceeding
+    /// it means no finger. Checked on the re-engage tick, so worst-case detection is this + one interval.
+    private let wornPulseTimeout: TimeInterval = 40
+
     /// Logs the FIRST live HR sample of a connection only (never every push); reset on stop/disconnect.
     private var loggedFirstHR = false
     /// The ring's optical HR needs a beat or two to settle after (re)subscribe, so the very first live-HR
@@ -179,6 +193,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     /// Assumed per-sample epoch for the estimate log (the ONE calibration knob; the cadence self-check
     /// above measures the real value). 60 s = Oura's common 1-minute MET resolution.
     private let activityEpochSeconds: Double = 60
+    /// Append-only JSONL research corpus for the raw 0x50 MET series (Tier-B, never scored/persisted to
+    /// SQLite). Created only on a live/persisting source (nil for the discovery-only scanner). Deduped by
+    /// ring-time so re-served records don't duplicate; logs its file path once when the first record lands.
+    private let activityDump: OuraActivityDump?
     /// Cached local-day formatter (the 0x50 stream is high-volume; avoid building one per record).
     private static let activityDayFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f   // local time zone by default
@@ -440,6 +458,8 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         self.onBattery = onBattery
         self.feedsLive = feedsLive
         self.adoptIntent = adoptIntent
+        // Tier-B MET research corpus: only on a live/persisting source, never the discovery-only scanner.
+        self.activityDump = feedsLive && !deviceId.isEmpty ? OuraActivityDump(deviceId: deviceId, log: log) : nil
         super.init()
         // Dedicated queue-less central -> callbacks arrive on the main queue, matching @MainActor.
         self.central = CBCentralManager(delegate: self, queue: nil)
@@ -519,6 +539,7 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         driver?.stop()
         driver = nil
         reassembler.reset()
+        wearTracker.reset(); loggedWearState = nil; lastLivePulseAt = nil
         loggedFirstHR = false
         droppedFirstLiveHR = false
         loggedFirstTemp = false
@@ -722,6 +743,12 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 if feedsLive {
                     live.heartRate = hr.bpm
                     live.connected = true
+                    // A LIVE HR push (0x2F) exists only while the ring is measuring on a finger, so it is
+                    // the sole safe "worn now" signal. A banked IBI (.ibi below) can be a history re-serve
+                    // from a past night, so it must NOT flip the badge to worn.
+                    lastLivePulseAt = Date()
+                    wearTracker.notePulse()
+                    publishWearState()
                 }
                 enqueue([e], ts: now)
 
@@ -827,6 +854,12 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 let utc = driver.unixSeconds(forRingTimestamp: info.ringTimestamp)
                 let when = utc.map { Self.cursorDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval($0))) } ?? "no anchor yet"
                 log("Oura: activity (Tier-B) [\(when)] state=\(info.state) met=\(info.met)")
+                // Append the raw record to the Tier-B research corpus (anchored records only; deduped by
+                // ring-time inside the writer). Diagnostic sidecar — never persisted to SQLite, never scored.
+                if let utc = utc {
+                    activityDump?.record(ringTs: info.ringTimestamp, utc: utc, state: info.state,
+                                         secPerSample: Int(activityEpochSeconds), met: info.met)
+                }
                 // Accumulate the MET series by local day for the drain-end estimate, and observe the
                 // per-sample cadence from consecutive record times (both investigation-only, never scored).
                 if let utc = utc {
@@ -841,8 +874,33 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                     lastActivitySampleCount = info.met.count
                 }
 
+            case .state(let s):
+                // The ring's own lifecycle strings (0x45/0x53). Charger transitions drive the wear badge;
+                // never a durable Streams row. Only the LIVE stream updates the indicator (a history
+                // re-serve is out of order and would flap it).
+                if feedsLive {
+                    wearTracker.note(state: s)
+                    publishWearState()
+                }
+
             default:
-                break   // motion / state / debugText: not a durable Streams row (see OuraStreamMapping)
+                break   // motion / debugText / etc: not a durable Streams row (see OuraStreamMapping)
+            }
+        }
+    }
+
+    /// Mirror the tracker's current wear/charge state to the observable, and log each TRANSITION once (a
+    /// charger on/off or first pulse is worth a strap-log line; steady state is not).
+    private func publishWearState() {
+        let s = wearTracker.current
+        if feedsLive { live.ouraWearState = s }
+        if s != loggedWearState {
+            loggedWearState = s
+            switch s {
+            case .worn:     log("Oura: ring WORN - live HR streaming")
+            case .charging: log("Oura: ring NOT WORN - on charger (HR/IBI paused until removed)")
+            case .off:      log("Oura: ring NOT WORN - no live HR (removed / off charger)")
+            case .unknown:  break
             }
         }
     }
@@ -866,6 +924,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private func reengageLiveHR() {
         guard let driver, reachedStreaming else { return }
         write(driver.reengageLiveHRCommands())
+        // Live-HR watchdog: if the stream has gone silent past the grace window while we were WORN, the
+        // ring came off the finger (no "removed" event exists) -> NOT WORN. Only meaningful once we have
+        // seen at least one live beat this session.
+        if feedsLive, let last = lastLivePulseAt, Date().timeIntervalSince(last) > wornPulseTimeout {
+            wearTracker.noteLivePulseTimeout()
+            publishWearState()
+        }
     }
 
     // MARK: - Honest needs-pairing fallback (Huami precedent)
@@ -997,6 +1062,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         pendingInstallKey = nil
         adoptPhase = .idle
         reassembler.reset()
+        wearTracker.reset(); loggedWearState = nil; lastLivePulseAt = nil
         // Per-drain cursor state starts clean each session (fetchHistoryIfIdle re-arms it per drain).
         drain.reset()
         resumeCursorAtFetchStart = 0
@@ -1045,6 +1111,7 @@ extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
         driver?.stop()
         driver = nil
         reassembler.reset()
+        wearTracker.reset(); loggedWearState = nil; lastLivePulseAt = nil
         writeCharacteristic = nil
         loggedFirstHR = false
         droppedFirstLiveHR = false

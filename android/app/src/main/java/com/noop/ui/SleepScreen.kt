@@ -83,11 +83,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.analytics.AnalyticsEngine
-import com.noop.analytics.SleepDebt
 import com.noop.analytics.SleepDebtLedger
 import com.noop.analytics.SleepEditGuard
 import com.noop.analytics.SleepStageTotals
-import com.noop.data.DailyMetric
 import com.noop.data.DismissedSleep
 import com.noop.data.SleepSession
 import com.noop.data.WhoopRepository
@@ -136,6 +134,10 @@ fun SleepScreen(
     onOpenJournal: () -> Unit = {},
 ) {
     val days by vm.recentDays.collectAsStateWithLifecycle()
+    // Whether the ACTIVE strap is an Oura ring, off the canonical brand table (not an "oura" literal) — so
+    // the sleep surfaces name a ring-PROVIDED night's provenance "Oura" and flag its split as the ring's
+    // RAW on-device stages. Read/UI only, no stored value. Mirrors macOS Repository.activeDeviceIsOura.
+    val activeIsOura = com.noop.data.DeviceBrandCatalog.isOura(vm.activeStrapId)
 
     // PERF (#scroll-jank): the BLE live state ticks ~1Hz. This screen reads `live` ONLY for the
     // "syncing history" note (backfilling + the chunk count), so reading the whole `live` object at
@@ -496,7 +498,7 @@ fun SleepScreen(
                     score = if (night != null) heroPerformanceScore(night, days, imported)
                             else tilesModel?.performance?.latest,
                     asleepMin = model?.stages?.asleep,
-                    source = restHeroSource(imported, night?.dayKey ?: days.lastOrNull()?.day),
+                    source = restHeroSource(imported, night?.dayKey ?: days.lastOrNull()?.day, activeIsOura),
                     overline = nightRelativeLabel(nightOffset),
                 )
             }
@@ -523,6 +525,7 @@ fun SleepScreen(
             item {
             Hero(
                 display = display,
+                activeIsOura = activeIsOura,
                 clock = night?.clockLabel ?: model?.clockLabel,
                 nightOffset = nightOffset,
                 lastIndex = max(navDays.lastIndex, 0),
@@ -638,7 +641,7 @@ fun SleepScreen(
                 item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
                 item { HoursVsNeededCard(m) }
                 item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                item { SleepConsistencyCard(sleeps) }
+                item { SleepConsistencyCard(sleeps, habitualMidsleep) }
             }
         }
     }
@@ -929,57 +932,15 @@ private fun SleepHeroVessel(fraction: Double, value: Double, tint: Color, diamet
     }
 }
 
-/** A short Rest state word for the hero gauge — same banding the synthesis hero uses. */
-private fun sleepScoreWord(score: Double): String = when {
-    score < 50.0 -> "Poor"
-    score < 70.0 -> "Fair"
-    score < 85.0 -> "Good"
-    else -> "Optimal"
-}
-
-/**
- * Short night-relative label ("Last night" / "1 night ago" / "N nights ago") for the ◀/▶-navigated
- * night. Shared by the Rest hero overline and the hypnogram nav header so both name the SAME night
- * the hero's score is resolved for. Mirrors iOS SleepView.nightRelativeLabel.
- */
-internal fun nightRelativeLabel(offset: Int): String = when (offset) {
-    0 -> "Last night"
-    1 -> "1 night ago"
-    else -> "$offset nights ago"
-}
-
-/**
- * The sleep-performance score (0–100) for a SPECIFIC navigated night: the imported WHOOP figure for
- * that night's wake-day when the export carried one, else the resolved Rest composite for that day.
- * Mirrors the per-day transform in [buildSleepModel]'s `performance` series (and iOS
- * SleepView.performanceScore), keyed by [HeroNight.dayKey], so a navigated past night reads ITS OWN
- * score rather than the full-history latest. Null when there is no navigated night or that day has
- * no score.
- */
-private fun heroPerformanceScore(
-    night: HeroNight?, days: List<DailyMetric>, imported: ImportedSleepSeries,
-): Double? {
-    val wakeDay = night?.dayKey ?: return null
-    imported.performance[wakeDay]?.let { return it }
-    val daily = days.lastOrNull { it.day == wakeDay } ?: return null
-    return com.noop.analytics.RestScorer.restFromDaily(daily)
-}
-
-/**
- * Whether a SPECIFIC night's sleep-performance score is WHOOP's own imported figure or NOOP's
- * on-device approximation — so the hero is honest about provenance, like Today's badges. Keyed by the
- * night's wake-day (matching [heroPerformanceScore]) so a navigated night's badge tracks ITS OWN
- * score's provenance, not last night's. Mirrors the macOS SleepView.heroSource.
- */
-private fun restHeroSource(imported: ImportedSleepSeries, wakeDay: String?): String =
-    if (wakeDay != null && imported.performance[wakeDay] != null) "Whoop" else "On-device"
-
 // MARK: - 1. HERO — stage breakdown for the navigated night
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun Hero(
     display: HeroDisplay?,
+    // Whether the active strap is an Oura ring — names an Oura night's provenance and captions its split as
+    // the ring's RAW on-device stages. Read/UI only. Mirrors macOS Repository.activeDeviceIsOura.
+    activeIsOura: Boolean = false,
     clock: String?,
     nightOffset: Int,
     lastIndex: Int,
@@ -1038,8 +999,12 @@ private fun Hero(
             val inBedMin = groupInBedMin
                 ?: session?.let { (it.endTs - it.effectiveStartTs) / 60.0 }
                 ?: s.total
+            // An Oura night's stages are the ring's RAW on-device SleepNet classification (decoded off the
+            // 0x49 phase stream), NOT a NOOP approximation — so it gets its own honest caption instead of the
+            // "approx. stages (on-device)" one that describes NOOP's own sparse-motion staging.
+            val stageCaption = if (activeIsOura) " · raw on-device stages" else " · approx. stages (on-device)"
             val subtitle = "${durationText(inBedMin)} in bed · ${display.efficiencyText} efficiency" +
-                (if (display.realSegments != null) " · approx. stages (on-device)" else "")
+                (if (display.realSegments != null) stageCaption else "")
             // iOS #988 port: true per-epoch segments (≥ 2 — a single run has no transitions to lay
             // out) get the per-stage timeline rows; the rows ARE the legend, so no footer. Anything
             // else keeps the honest proportional strip + StageBreakdownRows footer.
@@ -1112,6 +1077,10 @@ private fun Hero(
                     )
                 }
             }
+            // For an Oura-provided night, say plainly this split is the ring's RAW on-device classification —
+            // so the larger Awake / smaller Deep+REM here isn't misread as the polished numbers the Oura app
+            // shows for the same night (the app post-processes the same stream). Mirrors iOS ouraRawStagesNote.
+            if (activeIsOura) OuraRawStagesNote()
         }
         // Naps card (#508/#518): the day's blocks OTHER than the main night, each editable / deletable
         // with the SAME mechanism main sleep uses, plus a Main / Nap(s) / Total split so what drives the
@@ -1123,6 +1092,7 @@ private fun Hero(
                 onEditNapTimes = onUpdateTimes,
                 onDeleteNap = onDeleteSession,
                 habitualMidsleepSec = habitualMidsleepSec,
+                activeIsOura = activeIsOura,
             )
         }
     }
@@ -1145,6 +1115,8 @@ private fun NapsCard(
     // The LEARNED habitual midsleep, fed to the main-night selector so the "why this is your main sleep"
     // reason matches the block the hero shows. null = cold-start band. Mirrors iOS SleepView. (C1)
     habitualMidsleepSec: Long? = null,
+    // Active strap is an Oura ring → a computed night's provenance reads "Oura" not "On-device" (C4).
+    activeIsOura: Boolean = false,
 ) {
     val mainMin = (main.endTs - main.effectiveStartTs) / 60.0
     val napMin = naps.sumOf { (it.endTs - it.effectiveStartTs) / 60.0 }
@@ -1178,8 +1150,33 @@ private fun NapsCard(
             // per-day merge winner; the info affordance reveals the foundation reason for the pick. Mirrors
             // iOS SleepView.mainSleepFooter. (spec 2026-06-20 C1/C4)
             Box(Modifier.fillMaxWidth().height(Metrics.divider).background(Palette.hairline))
-            MainSleepFooter(main = main, naps = naps, habitualMidsleepSec = habitualMidsleepSec)
+            MainSleepFooter(main = main, naps = naps, habitualMidsleepSec = habitualMidsleepSec, activeIsOura = activeIsOura)
         }
+    }
+}
+
+/**
+ * Honest caveat for an Oura-provided night: the stage split shown is the ring's RAW on-device SleepNet
+ * classification read straight off the BLE phase stream — NOT the adjusted stages the Oura app displays.
+ * The app post-processes the same night, so its Deep/REM run higher and its Awake lower; cross-checks put
+ * our Awake well above the app's. Surfaced so the breakdown isn't taken for the app's. Mirrors iOS
+ * SleepView.ouraRawStagesNote. Copy + tint (design token [Palette.restColor]) match Swift.
+ */
+@Composable
+private fun OuraRawStagesNote() {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.padding(horizontal = 2.dp),
+    ) {
+        SourceBadge(text = "Raw on-device stages", tint = Palette.restColor)
+        Text(
+            "This split is the ring's raw on-device classification read over Bluetooth, not the adjusted " +
+                "stages the Oura app shows. Expect more Awake and less Deep/REM here than in the Oura app " +
+                "for the same night.",
+            style = NoopType.caption,
+            color = Palette.textTertiary,
+        )
     }
 }
 
@@ -1196,11 +1193,16 @@ private fun MainSleepFooter(
     main: SleepSession,
     naps: List<SleepSession>,
     habitualMidsleepSec: Long?,
+    activeIsOura: Boolean = false,
 ) {
     val reason = mainSleepReasonText(listOf(main) + naps, habitualMidsleepSec)
-    // C4 — the real merge winner, the SAME wording the By-Day badge uses ("On-device" / "Whoop" /
-    // "Apple Health"), keyed on the main block's source. Mirrors iOS SleepView.nightSource.
-    val (sourceText, sourceTint) = daySourceBadge(main.deviceId)
+    // C4 — the real merge winner, the SAME wording the By-Day badge uses ("Oura" / "On-device" / "Whoop" /
+    // "Apple Health"), keyed on the main block's source. A persisted Oura night already carries the ring id
+    // (→ "Oura" from daySourceBadge); a night that merely COMPUTED under a live Oura strap reads "On-device"
+    // there, so flip it to "Oura" too, matching iOS SleepView.nightSource (WHOOP/Apple imports still win).
+    val base = daySourceBadge(main.deviceId)
+    val (sourceText, sourceTint) =
+        if (base.first == "On-device" && activeIsOura) "Oura" to Palette.restColor else base
     var showWhy by remember(main.startTs) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.space10)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2040,16 +2042,6 @@ private fun MotionStrip(epochs: List<Double>) {
     }
 }
 
-/** Map a stage name to its design-system sleep tone (case-insensitive) — local to this screen so the
- *  hero strip needn't reach into Charts.kt's private helper. */
-private fun stageColorFor(name: String): Color = when (name.trim().lowercase()) {
-    "deep" -> Palette.sleepDeep
-    "rem" -> Palette.sleepREM
-    "light" -> Palette.sleepLight
-    "awake", "wake" -> Palette.sleepAwake
-    else -> Palette.sleepLight
-}
-
 /**
  * "Asleep / Woke" — the fell-asleep and woke clock times for the navigated night, read off the
  * session's onset (startTs) and wake (endTs) timestamps, each with a moon / sun glyph. Sits in the
@@ -2615,20 +2607,22 @@ private fun MetricGrid(m: SleepModel, onMetricClick: (String) -> Unit = {}) {
                 onClick = { onMetricClick("respiratory") },
             )
         },
-        { mod ->
-            SparkTile(
-                mod, "Sleep Debt",
-                value = m.sleepDebt.latest?.let { durationText(it) } ?: "—",
-                caption = debtCaption(m.sleepDebt.latest),
-                accent = debtColor(m.sleepDebt.latest),
-                spark = m.sleepDebt.series, sparkColor = Palette.metricRose,
-                onClick = { onMetricClick("sleep_debt") },
-            )
-        },
     )
 
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         SectionHeader("Night detail", overline = "Metrics", trailing = "vs typical")
+
+        // Sleep Debt is the actionable summary for the section, so it leads at the full
+        // two-column width. The remaining six peer metrics keep the established 2 × 3 grid.
+        SparkTile(
+            Modifier.fillMaxWidth(), "Sleep Debt",
+            value = m.sleepDebt.latest?.let { durationText(it) } ?: "—",
+            caption = debtCaption(m.sleepDebt.latest),
+            accent = debtColor(m.sleepDebt.latest),
+            spark = m.sleepDebt.series, sparkColor = Palette.metricRose,
+            onClick = { onMetricClick("sleep_debt") },
+        )
+
         // Two-up rows; IntrinsicSize.Max + fillMaxHeight keep row neighbors equal height even when
         // large font scales grow one tile past the tileHeight floor. No empty cells.
         tiles.chunked(2).forEach { rowTiles ->
@@ -2637,7 +2631,6 @@ private fun MetricGrid(m: SleepModel, onMetricClick: (String) -> Unit = {}) {
                 horizontalArrangement = Arrangement.spacedBy(Metrics.gap),
             ) {
                 rowTiles.forEach { it(Modifier.weight(1f).fillMaxHeight()) }
-                if (rowTiles.size == 1) Spacer(Modifier.weight(1f))
             }
         }
     }
@@ -2848,7 +2841,7 @@ private fun DrawScope.drawRoundRectFill(color: Color, frac: Float) {
 @Composable
 private fun DurationTrend(m: SleepModel) {
     val pts = m.trendHours
-    val avg = pts.averageOrNull()
+    val avg = pts.sleepAverageOrNull()
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         SectionHeader("Trend", overline = "Sleep", trailing = "Last 14 days")
         ChartCard(
@@ -2899,7 +2892,7 @@ private fun DurationTrend(m: SleepModel) {
             footer = {
                 ChartFooter(
                     listOf(
-                        "Avg" to (m.trendDebtHours.averageOrNull()?.let { durationText(it * 60.0) } ?: "â€”"),
+                        "Avg" to (m.trendDebtHours.sleepAverageOrNull()?.let { durationText(it * 60.0) } ?: "â€”"),
                         "Max" to (m.trendDebtHours.maxOrNull()?.let { durationText(it * 60.0) } ?: "â€”"),
                         "Days" to "${m.trendDebtHours.size}",
                     ),
@@ -3116,92 +3109,6 @@ private fun SleepEmptyState() {
 
 // MARK: - Model + derivation lives in SleepModels.kt, SleepNightSelection.kt, SleepModelLogic.kt, and SleepStageTimelineLogic.kt
 
-// MARK: - Formatting helpers (mirror SleepView.swift)
-
-private fun pct(minutes: Double, total: Double): Int =
-    if (total > 0.0) (minutes / total * 100.0).roundToInt() else 0
-
-private fun pctValue(v: Double?): String = v?.let { "${it.roundToInt()}%" } ?: "—"
-
-/** "+12% vs typical" / "−0.4 rpm vs typical" — the latest-vs-mean caption every tile carries. */
-private fun vsTypical(latest: Double?, typical: Double?, suffix: String, decimals: Int = 0): String {
-    if (latest == null || typical == null || typical == 0.0) return "vs typical - "
-    val diff = latest - typical
-    val sign = if (diff >= 0) "+" else "−"
-    val mag = abs(diff)
-    val num = if (decimals == 0) "${mag.roundToInt()}" else String.format(Locale.US, "%.${decimals}f", mag)
-    return "$sign$num$suffix vs typical"
-}
-
-private fun debtCaption(debt: Double?): String {
-    if (debt == null) return "vs need"
-    return if (debt < 15.0) "On target" else "Below need"
-}
-
-private fun debtColor(debt: Double?): Color = when {
-    debt == null -> Palette.textPrimary
-    debt < 15.0 -> Palette.statusPositive
-    debt < 60.0 -> Palette.statusWarning
-    else -> Palette.statusCritical
-}
-
-// MARK: - Sleep-debt ledger formatting (mirror SleepView.swift)
-
-/**
- * "≈2h 10m" magnitude headline — leading "≈" because it's an accumulated estimate. Reads
- * "On target" inside the deadband so a few stray minutes don't show as debt.
- */
-private fun debtHeadline(ledger: SleepDebtLedger): String =
-    if (ledger.magnitudeMin < SleepDebt.ON_TARGET_BAND_MIN) "On target"
-    else "≈${durationText(ledger.magnitudeMin)}"
-
-/** Short tag beside the headline: sleep debt / surplus / balanced. */
-private fun debtTag(ledger: SleepDebtLedger): String = when {
-    ledger.magnitudeMin < SleepDebt.ON_TARGET_BAND_MIN -> "balanced"
-    ledger.isDebt -> "sleep debt"
-    else -> "surplus"
-}
-
-/** Plain-English read of the running balance over the window. */
-private fun debtRead(ledger: SleepDebtLedger): String {
-    val nights = ledger.nightCount
-    val span = "the last $nights night${if (nights == 1) "" else "s"}"
-    if (ledger.magnitudeMin < SleepDebt.ON_TARGET_BAND_MIN) {
-        return "You're roughly on top of your sleep across $span. Slept minutes balance out against your need."
-    }
-    val mag = durationText(ledger.magnitudeMin)
-    return if (ledger.isDebt) {
-        "You've banked about $mag of sleep debt over $span. Surplus nights count back against it. An earlier night or two would clear it."
-    } else {
-        "You're carrying about $mag of surplus over $span. You've slept past your need on balance. Nicely ahead."
-    }
-}
-
-/**
- * Color the balance by sign + size: surplus/within-band → positive green, modest debt →
- * warning, heavier debt → critical.
- */
-private fun debtBalanceColor(ledger: SleepDebtLedger): Color = when {
-    ledger.magnitudeMin < SleepDebt.ON_TARGET_BAND_MIN || !ledger.isDebt -> Palette.statusPositive
-    ledger.magnitudeMin < 180.0 -> Palette.statusWarning
-    else -> Palette.statusCritical
-}
-
-/** Signed "+1h 20m" / "−2h 10m" / "0m" balance string. */
-private fun debtSigned(minutes: Double): String {
-    if (abs(minutes) < 1.0) return "0m"
-    val sign = if (minutes >= 0.0) "+" else "−"
-    return "$sign${durationText(abs(minutes))}"
-}
-
-private fun durationText(minutes: Double): String {
-    val m = max(0, minutes.roundToInt())
-    return if (m < 60) "${m}m" else "${m / 60}h ${m % 60}m"
-}
-
-private fun List<Double>.averageOrNull(): Double? =
-    if (isEmpty()) null else sum() / size
-
 // MARK: - Hours vs Needed card
 
 /**
@@ -3318,21 +3225,22 @@ private data class SleepNightTiming(val label: String, val bedHour: Float, val w
  * of the personal typical. (PR #260)
  */
 @Composable
-internal fun SleepConsistencyCard(sleeps: List<SleepSession>) {
+internal fun SleepConsistencyCard(sleeps: List<SleepSession>, habitualMidsleepSec: Long? = null) {
     // #perf: building the per-night fold allocates 2 Calendars + a SimpleDateFormat per session (~28
     // objects for 14 nights). It's a pure derivation of `sleeps` (no wall-clock input), so memoize it on
     // `sleeps` — scrolling the Sleep screen then reuses it instead of rebuilding it every recompose frame.
-    val timings = remember(sleeps) {
-        val recent = sleeps.takeLast(14)
+    val timings = remember(sleeps, habitualMidsleepSec) {
         val sdf = SimpleDateFormat("EEE", Locale.US)
-        recent.map { s ->
-            val bedCal = Calendar.getInstance().apply { timeInMillis = s.effectiveStartTs * 1000L } // edited bedtime (PR #395)
-            val wakeCal = Calendar.getInstance().apply { timeInMillis = s.endTs * 1000L }
+        // #699: bridged bed→wake spans (one per day, night-tail fragments folded in), not raw sessions —
+        // see consistencyNightSpans.
+        consistencyNightSpans(sleeps, habitualMidsleepSec).map { (onsetTs, wakeTs) ->
+            val bedCal = Calendar.getInstance().apply { timeInMillis = onsetTs * 1000L } // edited bedtime (PR #395)
+            val wakeCal = Calendar.getInstance().apply { timeInMillis = wakeTs * 1000L }
             val bedH = bedCal.get(Calendar.HOUR_OF_DAY) + bedCal.get(Calendar.MINUTE) / 60f
             // Fold an evening bedtime to a negative hour so it sorts ABOVE the next-day wake on the axis.
             val bedNorm = if (bedH > 12f) bedH - 24f else bedH
             val wakeH = wakeCal.get(Calendar.HOUR_OF_DAY) + wakeCal.get(Calendar.MINUTE) / 60f
-            SleepNightTiming(sdf.format(Date(s.endTs * 1000L)), bedNorm, wakeH)
+            SleepNightTiming(sdf.format(Date(wakeTs * 1000L)), bedNorm, wakeH)
         }
     }
     if (timings.size < 3) return
@@ -3484,78 +3392,6 @@ internal fun SleepConsistencyCard(sleeps: List<SleepSession>) {
 }
 
 // MARK: - Sleep metric detail sheet
-
-private enum class SleepMetricRange(val label: String, val days: Long?) {
-    WEEK("W", 7), MONTH("M", 30), THREE_MONTH("3M", 90),
-    SIX_MONTH("6M", 180), YEAR("1Y", 365), ALL("ALL", null),
-}
-
-private data class SleepMetricSpec(
-    val title: String,
-    val unit: String,
-    val color: Color,
-    val format: (Double) -> String,
-)
-
-private fun sleepMetricSpec(key: String): SleepMetricSpec = when (key) {
-    "performance"     -> SleepMetricSpec("Rest", "%", Palette.restColor) { "${it.roundToInt()}" }
-    "efficiency"      -> SleepMetricSpec("Sleep Efficiency", "%", Palette.statusPositive) { "${it.roundToInt()}" }
-    "consistency"     -> SleepMetricSpec("Consistency", "%", Palette.metricCyan) { "${it.roundToInt()}" }
-    "hours_vs_needed" -> SleepMetricSpec("Hours vs Needed", "%", Palette.restColor) { "${it.roundToInt()}" }
-    "restorative"     -> SleepMetricSpec("Restorative", "%", Palette.sleepREM) { "${it.roundToInt()}" }
-    "respiratory"     -> SleepMetricSpec("Respiratory Rate", "rpm", Palette.metricPurple) { String.format(Locale.US, "%.1f", it) }
-    "sleep_debt"      -> SleepMetricSpec("Sleep Debt", "min", Palette.metricRose) { "${it.roundToInt()}" }   // #691: minutes, not decimal hours
-    else              -> SleepMetricSpec(key, "", Palette.accent) { "${it.roundToInt()}" }
-}
-
-private fun buildSleepMetricPoints(days: List<DailyMetric>, key: String): List<Pair<String, Double>> {
-    val needMin = max(450.0, days.mapNotNull { it.totalSleepMin?.takeIf { m -> m > 0.0 } }.average().let { if (it.isNaN()) 480.0 else it })
-    return days.mapNotNull { d ->
-        val v: Double? = when (key) {
-            // The Rest detail graph reads the REAL resolved Rest composite per day — the same single
-            // source of truth the Today Rest score uses (RestScorer.restFromDaily, the composite the
-            // sleep_performance series carries) — not a local hours-vs-need approximation. Keeps the
-            // graph and the score in agreement. (#614 follow-up)
-            "performance" -> com.noop.analytics.RestScorer.restFromDaily(d)?.takeIf { it in 0.0..100.0 }
-            "efficiency"  -> d.efficiency?.let { if (it <= 1.0) it * 100.0 else it }
-            "consistency" -> {
-                val idx = days.indexOf(d)
-                val lo = max(0, idx - 13)
-                val window = days.subList(lo, idx + 1).mapNotNull { it.totalSleepMin?.takeIf { m -> m > 0.0 } }
-                if (window.size < 3) null else {
-                    val m = window.average()
-                    val sd = kotlin.math.sqrt(window.sumOf { (it - m) * (it - m) } / window.size)
-                    (100.0 * (1.0 - sd / 90.0)).coerceIn(0.0, 100.0)
-                }
-            }
-            "hours_vs_needed" -> d.totalSleepMin?.takeIf { it > 0.0 }?.let { minOf(100.0, it / needMin * 100.0) }
-            "restorative" -> {
-                val dp = d.deepMin ?: return@mapNotNull null
-                val rm = d.remMin ?: return@mapNotNull null
-                val sl = d.totalSleepMin ?: return@mapNotNull null
-                if (sl > 0.0) (dp + rm) / sl * 100.0 else null
-            }
-            "respiratory" -> d.respRateBpm
-            "sleep_debt"  -> d.totalSleepMin?.let { max(0.0, needMin - it) }   // #691: minutes (spec unit "min")
-            else          -> null
-        }
-        v?.takeIf { it.isFinite() }?.let { d.day to it }
-    }
-}
-
-private fun filterSleepMetricPoints(
-    points: List<Pair<String, Double>>,
-    range: SleepMetricRange,
-): List<Pair<String, Double>> {
-    val windowDays = range.days ?: return points
-    val latestDate = points.lastOrNull()?.first?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-        ?: return points.takeLast(windowDays.toInt())
-    val cutoff = latestDate.minusDays(windowDays - 1)
-    val filtered = points.filter { (day, _) ->
-        runCatching { LocalDate.parse(day) }.getOrNull()?.let { !it.isBefore(cutoff) } ?: false
-    }
-    return filtered.ifEmpty { points.takeLast(windowDays.toInt()) }
-}
 
 @Composable
 private fun SleepMetricDetailSheetContent(vm: AppViewModel, key: String) {

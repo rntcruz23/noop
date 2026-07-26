@@ -99,11 +99,19 @@ so the reasoning in one place:
 sleep, and the whole optical tail. Nothing on the wire is hidden behind a cipher NOOP would need a key
 for. The barrier is that the SpO₂ data simply isn't *in* the stream in a usable form:
 
-- **No SpO₂ field on the 5.0 wire.** The v18 historical layout carries no blood-oxygen value. The raw
-  optical tail (`@106` baseline, `@108/@109` amplitude pair, `@113` float) was checked against WHOOP-app
-  SpO₂ across 18,602 real records — it does not match; those channels track HR/motion, and there is no
-  identifiable red/IR pair. Pulse oximetry fundamentally needs two wavelengths; the 5.0's decodable
-  stream doesn't expose them (the v26 PPG waveform is single-channel, HR only).
+- **No *confirmed* SpO₂ field on the 5.0 wire — but there is now a candidate.** The raw optical tail
+  (`@106` baseline, `@108/@109` amplitude pair, `@113` float) was checked against WHOOP-app SpO₂ across
+  18,602 real records — it does not match; those channels track HR/motion, and there is no identifiable
+  red/IR pair. Pulse oximetry fundamentally needs two wavelengths; the 5.0's decodable stream doesn't
+  expose them (the v26 PPG waveform is single-channel, HR only). However, a decompile-sourced decode
+  ([#103](https://github.com/ryanbr/noop/issues/103)) reads v18 byte `@82` as a **strap-computed SpO₂ %
+  scalar** (tri-mode: 70–100 = real %, bit-7 = saturation sentinel, other sub-70 = diagnostic code;
+  sleep-only). The evidence is currently **split**: an 8-night independent validation with real spread
+  (corr +0.99, ~0.4 %/night) clears the cross-night bar, but the two nights checked on the original #103
+  capture device moved *opposite* to the app value — unresolved device/firmware variance or an extraction
+  error on one side. NOOP therefore decodes `@82` as `spo2_candidate_82` (deep-timeline instrumentation
+  only, in-band values only) so more devices can correlate it against the app's nightly SpO₂; it does
+  **not** populate `spo2Pct` or any card/score until the contradiction is resolved.
 - **A calibrated % needs WHOOP's proprietary curve.** Even where raw optical exists, turning a red/IR
   ratio into a real SpO₂ % requires a device-specific calibration NOOP does not have — and NOOP will not
   fabricate one from unvalidated optical (the withdrawn #194 PPG→HR estimate is the cautionary
@@ -122,9 +130,32 @@ the R-R interval stream (RSA) and shown on the Health screen when enough overnig
 **To see SpO₂ in NOOP on a 5.0:** import it. A WHOOP data export carries `blood_oxygen_pct`, and Health
 Connect import works too — both populate the Blood Oxygen card with WHOOP's own computed values.
 
-**Could it ever change?** Only via research, not decryption: capture the 5.0's raw optical alongside a
-reference oximeter and prove a channel tracks true SpO₂ (a varying signal, not one coincidental match).
+**Could it ever change?** Only via research, not decryption — and the `@82` candidate above is exactly
+that research in progress. What would flip it to a real reading: the `spo2_candidate_82` nightly values
+tracking the WHOOP app's own SpO₂ across many nights on **multiple devices** (a varying signal, not one
+coincidental match), including on the device where the two checked nights currently move opposite.
 Until that clears the bar, SpO₂ stays import-only on the 5.0.
+
+### Multi-device validation tool (`validate_spo2_candidate.py`)
+
+To make that bar concrete and privacy-preserving, `tools/linux-capture/validate_spo2_candidate.py`
+turns one or more `(capture.json, WHOOP export)` pairs into a promote checklist:
+
+```bash
+cd tools/linux-capture
+python3 validate_spo2_candidate.py capture.json my_whoop_data/ --device strap-a --postable
+python3 validate_spo2_candidate.py --batch devices.json --postable
+```
+
+Per device it computes the **nightly mean** of in-band `@82` samples (70–100) while
+`sleep_state = asleep`, pairs each night with CSV `blood_oxygen_pct`, then reports Pearson **r**,
+MAE, bias, and an **offset-specificity** scan over bytes 74–92 (only `@82` should win). Default
+gates: ≥5 paired nights, export range ≥1 %, r ≥ 0.7, MAE ≤ 1.0, best offset = 82.
+
+`--postable` prints a CSV-ish block with **no raw SpO₂ values** — safe to paste on
+[#103](https://github.com/ryanbr/noop/issues/103). Promote `spo2_candidate_82` → `spo2Pct` only when
+**≥2 devices** each PASS (the tool's multi-device footer tracks that). This does **not** change app
+metrics by itself; it is the research harness for the split-evidence problem above.
 
 ## Mapping the layout — ground-truth correlation
 
@@ -134,14 +165,17 @@ per-night values — HRV, resting HR, skin temperature, SpO₂, respiratory rate
 in the capture. Searching each record type for the byte offset + encoding that reproduces those known
 values across every night pins the field without guesswork.
 
-Two stdlib tools in [`Tools/linux-capture/`](../Tools/linux-capture/) do this:
+Three stdlib tools in [`tools/linux-capture/`](../tools/linux-capture/) do this:
 
 - **`hci_extract.py`** converts a phone HCI log (iOS `.pklg` / Android `btsnoop_hci.log`) of the
   official app into the project's `capture.json` frame format — so an official-app full-sync capture
   feeds the same decoder as a Linux capture. It keeps only CRC-valid WHOOP frames.
 - **`correlate_ground_truth.py`** cross-references those frames against the CSV export and reports
   candidate `(record type, offset, encoding, scale)` tuples, requiring both breadth and a
-  distribution match so constants and coincidences don't score.
+  distribution match so constants and coincidences don't score. English export headers (e.g.
+  `Blood oxygen %`) map to the same canonical keys as DE/ES.
+- **`validate_spo2_candidate.py`** is the SpO₂-specific multi-device harness for `@82` (nightly mean
+  vs export, checklist, postable summary) — see above.
 
 Crucially this is **privacy-preserving**: both tools run locally and the correlation output is only
 offsets/encodings, never health values — so a 5/MG owner can contribute a confirmed field mapping to
@@ -176,6 +210,10 @@ never restored from a backup, and everything unproven keeps the blanket experime
    or Android **Developer Options → Bluetooth HCI snoop log** → `btsnoop_hci.log`, opened in Wireshark — the
    same iOS-HCI approach the [judes.club write-up](https://judes.club/writing/cracking-the-whoop-5-bluetooth-protocol/)
    used. Filter to just the WHOOP peripheral and attach it to [#103](https://github.com/ryanbr/noop/issues/103).
+5. **SpO₂ multi-device check:** after you have a history capture + your data export, run
+   `python3 tools/linux-capture/validate_spo2_candidate.py capture.json export/ --device <label> --postable`
+   and paste the postable summary on [#103](https://github.com/ryanbr/noop/issues/103). Keep the capture
+   and CSV private; only the aggregate r / MAE / checklist line is needed.
 
 Credit to **judes.club**, **Asherlc/dofek**, and **b-nnett/goose** for the public protocol work this
 builds on.

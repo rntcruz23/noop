@@ -706,8 +706,16 @@ class OuraLiveSource(
         // Reconstruct the time axis; `sleepStart` (the 0x49 onset, or null) clips leading pre-window codes
         // in the PURE assembler (never emptying the night). Testable there; the app just logs the trim.
         val laid = burst.codesWithTimes(endUnixSeconds = end, sleepStartUnixSeconds = sleepStart)
+        // #1246: an all-unwritten burst (every hypnogram page erased) reconstructs to nothing. Note the
+        // resume cursor so the ring stops re-serving it, but persist no blank/awake session.
+        if (laid.isEmpty()) {
+            log("Oura: hypnogram burst entirely unwritten (0xFF) - ${burst.totalCodes} code(s), no stageable sleep; skipped")
+            drain.noteStoredRingTime(burst.lastRingTimestamp, resumeCursorAtFetchStart)
+            return
+        }
         if (laid.size < burst.totalCodes) {
-            log("Oura: hypnogram start clamped to 0x49 onset - dropped ${burst.totalCodes - laid.size} pre-window code(s)")
+            // Fewer laid than decoded = unwritten (#1246, 0xFF pages) and/or pre-0x49-onset epochs trimmed.
+            log("Oura: hypnogram trimmed ${burst.totalCodes - laid.size} code(s) - unwritten (0xFF) and/or pre-onset")
         }
         for (code in laid) enqueue(listOf(OuraEvent.SleepPhaseEvent(code.phase)), code.ts.toInt())
         drain.noteStoredRingTime(burst.lastRingTimestamp, resumeCursorAtFetchStart)
@@ -1009,10 +1017,12 @@ class OuraLiveSource(
         if (pendingAnchorEvents.isEmpty()) return@guardedCallback
         val d = driver ?: return@guardedCallback
         val now = (System.currentTimeMillis() / 1000L).toInt()
-        for ((event, ringTimestamp) in pendingAnchorEvents) {
-            val ts = d.unixSeconds(forRingTimestamp = ringTimestamp)?.toInt() ?: now
-            enqueue(listOf(event), ts)
+        // Batched by resolved second, exactly like the live path (#1072): a record's parked beats are
+        // released as ONE persist so `ord` records their emission order instead of restarting at 0 per beat.
+        val stamped = pendingAnchorEvents.map { (event, ringTimestamp) ->
+            event to (d.unixSeconds(forRingTimestamp = ringTimestamp)?.toInt() ?: now)
         }
+        for ((ts, batch) in OuraStreamMapping.batched(stamped)) enqueue(batch, ts)
         pendingAnchorEvents.clear()
     }
 
@@ -1554,6 +1564,21 @@ class OuraLiveSource(
                 if (ts != null) enqueue(listOf(OuraEvent.Hr(hr)), ts.toInt())
             }
         }
+        // #1072 (root cause for #823): a RECORD's beats must reach the store as ONE batch. [assignRrSeq]'s
+        // `ord` counter is batch-local — a beat's position among the beats sharing its second WITHIN one
+        // persist is the only place emission order still exists — so enqueuing one beat at a time (what the
+        // Ibi arm below used to do) restarted the counter on every beat and wrote `ord = 0` on every row:
+        // 575,630 of 575,630 rows in a real database. With `ord` tied the read falls through to
+        // `(rrMs, seq)`, i.e. a second's beats come back sorted by VALUE, which minimises successive
+        // differences by construction and biases RMSSD down (#823). All of one record's beats carry that
+        // record's ring time, so grouping the anchored ones by their resolved ts hands the store a record
+        // at a time. Unanchored beats still park below and are batched the same way when the 0x42 lands
+        // (drainPendingAnchorEvents). Twin of the Swift ingest() batching.
+        val anchoredBeats = events.mapNotNull { e ->
+            if (e !is OuraEvent.Ibi) null
+            else d.unixSeconds(forRingTimestamp = e.value.ringTimestamp)?.let { ts -> e as OuraEvent to ts.toInt() }
+        }
+        for ((ts, batch) in OuraStreamMapping.batched(anchoredBeats)) enqueue(batch, ts)
         for (e in events) when (e) {
             is OuraEvent.Hr -> {
                 val bpm = e.value.bpm
@@ -1592,11 +1617,15 @@ class OuraLiveSource(
             is OuraEvent.Ibi -> {
                 val rr = e.value.ibiMs
                 if (rr in 250..3000) handler.post { guardedCallback("live-sink") { liveSink(0, listOf(rr)) } }
-                // A banked IBI is history data: anchor it to its REAL ring-time (via [enqueueAnchoredOrPark]),
-                // exactly like the sibling banked streams (.Hrv/.Temp/.Spo2/.SleepPhaseEvent) - never the
-                // drain-arrival `now`. Stamping at `now` misfiled every overnight beat to the daytime sync
-                // moment, so the sleep window ended up with zero R-R -> no restingHr/avgHrv for the night.
-                enqueueAnchoredOrPark(e, e.value.ringTimestamp, d)
+                // A banked IBI is history data: anchor it to its REAL ring-time, exactly like the sibling
+                // banked streams (.Hrv/.Temp/.Spo2/.SleepPhaseEvent) - never the drain-arrival `now`.
+                // Stamping at `now` misfiled every overnight beat to the daytime sync moment, so the sleep
+                // window ended up with zero R-R -> no restingHr/avgHrv for the night. The anchored beats
+                // were ALREADY enqueued above, as one batch per record (#1072); all this arm still owns is
+                // the live readout and parking the ones no anchor can place yet.
+                if (d.unixSeconds(forRingTimestamp = e.value.ringTimestamp) == null) {
+                    pendingAnchorEvents.add(e to e.value.ringTimestamp)
+                }
             }
             is OuraEvent.Battery -> {
                 handleBattery(e.value.percent)
@@ -1723,11 +1752,11 @@ class OuraLiveSource(
                 }
             }
             is OuraEvent.MotionVectorEvent -> {
-                // 0x47 averaged accel vector (Tier-A). Diagnostic sidecar ONLY for now: decode + store + log
-                // the vector beside the incumbent so the LSB→g scale + cadence can be pinned offline from a
-                // still capture (issue #804). Never persisted to the DB, never scored — OuraStreamMapping
-                // drops MotionVectorEvent until the scale is calibrated. Anchored records only (deduped by
-                // ring-time in the writer). Twin of the Swift hook.
+                // 0x47 averaged accel vector (Tier-A). Persisted as an OURA_MOTION event (same event-table
+                // path as OURA_HRV / OURA_SLEEP_PHASE — see OuraStreamMapping), AND appended to the raw
+                // calibration sidecar. Instrumentation only: never scored, never fed to the sleep stager
+                // (0x47 is movement-gated, a shape mismatch for the gravity-stillness stager, #804). Anchor
+                // per record so each window lands on a distinct (deviceId, ts, kind) row. Twin of Swift.
                 d.unixSeconds(forRingTimestamp = e.value.ringTimestamp)?.let { utc ->
                     motionDump?.record(
                         ringTs = e.value.ringTimestamp, utc = utc, orientation = e.value.orientation,
@@ -1736,6 +1765,7 @@ class OuraLiveSource(
                         highIntensity = e.value.highIntensity,
                     )
                 }
+                enqueueAnchoredOrPark(e, e.value.ringTimestamp, d)
             }
             // Motion (0x6b) / debugText / etc: not a durable Streams row (see OuraStreamMapping). StateEvent
             // is handled above (wear badge only, also not a Streams row).

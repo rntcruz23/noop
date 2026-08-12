@@ -15,7 +15,15 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,7 +55,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -272,6 +282,44 @@ fun SleepScreen(
     // 12 hours, invite the user to log how they felt. The shown-day is persisted so the sheet never
     // re-pops on a recomposition or a same-day re-open. (PR #260)
     var showJournalPrompt by remember { mutableStateOf(false) }
+
+    // #sleep-layout: the arrangeable analytical-card order + explicit hidden set (SleepLayoutPrefs).
+    // SharedPreferences isn't reactive, so hold it in state and refresh after the Arrange sheet saves.
+    // Mirrors TodayScreen's section-order state.
+    var sleepSectionOrder by remember { mutableStateOf(SleepLayoutPrefs.order(context)) }
+    var hiddenSections by remember { mutableStateOf(SleepLayoutPrefs.hidden(context)) }
+    var showSleepArrange by remember { mutableStateOf(false) }
+    // #sleep-layout (hold-to-drag): the hoisted list state (the drag math needs layoutInfo + scrollBy) and
+    // the live drag state, mirroring Today (TodayScreen.kt §today-layout). The frame loop runs ONLY while a
+    // card is lifted: each frame it retries the swap (so a card held still at a viewport edge keeps
+    // reordering as the list scrolls under it — onDrag alone only fires while the finger moves) and applies
+    // the edge auto-scroll velocity SleepReorderableSection's onDrag computed. Persistence is on drop
+    // (onDrop below), not here — this only updates the in-memory order live.
+    val sleepListState = rememberLazyListState()
+    val sleepSectionDrag = remember { SleepSectionDragState() }
+    val sleepDragActive = sleepSectionDrag.key != null
+    LaunchedEffect(sleepDragActive) {
+        // Auto-scroll is TIME-based (px/second × real frame delta), not per-frame, so it reads the same on
+        // 60/90/120 Hz. dt is clamped so a dropped/backgrounded frame can't produce one giant jump.
+        var lastFrameNanos = 0L
+        while (sleepSectionDrag.key != null) {
+            val frameNanos = withFrameNanos { it }
+            val dtSec = if (lastFrameNanos == 0L) 0f
+            else ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceAtMost(0.05f)
+            lastFrameNanos = frameNanos
+            swapTargetForDraggedSleepSection(sleepListState, sleepSectionDrag, sleepSectionOrder)?.let { (dragged, target) ->
+                // Freeze the scroll anchor across the reorder so a swap involving the first visible item
+                // can't leap the viewport by the two cards' height difference in a single frame.
+                val anchorIndex = sleepListState.firstVisibleItemIndex
+                val anchorOffset = sleepListState.firstVisibleItemScrollOffset
+                sleepSectionOrder = sleepSectionOrder.movedSleepSection(dragged, target)
+                sleepListState.scrollToItem(anchorIndex, anchorOffset)
+            }
+            if (sleepSectionDrag.autoScrollPxPerSecond != 0f && dtSec > 0f) {
+                sleepListState.scrollBy(sleepSectionDrag.autoScrollPxPerSecond * dtSec)
+            }
+        }
+    }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     LaunchedEffect(sleeps) {
         // #627: the journal-reminder toggle (default ON) gates this morning sheet too, so disabling the
@@ -332,6 +380,24 @@ fun SleepScreen(
         }
     }
 
+    // #sleep-layout: the Arrange sheet — reorder / show-hide the analytical cards, persisted via
+    // SleepLayoutPrefs. Reuses Today's generic EditableVisibilityRows editor. Refresh the in-memory
+    // order/hidden state on save so the cards re-lay-out immediately (SharedPreferences isn't reactive).
+    if (showSleepArrange) {
+        SleepArrangeSheet(
+            initialOrder = sleepSectionOrder,
+            initialHidden = hiddenSections,
+            onDismiss = { showSleepArrange = false },
+            onSave = { order, hidden ->
+                SleepLayoutPrefs.setOrder(context, order)
+                SleepLayoutPrefs.setHidden(context, hidden)
+                sleepSectionOrder = order
+                hiddenSections = hidden
+                showSleepArrange = false
+            },
+        )
+    }
+
     // Tapping a metric tile opens a full-history detail sheet for that one metric. (PR #260)
     val metricSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var detailMetricKey by remember { mutableStateOf<String?>(null) }
@@ -358,6 +424,13 @@ fun SleepScreen(
             .map { (_, blocks) -> blocks.sortedBy { it.effectiveStartTs } }
     }
 
+    // Debt credit is the canonical main-night DailyMetric total PLUS actual asleep minutes from blocks
+    // outside that main-night group. Keep the nap sum separate: Rest, the hero and daily total deliberately
+    // remain main-night-only. Stage-less naps add no guessed in-bed time. Mirrors Swift SleepView. (#525)
+    val napSleepMinByDay = remember(sleeps, habitualMidsleep) {
+        napSleepMinutesByDay(sleeps, habitualMidsleep)
+    }
+
     // The navigated night, decoded once per (offset, data) change — chevron taps re-pick
     // instantly without re-parsing stagesJSON on every recomposition. The offset now indexes
     // DAYS (navDays), so a day with a detected night always resolves to that night. (#160, #59)
@@ -369,9 +442,10 @@ fun SleepScreen(
     // at-a-glance TILES, the debt ledger, the personal need and the trend stay full-history /
     // latest-anchored, matching iOS SleepView. `selectedDay` re-points only the hero. Model is null
     // when the selected day has no stage minutes. (#5)
-    val model = remember(days, night, imported) {
+    val model = remember(days, night, imported, napSleepMinByDay, sleeps) {
         buildSleepModel(days, night?.session, imported, selectedDay = night?.dayKey,
-            heroStages = night?.groupStages, heroSegments = night?.groupSegments)
+            heroStages = night?.groupStages, heroSegments = night?.groupSegments,
+            napSleepMinByDay = napSleepMinByDay, sessions = sleeps)
     }
     val display = remember(model, night) { heroDisplay(model, night) }
 
@@ -382,7 +456,9 @@ fun SleepScreen(
     // newest stage-bearing day instead of vanishing. The HERO stays on `model`/`display` (an
     // honest no-stage-data fallback for the bad day, edit pencil reachable). Null only when NO day
     // has stage data: the true first-run empty state.
-    val tilesModel = remember(model, days, imported) { model ?: fallbackSleepModel(days, imported) }
+    val tilesModel = remember(model, days, imported, napSleepMinByDay, sleeps) {
+        model ?: fallbackSleepModel(days, imported, napSleepMinByDay, sessions = sleeps)
+    }
 
     // Jump straight to a night by its (local) wake-day — the center date block opens a picker.
     // navDays is newest-day-first, so the day's index IS its offset (0 = last night). (#160, #59)
@@ -395,14 +471,15 @@ fun SleepScreen(
     LazyScreenScaffold(
         title = uiString(R.string.l10n_sleep_screen_sleep_3cac34e6),
         subtitle = "Last night, read in two seconds.",
+        listState = sleepListState,   // #sleep-layout: the hold-to-drag frame loop drives this list state
         // LIQUID SKY BACKDROP (the pilot pattern — LiquidScreenSky.kt): the static time-of-day liquid sky
         // settles into the theme canvas behind the header + hero, bled full-width up behind the status bar
         // via the scaffold's topBackground plumbing. Gated on the day-cycle preference exactly like Today
         // (showDayCycleBackground ? sky : plain canvas). Replaces the classic per-hero scene backdrop.
-        topBackground = if (showDayCycleBackground) { { LiquidScreenSky(fillHeight = skyBehindCards) } } else null,
+        topBackground = screenBackdropSlot(showDayCycleBackground, skyBehindCards),
         // Sky-behind-cards fills the viewport so the transparent cards reveal the sky the whole way down
         // (Today / metric-detail parity — the same two prefs drive the same two behaviours everywhere).
-        fullBleedBackground = showDayCycleBackground && skyBehindCards,
+        fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
         // #65: the transient UNDO banner after a suppressing delete. Restores the deleted row into its
         // ORIGINAL namespace + lifts the tombstone. Mirrors the macOS SleepView sleepUndoBanner.
@@ -502,12 +579,41 @@ fun SleepScreen(
                     overline = nightRelativeLabel(nightOffset),
                 )
             }
-            item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-            // SLEEP MARKS — tap to log "going to sleep" / "I'm awake" (#461, Phase 1). LOGGING ONLY:
-            // a mark is persisted to the `sleep_mark` series + the shareable strap log; it never
-            // changes the detected sleep. Mirrors macOS SleepView.sleepMarkCard.
+            // #sleep-layout: a compact "Arrange" affordance (the same Tune entry Today uses) opens the
+            // reorder / show-hide sheet. Pinned just above the arrangeable cards.
             item {
-            SleepMarkCard(
+                Row(Modifier.fillMaxWidth().padding(top = Metrics.selectorTopUp)) {
+                    Spacer(Modifier.weight(1f))
+                    TextButton(
+                        onClick = { showSleepArrange = true },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Palette.textTertiary),
+                    ) {
+                        Icon(Icons.Filled.Tune, contentDescription = stringResource(R.string.sleep_customize_title), modifier = Modifier.size(Metrics.iconSmall))
+                        Spacer(Modifier.width(Metrics.space4))
+                        // Concise verb on the affordance (the full "Customize Sleep" title is the icon's a11y
+                        // label + the sheet header); reuses Today's generic "Customize" action string.
+                        Text(stringResource(R.string.today_customize_action), style = NoopType.footnote)
+                    }
+                }
+            }
+            // Analytical cards render in the user's saved order (SleepLayoutPrefs), minus the hidden set.
+            // Reordered via the Arrange sheet OR by long-press hold-to-drag on the card (#sleep-layout,
+            // mirrors Today); each card's data guards (tilesModel/model) are preserved. Each section is ONE
+            // keyed reorderable item so the whole card (incl. its top spacer) lifts and drops as a unit.
+            // #sleep-layout: persist the live hold-to-drag reorder when the gesture drops (the in-memory
+            // `sleepSectionOrder` already moved live in the frame loop; this writes it through).
+            val persistSleepOrder = { SleepLayoutPrefs.setOrder(context, sleepSectionOrder) }
+            sleepSectionOrder.filterNot { it in hiddenSections }.forEach { section ->
+              val k = SLEEP_SECTION_KEY_PREFIX + section.raw
+              when (section) {
+                SleepSection.SLEEP_MARKS -> item(key = k) {
+                    // SLEEP MARKS — tap to log "going to sleep" / "I'm awake" (#461, Phase 1). LOGGING ONLY:
+                    // a mark is persisted to the `sleep_mark` series + the shareable strap log; it never
+                    // changes the detected sleep. Mirrors macOS SleepView.sleepMarkCard.
+                    SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                    Column {
+                    Spacer(Modifier.height(Metrics.selectorTopUp))
+                    SleepMarkCard(
                 onMark = { type ->
                     val mark = SleepMark.now(type)
                     // The shareable strap log is the human-readable surface in a debug export.
@@ -520,10 +626,14 @@ fun SleepScreen(
                     Toast.makeText(context, mark.confirmation(), Toast.LENGTH_SHORT).show()
                 },
             )
-            }
-            item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-            item {
-            Hero(
+                    }
+                    }
+                }
+                SleepSection.STAGES -> item(key = k) {
+                    SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                    Column {
+                    Spacer(Modifier.height(Metrics.selectorTopUp))
+                    Hero(
                 display = display,
                 activeIsOura = activeIsOura,
                 clock = night?.clockLabel ?: model?.clockLabel,
@@ -609,39 +719,85 @@ fun SleepScreen(
                 napBlocks = night?.napBlocks ?: emptyList(),
                 habitualMidsleepSec = habitualMidsleep,
                 motionEpochs = night?.groupMotion ?: emptyList(),
+                groupStages = night?.groupStages,
                 groupInBedMin = night?.groupInBedMin,
                 windowOnsetTs = night?.heroOnsetTs,
                 windowWakeTs = night?.heroWakeTs,
             )
-            }
-            // Tiles / ledger / trends read the FULL-history model (#940): they stay up when only the
-            // selected day's model failed to build, exactly as iOS keeps them while browsing.
-            if (tilesModel != null) {
-                // Bind a non-null local so the smart-cast carries cleanly into each item {} lambda
-                // (a nullable val doesn't smart-cast across a lambda boundary). Same model, same order.
-                val m = tilesModel
-                item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                item { MetricGrid(m, onMetricClick = { detailMetricKey = it }) }
-                item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                item { SleepDebtLedgerCard(m.sleepDebtLedger) }
-                // StagesVsTypical describes ONE specific night's deep/REM/light minutes under the
-                // "Selected night" header, so it must read the SELECTED day's model, never the
-                // full-history fallback: when the selected day has no stage model (the phantom newest
-                // day), showing tilesModel here would label ANOTHER day's stages as this night (#940).
-                // Hide the card in that state (iOS shows the stub's honest zeros); MetricGrid/ledger/
-                // trends above/below stay on the full-history tilesModel exactly as before.
-                if (model != null) {
-                    // Bind a non-null local so the smart-cast carries into the item {} lambda.
-                    val selectedModel = model
-                    item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                    item { StagesVsTypical(selectedModel) }
+                    }
+                    }
                 }
-                item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                item { DurationTrend(m) }
-                item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                item { HoursVsNeededCard(m) }
-                item { Spacer(Modifier.height(Metrics.selectorTopUp)) }
-                item { SleepConsistencyCard(sleeps, habitualMidsleep) }
+                // Tiles / ledger / trends read the FULL-history model (#940): they stay up when only the
+                // selected day's model failed to build, exactly as iOS keeps them while browsing. Each
+                // `tilesModel?.let { m -> ... }` binds a non-null local so the smart-cast carries across
+                // the item {} lambda boundary — same guard the old `if (tilesModel != null)` block used.
+                SleepSection.NIGHT_DETAIL -> tilesModel?.let { m ->
+                    item(key = k) {
+                        SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                            Column {
+                                Spacer(Modifier.height(Metrics.selectorTopUp))
+                                NightDetailHostCard(m, onMetricClick = { detailMetricKey = it })
+                            }
+                        }
+                    }
+                }
+                SleepSection.SLEEP_DEBT -> tilesModel?.let { m ->
+                    item(key = k) {
+                        SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                            Column {
+                                Spacer(Modifier.height(Metrics.selectorTopUp))
+                                SleepDebtLedgerHostCard(m)
+                            }
+                        }
+                    }
+                }
+                // StagesVsTypical reads the SELECTED day's model, never the full-history fallback: a
+                // phantom newest day with no stage model would otherwise label ANOTHER night's stages as
+                // this one (#940). Guarded on BOTH tilesModel and model, exactly as the pre-refactor
+                // nesting was (it lived inside the `if (tilesModel != null)` block).
+                SleepSection.STAGES_VS_TYPICAL -> if (tilesModel != null) model?.let { selectedModel ->
+                    item(key = k) {
+                        SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                            Column {
+                                Spacer(Modifier.height(Metrics.selectorTopUp))
+                                StagesVsTypicalHostCard(selectedModel)
+                            }
+                        }
+                    }
+                }
+                SleepSection.ASLEEP_DURATION -> tilesModel?.let { m ->
+                    item(key = k) {
+                        SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                            Column {
+                                Spacer(Modifier.height(Metrics.selectorTopUp))
+                                DurationTrend(m)
+                            }
+                        }
+                    }
+                }
+                // #sleep-layout: the two former pinned detail cards are now arrangeable sections.
+                SleepSection.HOURS_VS_NEEDED -> tilesModel?.let { m ->
+                    item(key = k) {
+                        SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                            Column {
+                                Spacer(Modifier.height(Metrics.selectorTopUp))
+                                HoursVsNeededCard(m)
+                            }
+                        }
+                    }
+                }
+                // Gated on tilesModel to preserve the pre-refactor visibility (both cards shared one
+                // `tilesModel?.let` wrapper) — the card reads `sleeps`, not the model, but must not appear
+                // in the #940 phantom-edit state (night != null, tilesModel == null) where it didn't before.
+                SleepSection.CONSISTENCY -> if (tilesModel != null) item(key = k) {
+                    SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                        Column {
+                            Spacer(Modifier.height(Metrics.selectorTopUp))
+                            SleepConsistencyCard(sleeps, habitualMidsleep, tilesModel.consistency.latest)
+                        }
+                    }
+                }
+              }
             }
         }
     }
@@ -655,8 +811,10 @@ fun SleepScreen(
 // on this screen; it's a record for later tap-driven sleep bounds + calibration. Mirrors macOS
 // SleepView.sleepMarkCard.
 
+// Lives in the Sleep tab but also hostable in Today (#today-hosted-cards), so it is `internal` (not
+// private). Self-contained apart from the [onMark] persistence callback the host supplies.
 @Composable
-private fun SleepMarkCard(onMark: (SleepMarkType) -> Unit) {
+internal fun SleepMarkCard(onMark: (SleepMarkType) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         SectionHeader(title = uiString(R.string.l10n_sleep_screen_sleep_marks_8e9b86f0), overline = "Tap to log", trailing = "Phase 1")
         NoopCard(tint = Palette.restColor) {
@@ -833,7 +991,6 @@ private fun DeletedSleepWindowsCard(
 // fill is a translucent near-black (mock rgba(13,14,20,.80)) so the card floats OVER the day-of-sky and the
 // vessel + white count-up number stay crisp — the CARD does the contrast work, not a muted sky. Radius 26 +
 // a white@0.11 hairline give the frosted-glass edge. Same constants as the liquid Today heroCard.
-private val LIQUID_HERO_FILL: Color = Color(red = 13f / 255f, green = 14f / 255f, blue = 20f / 255f, alpha = 0.80f)
 private val LIQUID_HERO_RADIUS: Dp = 26.dp
 
 // MARK: - 0. REST HERO — liquid sky + sleep-performance vessel (liquid restyle)
@@ -857,8 +1014,8 @@ private fun RestHero(score: Double?, asleepMin: Double?, source: String, overlin
                 // the frosted-glass edge of the liquid Today heroCard (fill rgba(13,14,20,.80), stroke
                 // white@0.11). Replaces the per-hero night atmosphere (the sky now lives at screen level).
                 .clip(RoundedCornerShape(LIQUID_HERO_RADIUS))
-                .background(LIQUID_HERO_FILL.copy(alpha = LIQUID_HERO_FILL.alpha * CardAppearance.opacity))
-                .border(1.dp, Color.White.copy(alpha = 0.11f * CardAppearance.opacity), RoundedCornerShape(LIQUID_HERO_RADIUS)),
+                .background(Palette.heroFill.copy(alpha = Palette.heroFill.alpha * CardAppearance.opacity))
+                .border(1.dp, Palette.heroBorder.copy(alpha = Palette.heroBorder.alpha * CardAppearance.opacity), RoundedCornerShape(LIQUID_HERO_RADIUS)),
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(Metrics.space24),
@@ -958,6 +1115,11 @@ private fun Hero(
     // Per-epoch MOTION for the main-night GROUP (#407), laid in group order by `selectNight`. Empty → honest
     // empty state. Drawn UNDER the hypnogram on the same timeline. Mirrors iOS SleepView.Night.motionEpochs.
     motionEpochs: List<Double> = emptyList(),
+    // The bridged main-night GROUP's summed DECODED stage minutes (`sumGroupStages`, gaps excluded) —
+    // the byte-for-byte twin of iOS `night.stages.total`, used for the Naps card's "Main sleep". Null
+    // for single-block days → the session's own decoded stages below. NOT `display.stages`, whose awake
+    // is efficiency-derived and only approximates the decoded total.
+    groupStages: StageMins? = null,
     // Whole-group time-in-bed minutes for a fragmented night (#561): Σ fragment windows, gaps
     // excluded, computed by `selectNight`. Null for single-block days → the session-window /
     // stage-total fallbacks below apply unchanged.
@@ -1010,23 +1172,48 @@ private fun Hero(
             // else keeps the honest proportional strip + StageBreakdownRows footer.
             val real = display.realSegments?.takeIf { it.size >= 2 }
             if (real != null) {
-                ChartCard(
-                    title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
-                    subtitle = subtitle,
-                    trailing = durationText(s.asleep),
-                    tint = Palette.restColor,
-                    footer = {},
-                ) {
-                    StageTimeline(
-                        realSegments = real,
-                        s = s,
-                        // #345: the axis spans the WHOLE night. The group hypnogram (#364 seams) runs to
-                        // the group's last wake; labelling the axis off the session fragment's endTs cut
-                        // the clock labels short on a split night.
-                        onsetTs = windowOnsetTs ?: session?.effectiveStartTs,
-                        wakeTs = windowWakeTs ?: session?.endTs,
-                        motionEpochs = motionEpochs,
-                    )
+                // #sleep-chart-style: the opt-in FILLED stepped hypnogram when the user selected it AND the
+                // night has real timestamped segments; otherwise the classic per-stage-rows timeline (the
+                // default, unchanged for everyone who doesn't switch).
+                val chartStyle = UnitPrefs.sleepChartStyle(LocalContext.current)
+                val filledSegments = display.hypnogramSegments?.takeIf { it.size >= 2 }
+                if ((chartStyle == SleepChartStyle.FILLED || chartStyle == SleepChartStyle.RIBBON) &&
+                    filledSegments != null) {
+                    ChartCard(
+                        title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
+                        subtitle = subtitle,
+                        trailing = durationText(s.asleep),
+                        tint = Palette.restColor,
+                        // The stepped chart carries no built-in legend (the rows ARE the legend in the
+                        // classic view), so surface the per-stage breakdown below it, like the reference.
+                        footer = { StageBreakdownRows(s) },
+                    ) {
+                        FilledHypnogram(
+                            segments = filledSegments,
+                            onsetTs = windowOnsetTs ?: session?.effectiveStartTs,
+                            wakeTs = windowWakeTs ?: session?.endTs,
+                            filled = chartStyle == SleepChartStyle.FILLED,
+                        )
+                    }
+                } else {
+                    ChartCard(
+                        title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
+                        subtitle = subtitle,
+                        trailing = durationText(s.asleep),
+                        tint = Palette.restColor,
+                        footer = {},
+                    ) {
+                        StageTimeline(
+                            realSegments = real,
+                            s = s,
+                            // #345: the axis spans the WHOLE night. The group hypnogram (#364 seams) runs to
+                            // the group's last wake; labelling the axis off the session fragment's endTs cut
+                            // the clock labels short on a split night.
+                            onsetTs = windowOnsetTs ?: session?.effectiveStartTs,
+                            wakeTs = windowWakeTs ?: session?.endTs,
+                            motionEpochs = motionEpochs,
+                        )
+                    }
                 }
             } else {
                 ChartCard(
@@ -1081,13 +1268,31 @@ private fun Hero(
             // so the larger Awake / smaller Deep+REM here isn't misread as the polished numbers the Oura app
             // shows for the same night (the app post-processes the same stream). Mirrors iOS ouraRawStagesNote.
             if (activeIsOura) OuraRawStagesNote()
+            // #345 follow-up: a night staged on SPARSE motion coverage can UNDER-detect and read short
+            // ("slept 8h, shows 1h"). Say so honestly, gated on the persisted stagingSparse flag (the day's
+            // SleepStager.isGravitySparse verdict). `session` is the REAL main block (selectNight's edit
+            // anchor), so it carries the flag; nil (imported / pre-migration) is never flagged. Mirrors iOS
+            // SleepView.stageIncompleteNote.
+            if (session?.stagingSparse == true) SleepIncompleteNote()
         }
         // Naps card (#508/#518): the day's blocks OTHER than the main night, each editable / deletable
         // with the SAME mechanism main sleep uses, plus a Main / Nap(s) / Total split so what drives the
         // day's Rest total is explainable. Mirrors iOS SleepView.napSection.
         if (session != null) {
+            // Main = the WHOLE main-night's summed DECODED stage minutes (awake+light+deep+rem), NOT the
+            // winning fragment's window — a biphasic/bridged night has sibling fragments that are part of
+            // the main sleep, not naps, and the old single-block window undercounted the Main / Total
+            // split on a fragmented night. Byte-for-byte twin of iOS SleepView.napSection (`night.stages
+            // .total`): the bridged group's `sumGroupStages` (gaps excluded, mirrors iOS mergeDay), or the
+            // single block's own decoded stages, both clamped to onset. NOT `display.stages`, whose awake
+            // is efficiency-derived. Window fallback only for a stage-less stub day, unchanged from before.
+            val mainStages = groupStages
+                ?: parseSessionStages(SleepStageTotals.clampStagesToOnset(session.stagesJSON, session.effectiveStartTs))
+            val mainMin = mainStages?.let { it.awake + it.light + it.deep + it.rem }
+                ?: (session.endTs - session.effectiveStartTs) / 60.0
             NapsCard(
                 main = session,
+                mainMin = mainMin,
                 naps = napBlocks,
                 onEditNapTimes = onUpdateTimes,
                 onDeleteNap = onDeleteSession,
@@ -1109,6 +1314,10 @@ private fun Hero(
 @Composable
 private fun NapsCard(
     main: SleepSession,
+    // The day's MAIN-sleep minutes = the whole main-night's summed DECODED stage minutes (iOS
+    // `night.stages.total`): the bridged group's `sumGroupStages` or the single block's own decoded
+    // stages. Computed by the caller. NOT `main`'s own window — that undercounts a bridged night.
+    mainMin: Double,
     naps: List<SleepSession>,
     onEditNapTimes: (SleepSession, Long, Long) -> Unit,
     onDeleteNap: (SleepSession) -> Unit,
@@ -1118,7 +1327,6 @@ private fun NapsCard(
     // Active strap is an Oura ring → a computed night's provenance reads "Oura" not "On-device" (C4).
     activeIsOura: Boolean = false,
 ) {
-    val mainMin = (main.endTs - main.effectiveStartTs) / 60.0
     val napMin = naps.sumOf { (it.endTs - it.effectiveStartTs) / 60.0 }
     NoopCard(padding = Metrics.space14, tint = Palette.restColor) {
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
@@ -1174,6 +1382,24 @@ private fun OuraRawStagesNote() {
             "This split is the ring's raw on-device classification read over Bluetooth, not the adjusted " +
                 "stages the Oura app shows. Expect more Awake and less Deep/REM here than in the Oura app " +
                 "for the same night.",
+            style = NoopType.caption,
+            color = Palette.textTertiary,
+        )
+    }
+}
+
+/** The sparse-coverage caveat (#345): a night staged on thin motion data can under-detect and read short
+ *  ("slept 8h, shows 1h"). Honest + actionable. Mirrors iOS SleepView.stageIncompleteNote. */
+@Composable
+private fun SleepIncompleteNote() {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.padding(horizontal = 2.dp),
+    ) {
+        SourceBadge(text = uiString(R.string.l10n_sleep_screen_may_be_incomplete_7230dc27), tint = Palette.statusWarning)
+        Text(
+            uiString(R.string.l10n_sleep_screen_little_motion_was_recorded_over_f061b7e4),
             style = NoopType.caption,
             color = Palette.textTertiary,
         )
@@ -2269,27 +2495,49 @@ private fun NightNavHeader(
         }
     }
 
-    // Wake-up picker also mutates only the draft. Its calendar day is derived from the DRAFT bedtime,
-    // so editing bedtime first and wake second produces one coherent cross-midnight window (#515/#406).
+    // Wake-up editing mutates only the draft. Date and time are selected explicitly so a correction can
+    // preserve the exact endpoint date instead of deriving it from bedtime (#970).
     val draftForWake = sleepEditDraft
     if (editingWake && session != null && draftForWake != null) {
         val endCal = Calendar.getInstance().apply { timeInMillis = draftForWake.endTs * 1000L }
         DisposableEffect(Unit) {
-            val dialog = TimePickerDialog(
+            var dateChosen = false
+            val dateDialog = DatePickerDialog(
                 context,
-                { _, h, m ->
-                    sleepEditDraft = draftForWake.withWakeTime(hour = h, minute = m)
+                { _, year, month, day ->
+                    dateChosen = true
+                    val selectedDate = Calendar.getInstance().apply {
+                        timeInMillis = draftForWake.endTs * 1000L
+                        set(Calendar.YEAR, year); set(Calendar.MONTH, month); set(Calendar.DAY_OF_MONTH, day)
+                    }
+                    val timeDialog = TimePickerDialog(
+                        context,
+                        { _, h, m ->
+                            selectedDate.set(Calendar.HOUR_OF_DAY, h); selectedDate.set(Calendar.MINUTE, m)
+                            selectedDate.set(Calendar.SECOND, 0); selectedDate.set(Calendar.MILLISECOND, 0)
+                            sleepEditDraft = draftForWake.withWakeCandidate(selectedDate.timeInMillis / 1000L)
+                        },
+                        endCal.get(Calendar.HOUR_OF_DAY), endCal.get(Calendar.MINUTE), true,
+                    ).apply { setTitle("Wake-up time") }
+                    timeDialog.setOnDismissListener {
+                        editingWake = false
+                        if (sleepEditDraft != null) showTimeChoice = true
+                    }
+                    timeDialog.show()
                 },
-                endCal.get(Calendar.HOUR_OF_DAY),
-                endCal.get(Calendar.MINUTE),
-                true,
-            ).apply { setTitle("Wake-up time") }
-            dialog.setOnDismissListener {
-                editingWake = false
-                if (sleepEditDraft != null) showTimeChoice = true
+                endCal.get(Calendar.YEAR), endCal.get(Calendar.MONTH), endCal.get(Calendar.DAY_OF_MONTH),
+            ).apply {
+                datePicker.maxDate = System.currentTimeMillis()
+                setTitle("Wake-up date")
+                setOnDismissListener {
+                    if (editingWake && !dateChosen) {
+                        editingWake = false
+                        if (sleepEditDraft != null) showTimeChoice = true
+                    }
+                }
             }
-            dialog.show()
-            onDispose { runCatching { dialog.dismiss() } }
+            dateDialog.show()
+            onDispose { runCatching { dateDialog.dismiss() } }
         }
     }
 
@@ -2544,6 +2792,18 @@ private fun NightNavHeader(
 
 // MARK: - 2. Metric grid (row-equalized min-height tiles, each with a bottom sparkline)
 
+/**
+ * #today-hosted-cards: the "Night detail" metric grid rendered from the shared [SleepModel]. `internal` so
+ * the Today host (TodayScreen) can render the SAME grid the Sleep tab does (a mirror, not a copy); lives
+ * here so its [MetricGrid]/[SparkTile] siblings stay in-file. Twin of the iOS `NightDetailCard`. The Sleep
+ * tab passes an [onMetricClick] to open per-metric detail; the Today host omits it (no detail sheet there),
+ * so the tiles render read-only when hosted.
+ */
+@Composable
+internal fun NightDetailHostCard(m: SleepModel, onMetricClick: (String) -> Unit = {}) {
+    MetricGrid(m, onMetricClick = onMetricClick)
+}
+
 @Composable
 private fun MetricGrid(m: SleepModel, onMetricClick: (String) -> Unit = {}) {
     val tiles = listOf<@Composable (Modifier) -> Unit>(
@@ -2643,10 +2903,14 @@ private fun MetricGrid(m: SleepModel, onMetricClick: (String) -> Unit = {}) {
  * card: the net debt/surplus headline, a plain-English read, and a diverging bar of each
  * night's delta (surplus above the centre line, deficit below). Honest: a simple accumulator
  * — a surplus night offsets a deficit one — capped at 14 nights, no-data nights skipped.
- * Mirrors the macOS SleepView sleepDebtLedger card section-for-section. (#242)
+ * Mirrors the macOS SleepDebtLedgerCard section-for-section. `internal` and keyed on the shared
+ * [SleepModel] so the Today host (TodayScreen) can render the SAME view the Sleep tab does (a mirror,
+ * not a copy); the nap-credited ledger is read from `m.sleepDebtLedger`, never recomputed here. Twin of
+ * the iOS `SleepDebtLedgerCard`. (#242) (#today-hosted-cards)
  */
 @Composable
-internal fun SleepDebtLedgerCard(ledger: SleepDebtLedger) {
+internal fun SleepDebtLedgerHostCard(m: SleepModel) {
+    val ledger = m.sleepDebtLedger
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         SectionHeader("Sleep-debt ledger", overline = "Last 14 nights", trailing = "running balance")
         NoopCard(padding = Metrics.cardPadding, tint = Palette.restColor) {
@@ -2744,10 +3008,103 @@ private fun DebtDeltaBars(ledger: SleepDebtLedger) {
     )
 }
 
+// MARK: - Stages (read-only latest-night host card)
+
+/**
+ * #today-hosted-cards: the READ-ONLY "Stages" card hosted in Today — the latest night's stage chart +
+ * breakdown rendered from the shared [SleepModel] (the SAME stages the Sleep tab hero shows). Unlike the
+ * Sleep tab hero it carries NONE of the interaction: no night ◀/▶ navigation, no wake-time edit, no nap
+ * add/edit/delete — only the display is mirrored. It reuses the SAME StageTimeline / FilledHypnogram /
+ * HypnogramWithAxis + StageBreakdownRows renderers the hero uses (each owns its own transient tap-
+ * highlight), so the stage split can never diverge between the two surfaces. `internal` so the Today host
+ * (TodayScreen) can render it; lives here so its private [StageTimeline] sibling is in-file. Twin of the
+ * iOS `StagesCard`.
+ *
+ * NOTE (feature-level parity): the Kotlin [SleepModel] carries no session timestamps or nap blocks (those
+ * ride [HeroNight]/[HeroDisplay] on the Sleep tab), so — unlike iOS, whose `SleepModel.night` carries the
+ * session + source blocks — this card shows no clock-window row and no Main/Nap(s)/Total split. The stage
+ * chart + breakdown is the shared data both platforms mirror.
+ */
+@Composable
+internal fun StagesHostCard(m: SleepModel) {
+    val s = m.stages
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        // Read-only header: the night's span label in the trailing slot — NO ◀/▶ nav controls.
+        SectionHeader("Stages", overline = "Last night", trailing = m.clockLabel)
+        // Verbatim of the Sleep tab Hero's stage-chart block, read from the shared model with a null
+        // session window (no clock axis) and no motion strip — the fractions/segments are identical.
+        val subtitle = "${durationText(s.total)} in bed · ${m.efficiencyText} efficiency" +
+            (if (m.realSegments != null) " · approx. stages (on-device)" else "")
+        val real = m.realSegments?.takeIf { it.size >= 2 }
+        if (real != null) {
+            val chartStyle = UnitPrefs.sleepChartStyle(LocalContext.current)
+            val filledSegments = m.hypnogramSegments?.takeIf { it.size >= 2 }
+            if ((chartStyle == SleepChartStyle.FILLED || chartStyle == SleepChartStyle.RIBBON) &&
+                filledSegments != null) {
+                ChartCard(
+                    title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
+                    subtitle = subtitle,
+                    trailing = durationText(s.asleep),
+                    tint = Palette.restColor,
+                    footer = { StageBreakdownRows(s) },
+                ) {
+                    FilledHypnogram(
+                        segments = filledSegments,
+                        onsetTs = null,
+                        wakeTs = null,
+                        filled = chartStyle == SleepChartStyle.FILLED,
+                    )
+                }
+            } else {
+                ChartCard(
+                    title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
+                    subtitle = subtitle,
+                    trailing = durationText(s.asleep),
+                    tint = Palette.restColor,
+                    footer = {},
+                ) {
+                    StageTimeline(
+                        realSegments = real,
+                        s = s,
+                        onsetTs = null,
+                        wakeTs = null,
+                        motionEpochs = emptyList(),
+                    )
+                }
+            }
+        } else {
+            ChartCard(
+                title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
+                subtitle = subtitle,
+                trailing = durationText(s.asleep),
+                tint = Palette.restColor,
+                footer = { StageBreakdownRows(s) },
+            ) {
+                val segments = stageSegments(s)
+                if (segments.isNotEmpty()) {
+                    HypnogramWithAxis(stages = segments, onsetTs = null, wakeTs = null)
+                } else {
+                    Text(
+                        uiString(R.string.l10n_sleep_screen_no_stage_breakdown_for_this_night_b74bf9c3),
+                        style = NoopType.subhead,
+                        color = Palette.textTertiary,
+                    )
+                }
+            }
+        }
+    }
+}
+
 // MARK: - 3. Stages vs typical
 
+/**
+ * #today-hosted-cards: the "Stages vs typical" card — last night's Deep/REM/Light against the wearer's
+ * personal per-stage means from the shared [SleepModel]. `internal` so the Today host (TodayScreen) can
+ * render the SAME view the Sleep tab does (a mirror, not a copy); lives here so its StageRow/Hairline
+ * siblings are in-file. Twin of the iOS `StagesVsTypicalCard`.
+ */
 @Composable
-private fun StagesVsTypical(m: SleepModel) {
+internal fun StagesVsTypicalHostCard(m: SleepModel) {
     val s = m.stages
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         SectionHeader("Stages vs typical", overline = "Selected night", trailing = "marker = your mean")
@@ -2838,6 +3195,52 @@ private fun DrawScope.drawRoundRectFill(color: Color, frac: Float) {
 
 // MARK: - 4. 14-day asleep-hours trend
 
+/**
+ * #today-hosted-cards P1: the hosted "Asleep duration" card — the hours-asleep BarChart from [DurationTrend],
+ * hours-only (no debt sub-chart, so no nap/session data needed), built from the pure [sleepDurationTrend].
+ * `internal` so the Today host (TodayScreen) can render it; lives here so its ChartCard/BarChart siblings
+ * are in-file. Twin of the iOS `AsleepDurationCard`.
+ */
+@Composable
+internal fun AsleepDurationHostCard(hours: List<Double>, dates: List<String>) {
+    val avg = hours.sleepAverageOrNull()
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
+        SectionHeader("Asleep duration", overline = "Sleep", trailing = "Last 14 days")
+        ChartCard(
+            title = uiString(R.string.l10n_sleep_screen_hours_asleep_06f68993),
+            subtitle = "Per night, trailing 14 days",
+            trailing = avg?.let { String.format(Locale.US, "%.1f h avg", it) },
+            tint = Palette.restColor,
+            footer = {
+                ChartFooter(
+                    listOf(
+                        "Avg" to (avg?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
+                        "Min" to (hours.minOrNull()?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
+                        "Max" to (hours.maxOrNull()?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
+                        "Nights" to "${hours.size}",
+                    ),
+                )
+            },
+        ) {
+            if (hours.size >= 2) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BarChart(
+                        values = hours,
+                        modifier = Modifier.fillMaxWidth().height(Metrics.compactChartHeight)
+                            .semantics { contentDescription = uiString(R.string.l10n_sleep_screen_sleep_hours_trend_chart_a6fbc46d) },
+                        color = Palette.restColor,
+                        selectionEnabled = true,
+                        selectionLabels = dates.map(::shortDayLabel),
+                    )
+                    DateAxisRow(dates)
+                }
+            } else {
+                TrendPlaceholder()
+            }
+        }
+    }
+}
+
 @Composable
 private fun DurationTrend(m: SleepModel) {
     val pts = m.trendHours
@@ -2919,7 +3322,8 @@ private fun DurationTrend(m: SleepModel) {
 }
 
 @Composable
-private fun TrendPlaceholder() {
+// internal (not private) so the Today hosted-cards duration card (#today-hosted-cards) can reuse it.
+internal fun TrendPlaceholder() {
     Box(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
@@ -2949,8 +3353,9 @@ private fun TrendLegend(items: List<Pair<String, Color>>) {
     }
 }
 
+// internal (not private) so the Today hosted-cards duration card (#today-hosted-cards) can reuse it.
 @Composable
-private fun DateAxisRow(days: List<String>) {
+internal fun DateAxisRow(days: List<String>) {
     if (days.isEmpty()) return
     val labels = listOf(
         days.firstOrNull(),
@@ -3213,6 +3618,60 @@ private fun LegendDot(label: String, color: Color) {
     }
 }
 
+// MARK: - Consistency host card (#today-hosted-cards)
+
+/**
+ * A SIMPLE standalone "Consistency" score card for the Today host — mirrors the [HoursVsNeededCard]
+ * presentation (a NoopCard header with a trend arrow + big % + a sparkline), NOT the rich scatter
+ * [SleepConsistencyCard] (which needs raw sessions). Renders `m.consistency` (latest / typical / series) —
+ * the SAME shared SleepModel metric the Sleep tab's Night-detail tile reads (bedtime-onset spread, honouring
+ * the imported-consistency preference, byte-identical to iOS `SleepModel.consistency`), so the number and the
+ * sparkline can never diverge between the two surfaces.
+ */
+@Composable
+internal fun ConsistencyHostCard(m: SleepModel) {
+    val cons = m.consistency
+    // Uncapped % (consistency is already 0–100); "—" when there is no latest night yet.
+    val latest = cons.latest
+    // Trend arrow off the last two nights of the consistency series (same idiom as HoursVsNeededCard).
+    val trendArrow = if (cons.series.size >= 2) {
+        val delta = cons.series.last() - cons.series[cons.series.lastIndex - 1]
+        when {
+            delta > 0.5 -> "↑"
+            delta < -0.5 -> "↓"
+            else -> "→"
+        }
+    } else "→"
+    val arrowColor = when (trendArrow) {
+        "↑" -> Palette.statusPositive
+        "↓" -> Palette.statusCritical
+        else -> Palette.textTertiary
+    }
+    // The simple host card summarizes the trend via the arrow + sparkline rather than a "vs typical"
+    // caption (mirrors the Android HoursVsNeeded host presentation, which carries no caption literal).
+    NoopCard(padding = Metrics.cardPadding, tint = Palette.restColor) {
+        Column(verticalArrangement = Arrangement.spacedBy(Metrics.space14)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Overline("Sleep")
+                    Text(uiString(R.string.l10n_sleep_screen_consistency_0ea7b95e), style = NoopType.headline, color = Palette.textPrimary)
+                }
+                Text(trendArrow, style = NoopType.title2, color = arrowColor)
+                Spacer(Modifier.width(Metrics.space6))
+                Text(
+                    if (latest != null) uiString(R.string.l10n_sleep_screen_score_roundtoint_a2d1cc99, latest.roundToInt()) else "—",
+                    style = NoopType.chartValue,
+                    color = Palette.restColor,
+                )
+            }
+            // Sparkline of the consistency history, in metricCyan to match the Sleep-tab Night-detail tile.
+            if (cons.series.size > 1) {
+                Sparkline(values = cons.series.takeLast(30), color = Palette.metricCyan)
+            }
+        }
+    }
+}
+
 // MARK: - Sleep Consistency card
 
 /** One night's bed/wake fold for [SleepConsistencyCard], memoized off `sleeps` (#perf). */
@@ -3225,7 +3684,14 @@ private data class SleepNightTiming(val label: String, val bedHour: Float, val w
  * of the personal typical. (PR #260)
  */
 @Composable
-internal fun SleepConsistencyCard(sleeps: List<SleepSession>, habitualMidsleepSec: Long? = null) {
+internal fun SleepConsistencyCard(
+    sleeps: List<SleepSession>,
+    habitualMidsleepSec: Long? = null,
+    // #sleep-consistency-parity: the iOS-canonical onset-spread score (model.consistency, which also
+    // honours the imported-consistency preference). Passed in so the card headline matches iOS + the tile
+    // instead of the old local "share of nights within 45 min" count (a third, divergent value).
+    consistencyScore: Double? = null,
+) {
     // #perf: building the per-night fold allocates 2 Calendars + a SimpleDateFormat per session (~28
     // objects for 14 nights). It's a pure derivation of `sleeps` (no wall-clock input), so memoize it on
     // `sleeps` — scrolling the Sleep screen then reuses it instead of rebuilding it every recompose frame.
@@ -3253,12 +3719,10 @@ internal fun SleepConsistencyCard(sleeps: List<SleepSession>, habitualMidsleepSe
     val wakeSdH = sd(timings.map { it.wakeHour })
     val typicalBed = timings.map { it.bedHour }.average().toFloat()
     val typicalWake = timings.map { it.wakeHour }.average().toFloat()
-    // Count nights where bed AND wake are within 45 min of the typical.
-    val threshold = 0.75f
-    val consistentNights = timings.count { t ->
-        abs(t.bedHour - typicalBed) <= threshold && abs(t.wakeHour - typicalWake) <= threshold
-    }
-    val consistencyPct = (consistentNights.toFloat() / timings.size * 100f).coerceIn(0f, 100f)
+    // #sleep-consistency-parity: the headline is the shared onset-spread score (iOS-canonical), not the
+    // old "share of nights within 45 min of typical" count. The bed/wake scatter + SD labels below are
+    // unchanged (they visualise the same onsets). Falls back to 0 only when the score is unavailable.
+    val consistencyPct = consistencyScore?.toFloat()?.coerceIn(0f, 100f) ?: 0f
     val typicalBedLabel = run {
         val h = ((typicalBed + 24f) % 24f).toInt()
         String.format(Locale.US, "%02d:00", h)

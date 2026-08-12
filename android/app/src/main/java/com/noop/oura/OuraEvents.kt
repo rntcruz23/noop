@@ -14,21 +14,119 @@ package com.noop.oura
 // apply the anchor. Honest-data invariant: a short/malformed record decodes to null upstream, so
 // these structs only ever hold real decoded values.
 
-/** One decoded inter-beat interval (and optional amplitude), in milliseconds. */
-data class OuraIBI(val ringTimestamp: Long, val ibiMs: Int, val amplitude: Int? = null)
+/**
+ * WHICH optical channel decoded an [OuraIBI] (#1071).
+ *
+ * The ring reports the SAME heartbeats on more than one tag. They are not different beats and not
+ * duplicate records — they are independent measurements of one beat train, so a consumer that folds
+ * them together holds two copies of every night and every variability statistic built on successive
+ * differences (RMSSD, SDNN) breaks. The tag is the only thing that separates them at ingest; after the
+ * fact the two are only separable by the accident that their quantisation grids differ.
+ *
+ * [code] is the DURABLE cross-platform storage value (it reaches `rrInterval.srcChannel`), pinned to
+ * Swift `OuraIBIChannel` / `RRSourceChannel`. Never renumber a case; only append.
+ *
+ * Byte-identical twin of Swift's `OuraIBIChannel`.
+ */
+enum class OuraIbiChannel(val code: Int) {
+    /**
+     * 0x80 `green_ibi_quality_event` (s6.4) — green LED, gated on the ring's own `quality == 1` flag
+     * and a 300-2000 ms physiological window, and it runs for the WHOLE wear period.
+     */
+    GREEN_QUALITY(1),
+
+    /**
+     * 0x6E `spo2_ibi_and_amplitude_event` (s6.3) — the SpO2 measurement's own beat train, quantised to
+     * an 8 ms grid with NO quality gate, and only present while an SpO2 measurement is running.
+     */
+    SPO2_IBI(2),
+
+    /** 0x60 `ibi_and_amplitude_event` (s6.1) — the bit-packed IBI + amplitude family. */
+    IBI_AMPLITUDE(3),
+
+    /**
+     * 0x44 `ibi_event` (s6 / s0) — the SAME bit-packed layout as 0x60 and decoded by the same routine,
+     * but a DIFFERENT tag on the wire, so it gets its own code.
+     *
+     * Both tags stamped [IBI_AMPLITUDE] until now, which made them indistinguishable once stored. That
+     * hid the question the scoring-channel choice turns on: when that channel covers 1.25x the
+     * wall-clock it spans, is ONE tag repeating beats across its records, or are TWO tags reporting the
+     * same beats to each other? No stored night could answer it, because the label collapsed them.
+     * Separating the codes costs nothing and makes the next capture decisive. Labelling only — both
+     * tags decode and are read exactly as before.
+     */
+    IBI_BARE(4),
+    ;
+
+    companion object {
+        /** The channel with this durable storage [code], or null for an unknown/absent one. */
+        fun fromCode(code: Int?): OuraIbiChannel? = entries.firstOrNull { it.code == code }
+    }
+}
+
+/**
+ * One decoded inter-beat interval (and optional amplitude), in milliseconds.
+ *
+ * [channel] is which optical channel measured the beat (#1071). Every decoder stamps its own; null
+ * only for a value built by something that is not one of them — never a guess.
+ */
+data class OuraIBI(
+    val ringTimestamp: Long,
+    val ibiMs: Int,
+    val amplitude: Int? = null,
+    val channel: OuraIbiChannel? = null,
+)
 
 /** One decoded heart-rate value in BPM (derived from a live-HR push IBI, OURA_PROTOCOL.md s5.6). */
 data class OuraHR(val ringTimestamp: Long, val bpm: Int, val ibiMs: Int)
 
 /**
- * One decoded HRV (RMSSD-derived) sample from the ring's own 0x5D tag (OURA_PROTOCOL.md s6.9).
- * NOOP also reconstructs RMSSD itself from the IBI streams for its own scoring; this is the ring's
- * open HRV tag, NOT Oura's encrypted readiness score.
+ * One decoded 5-min HRV bucket from the ring's own 0x5D tag: the ring's avg HR (bpm) + avg RMSSD (ms),
+ * both u8 (no scaling). The 0x5D body is a run of (u8 hr, u8 rmssd) pairs, one per 5 min; [index] is the
+ * pair's position in the record (buckets ~5 min apart). Ring's open summary tag, NOT Oura's readiness
+ * score. Twin of Swift OuraHRV.
  */
-data class OuraHRV(val ringTimestamp: Long, val timeMs: Int, val b1: Int, val b2: Int)
+data class OuraHRV(
+    val ringTimestamp: Long,
+    /**
+     * 0-based pair index within the record, counting from the record's FIRST byte-pair — which is its
+     * OLDEST bucket (#1167). The consumer needs [count] as well as [index] to place the bucket:
+     * `bucketTs = ts - (count - index) * 300`.
+     */
+    val index: Int,
+    val hrBpm: Int,
+    val rmssdMs: Int,
+    /**
+     * Total pairs in the record this bucket came from — INCLUDING any `00 00` padding pair the decoder
+     * dropped (#1128/#1131). [index] is always in `0 until count`. Needed because the record's timestamp
+     * marks the END of the span it covers, so a bucket's offset is measured from the record's tail, not
+     * its head: dropping a pad without counting it would slide every surviving bucket in the record.
+     * Mirrors `OuraSpO2.count`, which the SpO2 path already uses for the same reason. Twin of Swift.
+     */
+    val count: Int = 1,
+)
 
-/** One decoded SpO2 sample. `value` is the raw SpO2 reading; `unit` documents its scale. */
-data class OuraSpO2(val ringTimestamp: Long, val value: Int, val unit: String = "raw")
+/**
+ * One decoded SpO2 sample. `value` is the raw SpO2 reading; `unit` documents its scale.
+ *
+ * A single 0x6F / 0x77 record carries MANY samples, all sharing the record's [ringTimestamp].
+ * [index]/[count] carry the sample's position within its record so the consumer can give each one its
+ * own second — without them the position is lost at decode time and cannot be recovered downstream,
+ * which is exactly how 12 of every 13 samples were silently dropped on the (deviceId, ts) primary key
+ * (#1070). [ringTimestamp] stays the RECORD's time (the wire anchor); the per-sample offset is applied
+ * where the durable row is minted (OuraStreamMapping). [index] mirrors OuraSleepPhase.index. Both default
+ * (0 / 1 = "the only sample in its record"), so single-sample decoders like 0x7B are unchanged.
+ * Twin of Swift OuraSpO2 — the fields, defaults and resulting seconds are IDENTICAL.
+ */
+data class OuraSpO2(
+    val ringTimestamp: Long,
+    val value: Int,
+    val unit: String = "raw",
+    /** 0-based position of this sample within its record; samples are 1 s apart. */
+    val index: Int = 0,
+    /** Total samples decoded from the same record. [index] is always in `0 until count`. */
+    val count: Int = 1,
+)
 
 /** One decoded skin-temperature sample in degrees C (value already / 100). */
 data class OuraTemp(val ringTimestamp: Long, val celsius: Double)
@@ -61,8 +159,21 @@ enum class OuraSleepStage(val raw: Int) {
     }
 }
 
-/** One decoded sleep-phase code in order within a 0x4E/0x5A record (OURA_PROTOCOL.md s6.12). */
-data class OuraSleepPhase(val ringTimestamp: Long, val index: Int, val stage: OuraSleepStage)
+/**
+ * One decoded sleep-phase code in order within a 0x4E/0x5A record (OURA_PROTOCOL.md s6.12). [unwritten]
+ * (#1246) marks an epoch from an UNWRITTEN hypnogram page (a whole record of the erased-flash value 0xFF,
+ * which the 2-bit decode would otherwise read as four AWAKE codes). It keeps a placeholder [stage] so it
+ * still OCCUPIES its 30 s
+ * slot in the burst time axis (dropping it would mis-time the real codes around it), but the assembler
+ * EXCLUDES it from the reconstructed hypnogram — a gap, not AWAKE. Defaults false = a written epoch.
+ * Byte-parity twin of the Swift OuraSleepPhase.
+ */
+data class OuraSleepPhase(
+    val ringTimestamp: Long,
+    val index: Int,
+    val stage: OuraSleepStage,
+    val unwritten: Boolean = false,
+)
 
 /** Motion state (OURA_PROTOCOL.md s6.13): 0 NO_MOTION, 1 RESTLESS, 2 TOSSING, 3 ACTIVE. */
 enum class OuraMotionState(val raw: Int) {

@@ -28,8 +28,17 @@ struct StrandiOSApp: App {
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.system.rawValue
     /// Chart data-colour style (Titanium / Classic throwback). Re-colours gauges + charts.
     @AppStorage(ChartStyle.storageKey) private var chartStyleRaw = ChartStyle.titanium.rawValue
+    /// Chrome accent colour (mint / WHOOP blue / custom). Chrome only — never the data colour worlds.
+    @AppStorage(AccentColor.storageKey) private var accentRaw = AccentColor.mint.rawValue
+    @AppStorage(AccentColor.customHexKey) private var accentCustomHex = AccentColor.defaultCustomHex
+    /// Effort's display scale is also embedded in the shared widget snapshot. Observe it here so a
+    /// Settings change gets one accurate full rebuild instead of waiting for an unrelated repo refresh.
+    @AppStorage(UnitPrefs.effortScaleKey) private var effortScaleRaw = EffortScale.hundred.rawValue
 
     init() {
+        // #1008: pin the pre-change Overnight-only default for existing installs before
+        // anything reads it. Idempotent; a no-op on fresh installs and after the first launch.
+        PuffinExperiment.migrateContinuousHrvOvernightDefault()
         #if DEBUG
         // DEBUG-only promo-screenshot harness: when launched with `--demo-hour <Int>`, pin Today to that
         // hour's day-cycle scene + a per-hour stat frame. No-op (active stays nil) when the arg is absent.
@@ -52,11 +61,17 @@ struct StrandiOSApp: App {
         UNUserNotificationCenter.current().delegate = NotificationPresenter.shared
         let model = AppModel()
         _model = StateObject(wrappedValue: model)
-        _health = StateObject(wrappedValue: HealthKitBridge(
+        let bridge = HealthKitBridge(
             repo: model.repo,
             appleDeviceId: model.appleDeviceId,
             noopDeviceId: model.deviceId
-        ))
+        )
+        _health = StateObject(wrappedValue: bridge)
+        // #1021: publish to Apple Health when an offload lands, not only on foreground entry - the
+        // scenePhase pass below starts the offload and wrote to Health in parallel with it, so a night
+        // synced on open only reached Health at the next launch. Weak so the scene owns the bridge's
+        // lifetime; the bridge no-ops unless Health was authorized.
+        model.healthWriteBack = { [weak bridge] in await bridge?.writeBackAfterNewData() }
     }
 
     var body: some Scene {
@@ -77,7 +92,11 @@ struct StrandiOSApp: App {
                 // card observes the SAME instance the central detector (AppModel.evaluateStress) posts to.
                 .environment(\.stressNudgeCenter, model.stressNudgeCenter)
                 .preferredColorScheme(AppearanceMode.resolve(appearanceRaw).colorScheme)
+                // Match SwiftUI format styles to the localization selected by the app's bundles. Language
+                // changes are process-wide on Apple and are applied after the documented reopen.
+                .environment(\.locale, AppLanguage.activeLocale)
                 .chartStyle(chartStyleRaw)
+                .noopAccent(accentRaw, customHex: accentCustomHex)
                 // Dynamic Type now scales the prose/label roles (StrandFont). Cap the upper end so the
                 // fixed-geometry tiles/gauges stay legible at the largest accessibility sizes rather than
                 // clipping; the common Larger-Text range still scales fully.
@@ -87,7 +106,9 @@ struct StrandiOSApp: App {
                     // Home/Lock widget and the watch snapshot use, so this fourth surface can't drift to a
                     // different day at the rollover (it previously read `days.last(where: recovery != nil)`,
                     // which kept pointing at yesterday's scored row after Today had moved on).
-                    let day = Repository.widgetAnchor(days: model.repo.days)
+                    // Memoized: this closure fires on EVERY live-HR tick, so re-deriving the anchor here
+                    // scanned the whole history + hit the DateFormatter lock ~1-3x/sec (#1051-shaped).
+                    let day = model.repo.cachedWidgetAnchor()
                     liveActivity.update(
                         bpm: model.live.connected ? (model.bpm ?? model.live.heartRate) : nil,
                         recovery: day?.recovery.map { Int($0.rounded()) },
@@ -98,8 +119,9 @@ struct StrandiOSApp: App {
                 // End the Live Activity the moment the link drops, even if no further HR tick arrives.
                 .onReceive(model.live.$connected) { isConnected in
                     // #911: same shared anchor as the heartRate site above, so the Live Activity, the
-                    // widget, the watch and Today never disagree about which day they describe.
-                    let day = Repository.widgetAnchor(days: model.repo.days)
+                    // widget, the watch and Today never disagree about which day they describe. Memoized
+                    // (shares the heartRate site's cache; recomputes only on a data refresh or day-roll).
+                    let day = model.repo.cachedWidgetAnchor()
                     liveActivity.update(
                         bpm: isConnected ? (model.bpm ?? model.live.heartRate) : nil,
                         recovery: day?.recovery.map { Int($0.rounded()) },
@@ -135,11 +157,11 @@ struct StrandiOSApp: App {
                 // and foreground-initiated reloads are budget-exempt. dropFirst() skips the attach replay.
                 .onReceive(model.live.$batteryPct.dropFirst()) { _ in
                     guard scenePhase == .active else { return }
-                    Task { await WidgetSnapshot.publish(from: model) }
+                    Task { await WidgetSnapshot.publishLive(from: model) }
                 }
                 .onReceive(model.live.$connected.dropFirst()) { _ in
                     guard scenePhase == .active else { return }
-                    Task { await WidgetSnapshot.publish(from: model) }
+                    Task { await WidgetSnapshot.publishLive(from: model) }
                 }
                 // #114 (follow-up): `WidgetSnapshot.bpm` reads `model.bpm` (WidgetPublish.swift), the
                 // smoothed live HR — same LIVE-not-repo-cache category as battery/connected above, so it
@@ -147,11 +169,16 @@ struct StrandiOSApp: App {
                 // widget's HR froze at the last foreground snapshot for the rest of the session. UNLIKE
                 // battery/connection, HR is HIGH-frequency (the smoothed median moves every few seconds
                 // under activity), so — unlike the ungated hooks above — this one is throttled through
-                // `HRPublishThrottle` (60 s, mirroring Android's PushGate HR cadence) so it can't re-run
-                // publish's `exploreSeries` read + `reloadAllTimelines()` on every tick.
+                // `HRPublishThrottle` (60 s, mirroring Android's PushGate HR cadence). `publishLive` then
+                // updates the saved live fields without re-reading the full Rest series, while the throttle
+                // still bounds the App-Group writes + WidgetKit timeline reloads.
                 .onReceive(model.$bpm.dropFirst()) { _ in
                     guard scenePhase == .active else { return }
                     guard WidgetSnapshot.HRPublishThrottle.admit() else { return }
+                    Task { await WidgetSnapshot.publishLive(from: model) }
+                }
+                .onChange(of: effortScaleRaw) { _, _ in
+                    guard scenePhase == .active else { return }
                     Task { await WidgetSnapshot.publish(from: model) }
                 }
                 // #581: the `noop://import-health` deep link the iOS Shortcut opens after building the
@@ -206,7 +233,13 @@ struct StrandiOSApp: App {
                 model.ble.requestSync(.foreground)
                 Task {
                     health.refreshAuthIfPreviouslyGranted()
-                    await health.sync()
+                    await HealthSyncRefreshCoordinator.run(
+                        sync: { await health.sync() },
+                        refresh: {
+                            await model.refreshAfterAppleHealthSync(
+                                authorized: health.auth == .authorized)
+                        }
+                    )
                     await WidgetSnapshot.publish(from: model)
                     // Push the wrist on the SAME refresh as the Home-screen widget so the watch, the
                     // widget and Today never disagree about which day they describe. Without this the

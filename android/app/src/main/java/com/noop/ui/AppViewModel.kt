@@ -10,10 +10,10 @@ import com.noop.alarm.SmartAlarmStore
 import com.noop.alarm.WindDownScheduler
 import com.noop.alarm.WindDownStore
 import com.noop.analytics.Baselines
-import com.noop.analytics.HrZones
 import com.noop.analytics.IllnessSignalEngine
 import com.noop.analytics.IllnessWatch
 import com.noop.analytics.IntelligenceEngine
+import com.noop.analytics.CircadianEngine
 import com.noop.analytics.V5HealthSignals
 import com.noop.analytics.RegistryDayOwnerSource
 import com.noop.analytics.RestScorer
@@ -34,6 +34,7 @@ import com.noop.ble.WhoopConnectionService
 import com.noop.ble.WhoopModel
 import androidx.health.connect.client.HealthConnectClient
 import com.noop.data.DailyMetric
+import com.noop.data.CycleTrackingStore
 import com.noop.data.HrSample
 import com.noop.data.WhoopRepository
 import com.noop.data.WorkoutRow
@@ -58,11 +59,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.TimeZone
 import kotlin.math.roundToInt
 
 /**
@@ -75,6 +80,35 @@ import kotlin.math.roundToInt
 /** Last Health Connect writeback outcome for the Data Sources UI (#660). [code] is a PII-safe
  *  category (see [NoopPrefs.HC_WB_OK] etc.); "" = never attempted. */
 data class HcWritebackStatus(val code: String, val atMs: Long, val written: Int)
+
+/**
+ * The pure half of the body-clock binning (#852): hourly HR buckets + a timezone offset -> a per-hour
+ * activity profile and the number of distinct local days it spans.
+ *
+ * Separated from the store read so it is unit-testable with no Context, no ViewModel and no database.
+ * Byte-for-byte mirror of the maths in Swift `AppModel.computeCircadianPhase`: the >= 24-bucket floor,
+ * pooling by LOCAL hour-of-day, mean bpm per populated hour, and distinct local days as `daysObserved`.
+ */
+internal fun circadianBinsFrom(
+    buckets: List<com.noop.data.HrBucket>,
+    tzOffsetSeconds: Long,
+): Pair<List<CircadianEngine.ActivityBin>, Int> {
+    if (buckets.size < 24) return emptyList<CircadianEngine.ActivityBin>() to 0
+    val sums = DoubleArray(24)
+    val counts = IntArray(24)
+    val days = HashSet<Long>()
+    for (b in buckets) {
+        val local = b.bucket + tzOffsetSeconds
+        val hour = (((local % 86_400L) + 86_400L) % 86_400L / 3_600L).toInt()
+        sums[hour] += b.avgBpm
+        counts[hour] += 1
+        days.add(local / 86_400L)
+    }
+    val bins = (0 until 24).mapNotNull { h ->
+        if (counts[h] > 0) CircadianEngine.ActivityBin(h.toDouble(), sums[h] / counts[h]) else null
+    }
+    return bins to days.size
+}
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -220,6 +254,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // Evidence goes with the data (#103): a later re-add must re-prove capabilities.
         com.noop.ble.Whoop5Evidence.from(appContext).clear(id)
     }
+
+    /** Permanently forget a device: wipe all its recorded data AND remove its registry entry, so a
+     *  duplicate/stale strap disappears from the list entirely (an archived row could otherwise only be
+     *  re-activated or data-wiped, never purged — #1193). Twin of Swift `DeviceRegistry.forget`. */
+    suspend fun forgetPairedDevice(id: String) = noopApp.deviceRegistry.forget(id)
 
     /**
      * A DISCOVERY-ONLY [StandardHrSource] for the Add-a-strap wizard. It runs its OWN scan and never
@@ -392,6 +431,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *  recordings under a read pinned to the literal "my-whoop" (#814 twin of the Workouts screen). */
     val deviceId = noopApp.activeDeviceId
 
+    /** Last (bins, daysObserved) computed on the collector pass. Reused by the SYNCHRONOUS settings
+     *  re-evaluate below, which has no coroutine to read the store from — without this, flipping the
+     *  cycle-tracking toggle would blank the body clock until the next collector tick.
+     *
+     *  Not volatile and not synchronised, deliberately: the write resumes on `viewModelScope`
+     *  (Dispatchers.Main.immediate) and the read is a UI-thread settings callback, so both touch it on
+     *  the main thread. The Swift twin gets the same guarantee from `@MainActor` on AppModel. */
+    private var lastCircadianBins: Pair<List<CircadianEngine.ActivityBin>, Int> =
+        emptyList<CircadianEngine.ActivityBin>() to 0
+
+    /**
+     * Per-hour activity profile for the body clock (#852), from the last ~14 days of hourly HR buckets.
+     * HR amplitude is a usable rest/activity rhythm proxy when raw motion is not to hand.
+     *
+     * Byte-for-byte mirror of Swift `AppModel.computeCircadianPhase`: 3600 s buckets, the >= 24-bucket
+     * floor, pooling by LOCAL hour-of-day, and `daysObserved` as the count of distinct local days. The
+     * binning lives here rather than in `CircadianEngine` precisely because Swift keeps it in AppModel —
+     * the engine stays an untouched byte-for-byte mirror on both platforms.
+     *
+     * Returns an empty list when there is too little to read; the caller treats that as "no estimate".
+     */
+    private suspend fun circadianActivityBins(): Pair<List<CircadianEngine.ActivityBin>, Int> {
+        val nowMs = System.currentTimeMillis()
+        val now = nowMs / 1000L
+        val from = now - 14L * 86_400L
+        // hrBucketsUnion, not hrBuckets: the Swift twin's `repo.hrBuckets(from:to:)` UNIONs the active
+        // strap with the canonical "my-whoop" (#814 read spine). Reading one id here would give Android
+        // strictly less data than Apple after a strap re-add — enough to miss the 24-bucket floor and
+        // render no estimate where Swift renders one. Single-WHOOP install resolves to one id either way.
+        val buckets = runCatching { repository.hrBucketsUnion(deviceId, from, now, 3_600L) }
+            .getOrDefault(emptyList())
+        val tz = TimeZone.getDefault().getOffset(nowMs) / 1000L
+        return circadianBinsFrom(buckets, tz)
+    }
+
     /** Live connection + biometric snapshot, surfaced straight from the BLE client. */
     val live: StateFlow<LiveState> = ble.state
     /** Low-frequency projection for history consumers that need to refresh after an offload without
@@ -442,6 +516,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _cycleTrackingEnabled = MutableStateFlow(NoopPrefs.cycleTracking(appContext))
     /** Whether cycle-phase awareness is enabled (reads a coarse phase from nightly skin temperature). */
     val cycleTrackingEnabled: StateFlow<Boolean> = _cycleTrackingEnabled.asStateFlow()
+
+    /** User-entered period-start days under the isolated local `noop-cycle` source, oldest first. */
+    private val _periodStarts = MutableStateFlow<List<String>>(emptyList())
+    val periodStarts: StateFlow<List<String>> = _periodStarts.asStateFlow()
 
     // The v5 Health-hub skin-temp-suite engine snapshot (Cycle / Body clock / Illness heads-up), recomputed
     // from the cached merged days each analytics pass and published for HealthScreen's skin-temp section.
@@ -494,6 +572,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val zoneCoachRecovery: StateFlow<Boolean> = _zoneCoachRecovery.asStateFlow()
     /** Last HR zone the coach saw (1..5, 0 = below Zone 1); -1 until the first sample. Mirrors macOS lastCoachZone. */
     private var lastZone = -1
+    /** Memoizes the HR-zone set so [coachZone] doesn't rebuild it on every live-HR sample (only on maxHR change). */
+    private val zoneSetCache = com.noop.analytics.HrZoneSetCache()
 
     // Double-tap action (parity since 4.2.8) — persisted in SharedPreferences (NoopPrefs). Default NONE,
     // manual-first. The Automations screen edits this; the live double-tap dispatch (init collector below)
@@ -595,6 +675,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
+     * #103: SpO₂ candidate @82 nightly mean per day, loaded from the "spo2_candidate" metricSeries
+     * key (written by IntelligenceEngine when the experimental display toggle is ON). Empty when the
+     * toggle is OFF or no candidate data exists — the Blood O₂ tile then behaves exactly as before.
+     * Mirrors the iOS HealthView loading `spo2_candidate` from the repository.
+     */
+    val spo2CandidateByDay: StateFlow<Map<String, Double>> =
+        combine(recentDays, flowOf(NoopPrefs.spo2CandidateDisplay(appContext))) { days, toggleOn ->
+            if (!toggleOn || days.isEmpty()) emptyMap()
+            else {
+                val from = days.first().day
+                val to = days.last().day
+                repository.metricSeriesComputedUnion(deviceId, "spo2_candidate", from, to)
+                    .associate { it.day to it.value }
+            }
+        }.flowOn(Dispatchers.IO)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /**
      * #386 self-heal: a "kick" the app-resume hook sends to wake the 15-min analyze loop early, so an
      * OEM-killed overnight re-score tick catches up the moment the user opens NOOP instead of showing a
      * stale Today card until the next sync/tick. The loop re-runs its EXISTING fingerprint-gated
@@ -638,6 +736,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // existing WHOOP flow below runs unchanged; it only acts when a non-WHOOP strap is the active
         // device. The Devices screen (next task) calls onActiveDeviceChanged after a setActive.
         noopApp.sourceCoordinator.start()
+        // #1121: re-arm the opt-in detailed-capture rolling log on launch, so a capture the user started
+        // keeps going across the process being killed (this phone class is not battery-exempt and Android
+        // kills the background BLE overnight — the very window a battery capture needs to span).
+        if (NoopPrefs.detailedCapture(appContext)) ble.setDetailedCapture(true)
         // #78 hole-4: wire the app-foreground salvage probe (see salvageProbeLifecycleCallbacks above).
         noopApp.registerActivityLifecycleCallbacks(salvageProbeLifecycleCallbacks)
         // Resolve the active band's name for the Live screen header (MW-6). Falls back to "WHOOP" in the
@@ -761,10 +863,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // so the contract the notification path relies on is untouched. Best-effort — never let a
                 // signals hiccup kill the collector.
                 runCatching {
+                    lastCircadianBins = circadianActivityBins()
+                    val loggedPeriodStarts = CycleTrackingStore(repository).starts()
+                    _periodStarts.value = loggedPeriodStarts
                     _v5Signals.value = V5HealthSignals.evaluate(
                         days = days,
                         cycleOptedIn = _cycleTrackingEnabled.value,
+                        loggedPeriodStarts = loggedPeriodStarts,
                         journalContext = illnessJournalContext(days),
+                        activityBins = lastCircadianBins.first,
+                        daysObserved = lastCircadianBins.second,
                     )
                 }
                 // Keep the home-screen widget fresh while the app is open — covers users who turned
@@ -896,8 +1004,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         // report ships proof of what was computed per day. Mirrors the macOS sink wired to
                         // live.append(log:). (Sleep overhaul §2.5.)
                         diag = { line -> ble.externalLog(line) },
-                        // Opt-in experimental sleep staging (V2) — read off SharedPreferences here (the
-                        // analytics layer is Context-free) and thread it into the sleep self-heal. (V7 3b)
+                        // Experimental sleep staging (V2) — read off SharedPreferences here (the analytics
+                        // layer is Context-free) and thread it into the sleep self-heal. The preference is
+                        // default TRUE, so this normally passes V2. (V7 3b)
                         useExperimentalSleepV2 = PuffinExperiment.from(appContext).experimentalSleepV2,
                         // Opt-in motion-aware wake refinement (#364 follow-up) — same Context-free threading.
                         useMotionAwareWake = PuffinExperiment.from(appContext).motionAwareWake,
@@ -961,6 +1070,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                             else null,
                         // #141: nightly HRV over deep-sleep windows only when the user picked WHOOP-style.
                         deepHrvWindow = UnitPrefs.hrvWindow(appContext) == HrvWindow.DEEP_SLEEP,
+                        // #103: SpO₂ candidate @82 display toggle — when ON, the engine computes and
+                        // persists the nightly @82 mean as "spo2_candidate" in metricSeries.
+                        spo2CandidateDisplay = NoopPrefs.spo2CandidateDisplay(appContext),
                     )
                     // analyzeRecent now hops to Dispatchers.Default; a scope cancellation surfaces as a
                     // CancellationException that runCatching would otherwise swallow, breaking the loop's
@@ -1010,9 +1122,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // for the bounded offload burst (faster backlog drain). The RISKY idle→LOW_POWER half stays at 0
         // (still dormant, #478), and live-HR does not escalate (see WhoopBleClient.escalateForLiveHr) —
         // realtimeArmed covers the overnight capture window, which would otherwise hold HIGH for hours.
+        // #477/#1005: the RISKY idle->LOW_POWER half was hard-coded to 0 here, so it was dormant for
+        // everyone and its own validation plan could never run. Reads the pref now; still 0 by default,
+        // so this changes nothing for anyone who has not deliberately set it.
         ble.setConnectionPriorityManagement(
             enabled = NoopPrefs.fastHistorySync(appContext),
-            idleThrottleBatteryPct = 0,
+            idleThrottleBatteryPct = NoopPrefs.idleThrottleBatteryPct(appContext),
         )
         // #533: the second, orthogonal sync-speed lever — prefer LE 2M around the offload burst. Also
         // independent of the Power-saving master, and its own toggle so a field report can tell the two
@@ -1182,7 +1297,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _lastWorkout.value = null
         val startMs = System.currentTimeMillis()
         _activeWorkout.value = ActiveWorkout(startMs = startMs, sport = sport, gpsEnabled = gpsEnabled)
-        buzz(1)
+        buzz(1, HapticPrefs.WORKOUT)
         // Workouts & GPS test mode (Test Centre): one session-start line tagged .workouts. Zero-cost when off.
         emitWorkoutsTrace {
             com.noop.analytics.WorkoutsTrace.sessionLine(
@@ -1307,12 +1422,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val endMs = System.currentTimeMillis()
         val avg = if (samples.isNotEmpty()) samples.sumOf { it.bpm } / samples.size else null
         val peak = if (samples.isNotEmpty()) samples.maxOf { it.bpm } else null
+        // #983: score the SAVED workout with the wearer's measured resting HR, not the hardcoded
+        // default of 60. %HRR is (bpm - resting) / (max - resting), so the default moves every zone
+        // boundary — at 136 bpm with maxHR 190 it is the difference between zone 1 and zone 2. Today's
+        // Effort and the manual rescore (#972) already thread this, so the stored number used to
+        // disagree with its own re-score. Read once here, at save time; the live readout during the
+        // session is a transient running estimate and deliberately left alone.
+        val restingHR = _today.value?.restingHr?.toDouble() ?: StrainScorer.defaultRestingHR
         val strain = if (samples.size >= 2)
-            StrainScorer.strain(samples, maxHR = profileStore.hrMax.toDouble(), sex = profileStore.sex) else null
+            StrainScorer.strain(samples, maxHR = profileStore.hrMax.toDouble(),
+                restingHR = restingHR, sex = profileStore.sex) else null
         // Estimate calories from the captured HR window (same Keytel/Harris–Benedict model the
         // auto-detector uses) so a manual session shows energy too, not just duration/strain. (#117)
         val energyKcal = if (samples.size >= 2)
-            Calories.estimateBoutCalories(samples, currentProfile(), profileStore.hrMax.toDouble(), null)
+            // #983: same measured resting HR as the strain above, not null. The calories model's
+            // active-vs-resting threshold sits at resting + 30% HRR, so the default silently shifts what
+            // counts as active — and #972 already threads it in the rescore path, so leaving it null here
+            // meant a saved workout's kcal disagreed with its own re-score just as its Effort did.
+            Calories.estimateBoutCalories(samples, currentProfile(), profileStore.hrMax.toDouble(), restingHR)
                 .first.takeIf { it > 0 }
         else null
         val row = WorkoutRow(
@@ -1334,7 +1461,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 gpsPoints = if (w.gpsEnabled) track.size else null,
             )
         }
-        buzz(2)
+        buzz(2, HapticPrefs.WORKOUT)
         viewModelScope.launch {
             runCatching { repository.upsertWorkouts(listOf(row)) }
             // #528: persist the live 1 Hz workout HR into hrSample so it can export to Health Connect
@@ -1503,11 +1630,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // would re-score + persist every night's HRV over the WHOLE night, silently overwriting the
                 // deep-window value (the "deep sleep window changes nothing" bug).
                 deepHrvWindow = UnitPrefs.hrvWindow(appContext) == HrvWindow.DEEP_SLEEP,
-                // Opt-in experimental sleep staging (V2) — same flag the 15-min loop reads, so a manual
-                // re-score after an edit stages with the same engine the user chose. (V7 Pillar 3b)
+                // Experimental sleep staging (V2) — same flag the 15-min loop reads (default TRUE), so a
+                // manual re-score after an edit stages with the same engine the user chose. (V7 Pillar 3b)
                 useExperimentalSleepV2 = PuffinExperiment.from(appContext).experimentalSleepV2,
                 // Opt-in motion-aware wake refinement (#364 follow-up) — same flag the 15-min loop reads.
                 useMotionAwareWake = PuffinExperiment.from(appContext).motionAwareWake,
+                // #103: SpO₂ candidate @82 display toggle — same flag the 15-min loop reads.
+                spo2CandidateDisplay = NoopPrefs.spo2CandidateDisplay(appContext),
             )
         }.onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
     }
@@ -1610,11 +1739,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *  HR-curve. A short session wants a finer bucket than the Today 24h chart (300 s would flatten a
      *  30-min run to ~6 points), so the bucket scales with duration: ~120 buckets across the window,
      *  floored at 15 s and capped at 300 s. Mirrors macOS Repository.workoutHrBuckets. */
-    suspend fun workoutHrBuckets(from: Long, to: Long): List<com.noop.data.HrBucket> {
+    suspend fun workoutHrBuckets(
+        from: Long,
+        to: Long,
+        source: String = "",
+        rowDeviceId: String = deviceId,
+    ): List<com.noop.data.HrBucket> {
         if (to <= from) return emptyList()
         val span = to - from
         val bucket = (span / 120).coerceIn(15L, 300L)
-        return runCatching { repository.hrBuckets(deviceId, from, to, bucket) }.getOrDefault(emptyList())
+        // #856: read the ids this row actually belongs to. A bout detected on a SECOND WHOOP charts
+        // from the strap that recorded it; an imported row gets the active ∪ canonical union, since it
+        // has no strap of its own and the worn strap may bank under either after a re-add. Previously
+        // this read the single active id, so both cases could chart the wrong data — and disagree with
+        // the Avg HR on the same card. Defaults keep any caller without a row on today's behaviour.
+        val ids = WhoopRepository.workoutHrDeviceIds(source, rowDeviceId, deviceId)
+        return runCatching { repository.hrBucketsFor(ids, from, to, bucket) }.getOrDefault(emptyList())
     }
 
     /** Per-zone MINUTES for a workout window, binning the strap's raw HR samples into the age-derived
@@ -1622,9 +1762,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *  percentages, but from the strap's own samples so a session WITHOUT imported zones still gets a
      *  real time-in-zone split. null when the window carries no HR. age <= 0 falls back to 30 y.
      *  Mirrors macOS Repository.workoutZoneMinutes. */
-    suspend fun workoutZoneMinutes(from: Long, to: Long): List<Double>? {
+    suspend fun workoutZoneMinutes(
+        from: Long,
+        to: Long,
+        source: String = "",
+        rowDeviceId: String = deviceId,
+    ): List<Double>? {
         if (to <= from) return null
-        val samples = runCatching { repository.hrSamples(deviceId, from, to) }.getOrDefault(emptyList())
+        // #856: the same resolved ids the chart and Avg HR use. Binning a different strap's samples
+        // than the curve plots would put three different answers on one card.
+        val ids = WhoopRepository.workoutHrDeviceIds(source, rowDeviceId, deviceId)
+        val samples = runCatching { repository.hrSamplesFor(ids, from, to) }.getOrDefault(emptyList())
         if (samples.isEmpty()) return null
         val age = profileStore.age.toDouble().takeIf { it > 0 } ?: 30.0
         val zoneSet = com.noop.analytics.HrZones.zones(age = age)
@@ -1636,12 +1784,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** HRR for one workout (#516), derived from a narrow workout-end + post-workout HR read. The pure
      *  engine owns the intensity and coverage gates, so a disconnect after exercise returns null rather
      *  than an interpolated value. Mirrors macOS Repository.workoutHeartRateRecovery. */
-    suspend fun workoutHeartRateRecovery(from: Long, to: Long): com.noop.analytics.HeartRateRecovery.Result? {
+    suspend fun workoutHeartRateRecovery(
+        from: Long,
+        to: Long,
+        source: String = "",
+        rowDeviceId: String = deviceId,
+    ): com.noop.analytics.HeartRateRecovery.Result? {
         if (to <= from) return null
         val readFrom = maxOf(from, to - com.noop.analytics.HeartRateRecovery.eligibilityLookbackSeconds)
         val readTo = to + 5 * 60 + com.noop.analytics.HeartRateRecovery.measurementToleranceSeconds
+        // #856: the same resolved ids as the chart, zones and Avg HR — the fourth surface on this card.
+        // The recovery window extends PAST the bout, but the strap that recorded it is still the one on
+        // the wrist a few minutes later, so a detected bout reads its own strap here too.
+        val ids = WhoopRepository.workoutHrDeviceIds(source, rowDeviceId, deviceId)
         val samples = runCatching {
-            repository.hrSamplesUnion(activeStrapId, readFrom, readTo, limit = 2_000)
+            repository.hrSamplesFor(ids, readFrom, readTo, limit = 2_000)
         }.getOrDefault(emptyList())
         return com.noop.analytics.HeartRateRecovery.calculate(
             samples = samples,
@@ -1674,6 +1831,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // No-ops when there's no strap HR for the window; never overrides a value the user typed.
             rescoreAfterEdit()
             loadWorkouts()
+            // #1195 follow-up: a manually added/edited workout writes back to Health Connect too, mirroring
+            // the live endWorkout path (iOS already syncs manual workouts to HealthKit via its query-based
+            // export). Opt-in; writes the same session + distance the live path does, under the same
+            // "noop-workout-*" client id (so a re-import skips it, no double-count). On ANY edit, delete the
+            // OLD workout's records first, then write fresh — matching iOS's delete-before-write. Deleting
+            // only when the start MOVED would leave a stale distance record when a same-start edit clears or
+            // drops the distance (writeExercise upserts the session but writes no distance record to
+            // overwrite it), or a moved-start record orphaned.
+            if (_hcWriteback.value) {
+                runCatching {
+                    replacing?.let { HealthConnectWriter.deleteExercise(appContext, it.startTs) }
+                    HealthConnectWriter.writeExercise(appContext, row, WorkoutSport.exerciseTypeForName(row.sport))
+                }
+            }
         }
     }
 
@@ -1698,6 +1869,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { repository.deleteWorkout(row) }
             loadWorkouts()
+            // #1195 follow-up: a workout removed in NOOP is removed from Health Connect too, so a session
+            // we wrote (manual or live) doesn't linger there after the user deletes it here. Opt-in, keyed
+            // on the same "noop-workout-*" client id; a no-op for a workout we never wrote.
+            if (_hcWriteback.value) {
+                runCatching { HealthConnectWriter.deleteExercise(appContext, row.startTs) }
+            }
         }
     }
 
@@ -1804,6 +1981,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearBodyLocationProbe() = ble.clearBodyLocationProbe()
 
+    /** #761: READ-ONLY feature-flag ENUMERATION probe (117 then repeated 118) — reads the flag NAMES the
+     *  strap's own firmware knows and writes nothing (no SET_FF_VALUE, no value of any kind).
+     *  User-initiated, Test-Centre-gated in DevicesScreen; the report goes to the dialog + strap log. */
+    fun probeFeatureFlags() = ble.probeFeatureFlags()
+
+    /** Stop an offload part-way through (#ABORT). Twin of Swift `AppModel`/`BLEManager.abortBackfill()`. */
+    fun abortBackfill() = ble.abortBackfill()
+
+    /** #761 probe report text (null until the walk finishes; waiting sentinel while it runs). */
+    val featureFlagProbe = ble.featureFlagProbe
+
+    fun clearFeatureFlagProbe() = ble.clearFeatureFlagProbe()
+
+    /** #103: READ-ONLY device-config READ probe (GET_DEVICE_CONFIG_VALUE/121 + GET_FF_VALUE/128) — asks
+     *  the strap for a config key's VALUE, the follow-up to #761's key-NAME enumeration. Writes nothing.
+     *  User-initiated, Test-Centre-gated in DevicesScreen; the report goes to the dialog + strap log. */
+    fun probeDeviceConfigValues() = ble.probeDeviceConfigValues()
+
+    /** #103 probe report text (null until the plan finishes; waiting sentinel while it runs). */
+    val deviceConfigProbe = ble.deviceConfigProbe
+
+    fun clearDeviceConfigProbe() = ble.clearDeviceConfigProbe()
+
     /**
      * Flip the "keep connected in the background" preference (driven by Settings). Turning it on
      * while a strap is live promotes to the foreground immediately; turning it off drops the
@@ -1858,6 +2058,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setDebugLogging(enabled: Boolean) {
         NoopPrefs.setDebugLogging(appContext, enabled)
         ble.debugLogcat = enabled
+    }
+
+    /** #1121: toggle the opt-in rolling "detailed capture" strap-log file. Persisted so it survives a
+     *  process kill (re-armed in [init] below). */
+    fun setDetailedCapture(enabled: Boolean) {
+        NoopPrefs.setDetailedCapture(appContext, enabled)
+        ble.setDetailedCapture(enabled)
     }
 
     // --- Broadcast heart rate (NOOP acts as a standard BLE HR peripheral; gym kit reads the strap HR) ---
@@ -2175,9 +2382,62 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _v5Signals.value = V5HealthSignals.evaluate(
                 days = days,
                 cycleOptedIn = enabled,
+                loggedPeriodStarts = _periodStarts.value,
                 journalContext = illnessJournalContext(days),
+                activityBins = lastCircadianBins.first,
+                daysObserved = lastCircadianBins.second,
             )
         }
+    }
+
+    /** #103: Flip the SpO₂ candidate display toggle. Persists and immediately re-scores so the @82
+     *  candidate is computed and persisted on this flip — without this the user waits up to 15 min
+     *  for the next analyze loop, and the Blood Oxygen tile stays blank in the meantime. Mirrors the
+     *  iOS SettingsView `.onChangeCompat` → `analyzeRecent()` pattern. */
+    fun setSpo2CandidateDisplay(enabled: Boolean) {
+        NoopPrefs.setSpo2CandidateDisplay(appContext, enabled)
+        viewModelScope.launch { rescoreAfterEdit() }
+    }
+
+    /** Log one local day as cycle day 1, then immediately re-run the classifier with the new anchor. */
+    fun logPeriodStart(day: String = CycleTrackingStore.todayKey()) {
+        viewModelScope.launch {
+            val store = CycleTrackingStore(repository)
+            store.logStart(day)
+            reloadPeriodStartsAndCycle(store)
+        }
+    }
+
+    /** Remove one logged start and immediately update the tracker + cycle estimate. */
+    fun deletePeriodStart(day: String) {
+        viewModelScope.launch {
+            val store = CycleTrackingStore(repository)
+            store.deleteStart(day)
+            reloadPeriodStartsAndCycle(store)
+        }
+    }
+
+    /** Delete all period-start history after the UI's explicit confirmation. */
+    fun deleteAllPeriodStarts() {
+        viewModelScope.launch {
+            val store = CycleTrackingStore(repository)
+            store.deleteAll()
+            reloadPeriodStartsAndCycle(store)
+        }
+    }
+
+    private suspend fun reloadPeriodStartsAndCycle(store: CycleTrackingStore) {
+        val starts = store.starts()
+        _periodStarts.value = starts
+        val days = recentDays.value
+        _v5Signals.value = V5HealthSignals.evaluate(
+            days = days,
+            cycleOptedIn = _cycleTrackingEnabled.value,
+            loggedPeriodStarts = starts,
+            journalContext = illnessJournalContext(days),
+            activityBins = lastCircadianBins.first,
+            daysObserved = lastCircadianBins.second,
+        )
     }
 
     /**
@@ -2256,6 +2516,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Fire a haptic buzz on the strap (requires a bonded connection). Scheduled cues only; for a
      *  user-facing "buzz the strap now" action use [buzzStrapOnce] instead (#921). */
     fun buzz(loops: Int = 2) = ble.buzz(loops)
+
+    /** #haptics (#1115 offshoot): an IN-SESSION cue buzz, GATED by its per-event [HapticPrefs] toggle
+     *  (default-off / opt-in, migrated-on for existing installs). Each in-session cue site passes its
+     *  [gate] key (e.g. [HapticPrefs.BREATHING]) so the enable check lives in ONE place rather than at every
+     *  Compose call site — and can't be forgotten, since the param is required. The ungated [buzz] /
+     *  [buzzStrapOnce] remain for ambient cues (which carry their own existing gates) and explicit user
+     *  buzzes (the Live-screen button, settings test), which are deliberately NOT default-off. */
+    fun buzz(loops: Int, gate: String) {
+        if (HapticPrefs.enabled(appContext, gate)) ble.buzz(loops)
+    }
 
     /** One-shot user buzz (#921): the confirmed pattern + RUN_ALARM sequence, written acknowledged
      *  (RUN_ALARM only where the family gate allows it). Drives the Live-screen Buzz button. */
@@ -2367,7 +2637,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (hr < 30) return
         val maxHR = profileStore.hrMax.toDouble()
         if (maxHR <= 0) return
-        val zone = HrZones.zones(maxHR = maxHR).zoneNumber(hr.toDouble())
+        // Memoized on maxHR: this runs every ~1 Hz live-HR sample while zone coaching is active, but the
+        // zone set only changes when the user edits their max HR — so don't rebuild it per tick.
+        val zone = zoneSetCache.zones(maxHR).zoneNumber(hr.toDouble())
         val previous = lastZone
         lastZone = zone
         val loops = zoneCoachBuzzLoops(previous, zone, _zoneCoachRecovery.value)
@@ -2396,8 +2668,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         /** Grace before the first scoring pass, letting the first BLE offload land. */
         const val FIRST_OFFLOAD_GRACE_MS = 6_000L
-        /** On-device scoring cadence — 15 min, matching the strap offload cadence. */
-        const val ANALYZE_INTERVAL_MS = 15 * 60 * 1_000L
+        /**
+         * On-device BACKSTOP scoring cadence — 30 min (#836 battery). This loop's watermark gate can't
+         * skip while the strap is connected and streaming live HR, because the HR fingerprint
+         * (count:maxTs) advances every second — so it re-ran a full 21-day analyzeRecent every 15 min over
+         * a large DB even though only TODAY's daytime HR changed (a real-capture CPU drain: ~6-7 full
+         * passes/hour). It is purely a BACKSTOP — every real update (sync-with-rows, import, edit,
+         * recalibrate, the #547 heal) rescores via its OWN forced path, and an app-resume kick (#386,
+         * [analyzeKick]) still wakes it EARLY the moment the user opens NOOP — so halving its cadence only
+         * delays the idle refresh of Today's live Effort/steps (recovery/sleep are night-computed and
+         * unaffected), never a real data update. Android-only tuning; the Swift AppModel loop is a parity
+         * follow-up.
+         */
+        const val ANALYZE_INTERVAL_MS = 30 * 60 * 1_000L
         /** Daily re-arm cadence for the single-instant strap firmware alarm (secondary buzz cue). */
         const val STRAP_ALARM_REARM_INTERVAL_MS = 24 * 60 * 60 * 1_000L
         /** SharedPreferences key for the persisted double-tap action (stored as the enum NAME). */

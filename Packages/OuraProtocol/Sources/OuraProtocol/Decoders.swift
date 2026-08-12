@@ -80,7 +80,12 @@ public enum OuraDecoders {
     /// byte-scatter layout, cross-checked against the same capture, yields a coherent ~60 bpm train
     /// (10% jump rate) that tracks the night's sleep stages and its day/night dip. Validated against
     /// the `open_oura` decompiled `parse_api_ibi_and_amplitude_event`.
-    public static func decodeIBIAmplitude(_ rec: OuraRecord) -> [OuraIBI]? {
+    /// - Parameter channel: which tag's record this is. 0x60 and 0x44 share this layout byte for byte,
+    ///   so they share the decoder — but they are different tags on the wire, and the caller states
+    ///   which one it routed here so the beat carries its true origin (#1071 follow-up). Defaults to
+    ///   0x60's channel, which is what every existing call site means.
+    public static func decodeIBIAmplitude(_ rec: OuraRecord,
+                                          channel: OuraIBIChannel = .ibiAmplitude) -> [OuraIBI]? {
         let b = rec.payload
         guard b.count >= 14 else { return nil }   // fixed 14-byte packet (body bytes 6..19)
         let b12 = Int(b[12]), b13 = Int(b[13])
@@ -98,7 +103,8 @@ public enum OuraDecoders {
         for k in 0..<6 {
             guard ibi[k] > 0 else { continue }                 // drop a zero IBI, never invent one
             let amp = (Int(b[6 + k]) >> 1) << shift            // 7-bit mantissa << exponent
-            out.append(OuraIBI(ringTimestamp: rec.ringTimestamp, ibiMs: ibi[k], amplitude: amp))
+            out.append(OuraIBI(ringTimestamp: rec.ringTimestamp, ibiMs: ibi[k], amplitude: amp,
+                               channel: channel))
         }
         return out.isEmpty ? nil : out
     }
@@ -165,7 +171,8 @@ public enum OuraDecoders {
             let ibi = (Int(b[i + 1]) & 0x07) | (Int(b[i]) << 3)   // high byte first
             let quality = (Int(b[i + 1]) >> 3) & 0x03
             if quality == 1 && ibi >= 300 && ibi <= 2000 {
-                out.append(OuraIBI(ringTimestamp: rec.ringTimestamp, ibiMs: ibi))
+                out.append(OuraIBI(ringTimestamp: rec.ringTimestamp, ibiMs: ibi,
+                                   channel: .greenQuality))
             }
             i += 2
             sampleCount += 1
@@ -192,7 +199,7 @@ public enum OuraDecoders {
         while idx >= 1 {
             let ibi = Int(b[idx]) * 8                  // 8-bit count x8 -> ms
             if ibi > 0 {
-                out.append(OuraIBI(ringTimestamp: rec.ringTimestamp, ibiMs: ibi))
+                out.append(OuraIBI(ringTimestamp: rec.ringTimestamp, ibiMs: ibi, channel: .spo2Ibi))
             }
             idx -= 1
         }
@@ -201,20 +208,44 @@ public enum OuraDecoders {
 
     // MARK: - HRV / RMSSD (0x5D; s6.9)
 
-    /// Decode the 0x5D hrv_event: samples each carrying a time_ms field + two int8 fields (b1, b2).
-    /// Per OURA_PROTOCOL.md s6.9 the per-sample stride is time(2 LE) + b1(1) + b2(1) = 4 bytes.
-    /// Returns nil on a short body. NOOP consumes this as the ring's OWN RMSSD-derived HRV tag.
+    /// Decode the 0x5D hrv_event: a run of `(u8 avg HR bpm, u8 avg RMSSD ms)` pairs, ONE per 5-min bucket
+    /// (per open_oura `decode_hrv` / OURA_PROTOCOL.md s6.9). The previous layout read a 4-byte
+    /// `(u16 time, int8, int8)` stride — a mis-framing: it garbled the first (hr,rmssd) byte-pair into a
+    /// bogus `time_ms`, sign-flipped the RMSSD byte, and only its `b1` accidentally landed on a real HR
+    /// byte. Both bytes are UNSIGNED (no scaling). Returns nil on an empty or ODD-length body (a partial
+    /// pair is never emitted). Validated against a real overnight: the hr byte tracks sleeping HR (~52 bpm,
+    /// matching the #511 IBI-derived median).
+    ///
+    /// PADDING (#1128): a record that closes early pads its tail with a `00 00` pair, and that is NOT a
+    /// reading — a stored `hr_bpm: 0` is a value the ring never asserted, indistinguishable downstream
+    /// from a measurement. Observed on a real overnight: 2 of 22 records were partial, both padded, and
+    /// both zero pairs persisted into the 5-min series beside 110 genuine buckets running 45-64 bpm.
+    /// They are skipped here, at decode, so an absent bucket stays absent instead of becoming a zero one.
+    ///
+    /// The test is BOTH bytes zero — the exact padding signature — not `hrBpm == 0` alone. A lone zero HR
+    /// beside a non-zero RMSSD has never been observed, and if it ever occurs it is a DIFFERENT fault (a
+    /// real record with a bad byte) that should stay visible rather than be silently swallowed by a
+    /// padding rule. Narrower is the honest choice while one night is all the evidence there is.
+    ///
+    /// `index` advances for EVERY pair, including a skipped one, because it is not a label: the consumer
+    /// derives the bucket's wall-clock from it (`OuraStreamMapping`, `bucketTs = ts - index * 300`).
+    /// Renumbering the survivors would slide every later bucket 5 minutes. That is invisible for TAIL
+    /// padding — the only shape observed — which is exactly why it is pinned by test instead of by luck.
     public static func decodeHRV(_ rec: OuraRecord) -> [OuraHRV]? {
         let b = rec.payload
-        guard b.count >= 4 else { return nil }
+        guard b.count >= 2, b.count % 2 == 0 else { return nil }   // N complete (hr, rmssd) pairs
+        let pairCount = b.count / 2          // BEFORE any padding pair is dropped — see `OuraHRV.count`
         var out: [OuraHRV] = []
         var i = 0
-        while i + 4 <= b.count {
-            let timeMs = u16le(b, i)
-            let v1 = Int(Int8(bitPattern: b[i + 2]))
-            let v2 = Int(Int8(bitPattern: b[i + 3]))
-            out.append(OuraHRV(ringTimestamp: rec.ringTimestamp, timeMs: timeMs, b1: v1, b2: v2))
-            i += 4
+        var index = 0
+        while i + 2 <= b.count {
+            let hr = Int(b[i]), rmssd = Int(b[i + 1])
+            if !(hr == 0 && rmssd == 0) {
+                out.append(OuraHRV(ringTimestamp: rec.ringTimestamp, index: index,
+                                   hrBpm: hr, rmssdMs: rmssd, count: pairCount))
+            }
+            i += 2
+            index += 1
         }
         return out.isEmpty ? nil : out
     }
@@ -224,6 +255,18 @@ public enum OuraDecoders {
     /// Decode the 0x6F spo2_event: byte6 bits [7:4]=SpO2 base/status field, [3:0]=status flag; then one
     /// uint8 SpO2 value per second from byte7 onward (optional 0xFF terminator). Per OURA_PROTOCOL.md
     /// s6.5. Returns nil on a short body.
+    ///
+    /// UNIT TAG: these samples carry the default `unit: "raw"`, which is a legacy CHANNEL label, not a
+    /// claim about the quantity — 0x6F is a firmware-computed PERCENTAGE (s6.5, corroborated by
+    /// open_oura), unlike 0x77 which really is a raw DC channel and tags itself `"dc_raw"`. The string
+    /// is deliberately left alone: it is a persisted column (`Database.swift` spo2 `unit`), no consumer
+    /// branches on it (only the CLI dump and one log line read it), and rewriting it would split stored
+    /// history across two spellings of the same channel for a cosmetic gain. Kotlin matches exactly.
+    ///
+    /// s6.5 also records an OPEN ISSUE: ~47% of decoded 0x6F samples exceed 100%, which no ground truth
+    /// yet explains, so no offset is applied here — a guessed calibration would be worse than the gap.
+    /// These land in the RAW channel (`SpO2Sample.red`), never in `spo2Pct`, so an impossible value is
+    /// not surfaced as a Blood Oxygen reading.
     public static func decodeSpO2PerSample(_ rec: OuraRecord) -> [OuraSpO2]? {
         let b = rec.payload
         guard b.count >= 2 else { return nil }
@@ -235,10 +278,24 @@ public enum OuraDecoders {
         while i < b.count {
             let raw = Int(b[i])
             if raw == 0xFF { break }                  // terminator
-            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: raw))
+            // The samples are one PER SECOND, so each carries its position in the record: `ringTimestamp`
+            // stays the record's anchor and the consumer spreads them over their own seconds. Without the
+            // position the offset is unrecoverable downstream and 12 of every 13 samples collide away on
+            // the `(deviceId, ts)` primary key (#1070).
+            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: raw, index: out.count))
             i += 1
         }
-        return out.isEmpty ? nil : out
+        return out.isEmpty ? nil : stampSampleCount(out)
+    }
+
+    /// Fill in `count` (the number of samples the record yielded) on every sample of one record. The
+    /// total is only known once the body has been walked, so the decoders stamp `index` inline and the
+    /// count in one pass at the end.
+    private static func stampSampleCount(_ samples: [OuraSpO2]) -> [OuraSpO2] {
+        let n = samples.count
+        return samples.map {
+            OuraSpO2(ringTimestamp: $0.ringTimestamp, value: $0.value, unit: $0.unit, index: $0.index, count: n)
+        }
     }
 
     // MARK: - SpO2 stable, BIG-endian (0x7B; s6.6)
@@ -272,16 +329,18 @@ public enum OuraDecoders {
         }
         var out: [OuraSpO2] = []
         if hasBase {
-            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: acc, unit: "dc_raw"))
+            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: acc, unit: "dc_raw", index: 0))
         }
         while i < b.count {
             let v = Int(Int8(bitPattern: b[i]))
             let mag = abs(v) << scale
             acc += (v < 0) ? -mag : mag
-            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: acc, unit: "dc_raw"))
+            // Same per-sample position as 0x6F (see #1070): this record is multi-sample too, and its
+            // samples reach the same `(deviceId, ts)`-keyed table, so they collide the same way.
+            out.append(OuraSpO2(ringTimestamp: rec.ringTimestamp, value: acc, unit: "dc_raw", index: out.count))
             i += 1
         }
-        return out.isEmpty ? nil : out
+        return out.isEmpty ? nil : stampSampleCount(out)
     }
 
     // MARK: - Temperature (0x46 / 0x69 / 0x75; s6.8)
@@ -417,6 +476,18 @@ public enum OuraDecoders {
         let b = rec.payload
         // body[0] is the header (spec offset 6); phase codes begin at body[1].
         guard b.count >= 2 else { return nil }
+        // #1246: a whole record of `0xFF` is an UNWRITTEN (erased-flash) hypnogram page, not sleep — the
+        // ring serves pages of it for a stretch it never classified (confirmed on-device: SpO2/R-R go dark
+        // in the SAME window). The 2-bit unpack would read each `0xFF` as `11 11 11 11` = four `awake`,
+        // manufacturing hours of fake wake (one night: 320 of 334 "awake" min were padding → 36 %
+        // efficiency). Detect it at the RECORD level (unambiguous; a byte-level filter would eat the four
+        // genuine `awake` epochs that also encode as `0xFF`) and flag the epochs `unwritten` so the
+        // assembler drops them as a GAP while they still hold their place in the time axis.
+        // Require ≥2 code bytes so a LONE 0xFF byte — four genuine `awake` epochs, which also encode as
+        // 0xFF (the reporter's explicit caution) — is never mistaken for an erased page. Observed erased
+        // pages are whole ~13-byte records; a single byte is real wake.
+        let codeBytes = b.dropFirst()
+        let unwritten = codeBytes.count >= 2 && codeBytes.allSatisfy { $0 == 0xFF }
         var out: [OuraSleepPhase] = []
         var index = 0
         for k in 1..<b.count {
@@ -425,7 +496,8 @@ public enum OuraDecoders {
             for shift in stride(from: 6, through: 0, by: -2) {
                 let code = Int((byte >> UInt8(shift)) & 0x03)
                 if let stage = OuraSleepStage(rawValue: code) {
-                    out.append(OuraSleepPhase(ringTimestamp: rec.ringTimestamp, index: index, stage: stage))
+                    out.append(OuraSleepPhase(ringTimestamp: rec.ringTimestamp, index: index,
+                                              stage: stage, unwritten: unwritten))
                     index += 1
                 }
             }

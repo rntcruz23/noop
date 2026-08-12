@@ -255,6 +255,22 @@ struct CoachView: View {
                             .foregroundStyle(StrandPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Key header").strandOverline()
+                        Picker("Key header", selection: $coach.customAuthHeader) {
+                            ForEach(CustomAIAuthHeader.allCases) { header in
+                                Text(header.displayName).tag(header)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .accessibilityLabel("Key header")
+                        Text("Use Bearer for most local servers; use x-api-key for gateways that require the key in that header.")
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
 
                 // Model
@@ -570,7 +586,7 @@ struct CoachView: View {
             .accessibilityLabel("Send")
         }
         .padding(8)
-        .background(StrandPalette.surfaceOverlay, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(NoopPanelSurface(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
             .strokeBorder(StrandPalette.hairline, lineWidth: 1))
     }

@@ -87,12 +87,46 @@ enum class HrvWindow(val raw: String) {
     /** RMSSD averaged over every 5-min window of the night (NOOP's long-standing value). */
     WHOLE_NIGHT("whole"),
 
-    /** RMSSD over DEEP (slow-wave) sleep windows only — comparable to WHOOP's reading. */
+    /**
+     * RMSSD over DEEP (slow-wave) sleep windows only — the window WHOOP samples.
+     *
+     * "Comparable to WHOOP" describes the METHOD, not the accuracy of the resulting number: the deep
+     * windows come from NOOP's own stager, not the strap. `Tools/SleepPSG` scores that stager against
+     * PSG truth over 31 subjects / 26 773 epochs and measures deep at 18.94 % predicted vs 13.76 %
+     * truth — a +5.18 pp bias, roughly 38 % more deep epochs than exist, at four-class kappa 0.356.
+     * An over-inclusive deep window pulls this value back toward the whole-night mean, which is the
+     * one thing the setting exists not to be.
+     *
+     * So this stays opt-in and WHOLE_NIGHT stays the default. #1008 tracks moving it, gated on that
+     * bias coming down; re-run the benchmark before changing the default rather than assuming it has.
+     */
     DEEP_SLEEP("deep");
 
     companion object {
         /** An unset/unknown value resolves to the historical whole-night window. */
         fun fromRaw(raw: String?): HrvWindow = entries.firstOrNull { it.raw == raw } ?: WHOLE_NIGHT
+    }
+}
+
+/**
+ * How the Sleep tab draws the night's stage timeline (#sleep-chart-style). Display-only — no metric or
+ * stored value changes; it only picks which chart renders. Default [CLASSIC] so nobody's view changes
+ * unless they opt in.
+ */
+enum class SleepChartStyle(val raw: String) {
+    /** The long-standing per-stage-rows timeline (Awake/Light/Deep/REM each on their own track). */
+    CLASSIC("classic"),
+
+    /** A single stepped hypnogram with the stages stacked by depth and each column FILLED to the
+     *  baseline, WHOOP-style — needs the night's real timestamped segments, else falls back to CLASSIC. */
+    FILLED("filled"),
+
+    /** The same single stepped chart but drawn as a slim RIBBON (a uniform band at each stage level, not
+     *  filled to the baseline) — the WHOOP-style stepped line, which reads cleaner on a fragmented night. */
+    RIBBON("ribbon");
+
+    companion object {
+        fun fromRaw(raw: String?): SleepChartStyle = entries.firstOrNull { it.raw == raw } ?: CLASSIC
     }
 }
 
@@ -153,6 +187,18 @@ object UnitPrefs {
     fun setHrvWindow(context: Context, window: HrvWindow) {
         NoopPrefs.of(context).edit().putString(KEY_HRV_WINDOW, window.raw).apply()
     }
+
+    /** SharedPreferences key for the Sleep tab's stage-chart style (#sleep-chart-style). */
+    const val KEY_SLEEP_CHART_STYLE = "sleep.chart.style"
+
+    /** The Sleep stage-chart style (default CLASSIC per-stage rows). Display-only. */
+    fun sleepChartStyle(context: Context): SleepChartStyle =
+        SleepChartStyle.fromRaw(NoopPrefs.of(context).getString(KEY_SLEEP_CHART_STYLE, null))
+
+    /** Persist the Sleep stage-chart style. Display-only — no re-score. */
+    fun setSleepChartStyle(context: Context, style: SleepChartStyle) {
+        NoopPrefs.of(context).edit().putString(KEY_SLEEP_CHART_STYLE, style.raw).apply()
+    }
 }
 
 /**
@@ -197,6 +243,21 @@ object UnitFormatter {
                 "${(meters * 1.09361).roundToInt()} yd"
             }
         }
+    }
+
+    /**
+     * Average pace for display: "m:ss /km" (metric) or "m:ss /mi" (imperial). "—" when pace is undefined
+     * (null or ≤ 0, i.e. no distance yet). [secPerKm] is the seconds-per-kilometre the GPS session
+     * publishes. Byte-identical to the Swift `UnitFormatter.paceFromSecPerKm`. (#1195)
+     */
+    fun paceFromSecPerKm(secPerKm: Double?, system: UnitSystem): String {
+        if (secPerKm == null || secPerKm <= 0) return "—"
+        val (secs, label) = when (system) {
+            UnitSystem.IMPERIAL -> (secPerKm / MILES_PER_KILOMETER) to "/mi"
+            UnitSystem.METRIC -> secPerKm to "/km"
+        }
+        val s = secs.roundToInt()
+        return "${s / 60}:${(s % 60).toString().padStart(2, '0')} $label"
     }
 
     /**

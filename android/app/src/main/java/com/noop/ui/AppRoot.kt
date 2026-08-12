@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.automirrored.filled.Rule
 import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Spa
@@ -64,6 +65,8 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -159,6 +162,8 @@ private enum class Destination(
     // name fits. Route id stays "smart_alarm" (display string only).
     SmartAlarm("smart_alarm", R.string.nav_alarms, Icons.Filled.Alarm),
     Devices("devices", R.string.nav_devices, Icons.Filled.Sensors),
+    // The plain 4.0 vs 5.0/MG capability grid — what NOOP reads live off each strap vs import-only.
+    NoopLimitations("noop_limitations", R.string.nav_noop_limitations, Icons.AutoMirrored.Filled.Rule),
     DataSources("data_sources", R.string.nav_data_sources, Icons.Filled.Storage),
     BackupSync("backup_sync", R.string.nav_backup_sync, Icons.Filled.CloudSync),
     FusedRecord("fused_record", R.string.nav_fused_record, Icons.AutoMirrored.Filled.CompareArrows),
@@ -209,7 +214,7 @@ private val drawerGroups: List<DrawerGroup> = listOf(
     ), defaultExpanded = true),
     DrawerGroup("Data", R.string.more_group_data, listOf(
         Destination.FusedRecord, Destination.AppleHealth, Destination.DataSources,
-        Destination.BackupSync, Destination.Devices,
+        Destination.BackupSync, Destination.Devices, Destination.NoopLimitations,
     ), defaultExpanded = false),
     DrawerGroup("App", R.string.more_group_app, listOf(
         Destination.Automations, Destination.SmartAlarm, Destination.Notifications,
@@ -272,6 +277,9 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val updateStore = remember { UpdateStore.from(context) }
     var showUpdatesInbox by remember { mutableStateOf(false) }
+    // #984: the changelog sheet a What's New inbox row opens. Held here (not inside the inbox) so it
+    // survives the inbox sheet closing — the tap dismisses the inbox and presents this over the app.
+    var showWhatsNewFromInbox by remember { mutableStateOf(false) }
 
     run {
         Scaffold(
@@ -422,6 +430,7 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                     )
                 }
                 composable(Destination.DataSources.route) { DataSourcesScreen(viewModel) }
+                composable(Destination.NoopLimitations.route) { NoopLimitationsScreen() }
                 composable(Destination.BackupSync.route) { BackupSyncScreen() }
                 composable(Destination.Notifications.route) { NotificationsSettingsScreen(viewModel) }
                 composable(Destination.Settings.route) {
@@ -526,13 +535,21 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                     store = updateStore,
                     onClose = { showUpdatesInbox = false },
                     onDeepLink = { key ->
-                        // Map the inbox deep-link key to a route (only known keys route). "trends" is
-                        // the one real poster's target today; unknown keys just close the sheet.
-                        val route = when (key) {
-                            "trends" -> Destination.Trends.route
-                            else -> null
+                        // Map the inbox deep-link key to a route (only known keys route); unknown keys
+                        // just close the sheet.
+                        //
+                        // #984: What's New is NOT a nav destination — it is a full-screen sheet, the same
+                        // one Settings › About opens — so it gets handled here rather than through the
+                        // route table. Before this it fell to `else` and the tap did nothing at all.
+                        if (key == UpdateStore.WHATS_NEW_DEEP_LINK) {
+                            showWhatsNewFromInbox = true
+                        } else {
+                            val route = when (key) {
+                                "trends" -> Destination.Trends.route
+                                else -> null
+                            }
+                            if (route != null && route != currentRoute) nav.navigateTopLevel(route)
                         }
-                        if (route != null && route != currentRoute) nav.navigateTopLevel(route)
                     },
                     onRestore = { cardId ->
                         // Flip the shared dismissed flag back off so the card reappears, and signal a
@@ -541,6 +558,20 @@ fun AppRoot(viewModel: AppViewModel = viewModel()) {
                         updateStore.restoreRequest = cardId
                     },
                 )
+            }
+        }
+
+        // #984: the changelog a What's New inbox row opens. Full-screen Dialog, the same idiom
+        // Settings > About uses for this sheet — What's New is not a nav destination, so it cannot be
+        // reached through the route table the other deep-link keys use.
+        if (showWhatsNewFromInbox) {
+            Dialog(
+                onDismissRequest = { showWhatsNewFromInbox = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = Palette.surfaceBase) {
+                    WhatsNewSheet(onClose = { showWhatsNewFromInbox = false })
+                }
             }
         }
     }
@@ -581,9 +612,9 @@ private fun MoreScreen(onNavigate: (String) -> Unit) {
     ScreenScaffold(
         title = uiString(R.string.l10n_app_root_more_4bab2d8f),
         subtitle = "Everything else, one tap away",
-        topBackground = if (showDayCycleBackground) { { LiquidScreenSky(fillHeight = skyBehindCards) } } else null,
+        topBackground = screenBackdropSlot(showDayCycleBackground, skyBehindCards),
         // Sky-behind-cards fills the viewport so the transparent cards reveal the sky the whole way down.
-        fullBleedBackground = showDayCycleBackground && skyBehindCards,
+        fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
         // Mirror the iOS More page: each group is a tappable UPPERCASE overline header (with a disclosure
         // chevron) over a single grouped white NoopCard whose rows are tight (accent icon + title +

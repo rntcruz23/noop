@@ -48,6 +48,20 @@ public struct DeviceRegistryStore: Sendable {
         }
     }
 
+    /// Permanently remove a device's REGISTRY entry — both the `pairedDevice` row the Devices screen
+    /// lists and its `device` provenance row — so a duplicate/stale strap can be purged entirely
+    /// instead of lingering in the archived "Removed" list forever (issue #1193: today the only
+    /// removal is the soft `archive`, and `deleteAllData` empties recordings but leaves the row). The
+    /// device's recorded SAMPLES are NOT touched here — the caller wipes those first via
+    /// `deleteAllData(deviceId:)` (registry entry vs. recordings are separate ops, exactly as
+    /// `adoptSerialIdentity` treats them). Idempotent: removing an absent id is a no-op.
+    public func remove(_ id: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM pairedDevice WHERE id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM device WHERE id = ?", arguments: [id])
+        }
+    }
+
     public func rename(_ id: String, nickname: String?) throws {
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE pairedDevice SET nickname = ? WHERE id = ?", arguments: [nickname, id])
@@ -107,6 +121,9 @@ public struct DeviceRegistryStore: Sendable {
         // v28-raw-imu (#423): the opt-in 5/MG raw-IMU offload capture is deviceId-keyed too — "delete all
         // of this device's data" must clear it, or the raw inertial samples survive deletion (same defect).
         "rawImuSample",
+        // v31-deep-capture-channels: the banked 5/MG v18 auxiliary fields are deviceId-keyed per-second
+        // rows like every stream above, so a "delete all of this device's data" must clear them too.
+        "v18AuxSample",
     ]
 
     /// Permanently delete every recorded sample/derived row belonging to one device, across all
@@ -209,11 +226,20 @@ public struct DeviceRegistryStore: Sendable {
     }
 
     private static func decode(_ row: Row) -> PairedDevice {
-        let caps = (row["capabilities"] as String).split(separator: ",").compactMap { Metric(rawValue: String($0)) }
-        return PairedDevice(id: row["id"], brand: row["brand"], model: row["model"], nickname: row["nickname"],
+        var caps = Set((row["capabilities"] as String).split(separator: ",").compactMap { Metric(rawValue: String($0)) })
+        // #548: calibrated SpO₂ % is never produced from a live WHOOP path — drop a stale registry bit
+        // so Devices / day-owner UI never advertise a capability AnalyticsEngine will not fill.
+        let brand = row["brand"] as String
+        let id = row["id"] as String
+        if brand.caseInsensitiveCompare("WHOOP") == .orderedSame
+            || id == "my-whoop"
+            || id.hasPrefix("whoop-") {
+            caps = WhoopLiveCapabilities.withoutCalibratedSpo2(caps)
+        }
+        return PairedDevice(id: id, brand: brand, model: row["model"], nickname: row["nickname"],
                             peripheralId: row["peripheralId"],
                             sourceKind: SourceKind(rawValue: row["sourceKind"]) ?? .liveBLE,
-                            capabilities: Set(caps), status: DeviceStatus(rawValue: row["status"]) ?? .paired,
+                            capabilities: caps, status: DeviceStatus(rawValue: row["status"]) ?? .paired,
                             addedAt: row["addedAt"], lastSeenAt: row["lastSeenAt"])
     }
 }

@@ -90,6 +90,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private static let writeChar = CBUUID(string: OuraGatt.writeCharacteristicUUID)
     private static let notifyChar = CBUUID(string: OuraGatt.notifyCharacteristicUUID)
 
+    /// iOS state-restoration identifier for the PERSISTENT Oura central (#1213). DISTINCT from the WHOOP
+    /// central's `BLEManager.restoreID` — each restoring `CBCentralManager` needs its own unique id.
+    private static let restoreID = "com.openwhoop.ble.oura"
+
     /// The `0x25` SetAuthKey-response outer opcode (`25 01 <status>`, status `0x00` = OK). Per
     /// OURA_PROTOCOL.md s3.2. This is the install-ack the adopt key-install awaits.
     private static let setAuthKeyRespOp: UInt8 = 0x25
@@ -268,6 +272,11 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private let activityDump: OuraActivityDump?
     /// Append-only JSONL sidecar for the 0x47 motion vectors (Tier-A), for offline LSB→g calibration (#804).
     private let motionDump: OuraMotionDump?
+    /// Append-only JSONL capture of the RAW, undecoded history-drain notification bytes (`oura-raw-<id>.jsonl`).
+    /// Complement to the decoded sidecars above: those show what NOOP interpreted, this shows exactly what the
+    /// ring sent, so after a full connect a hole in a decoded file can be pinned as a decode drop vs ring-side.
+    /// No dedup (a re-serve is still evidence the ring re-sent it); the offline reframer collapses duplicates.
+    private let rawDump: OuraRawDump?
     /// Cached local-day formatter (the 0x50 stream is high-volume; avoid building one per record).
     private static let activityDayFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f   // local time zone by default
@@ -623,8 +632,16 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         // Reconstruct the time axis; `sleepStart` (the 0x49 onset, or nil) clips leading pre-window codes
         // in the PURE assembler (never emptying the night). Testable there; the app just logs the trim.
         let laid = burst.codesWithTimes(endUnixSeconds: end, sleepStartUnixSeconds: sleepStart)
+        // #1246: an all-unwritten burst (every hypnogram page erased) reconstructs to nothing. Note the
+        // resume cursor so the ring stops re-serving it, but persist no blank/awake session.
+        guard !laid.isEmpty else {
+            log("Oura: hypnogram burst entirely unwritten (0xFF) - \(burst.totalCodes) code(s), no stageable sleep; skipped")
+            noteStoredHistoryRingTime(burst.lastRingTimestamp)
+            return
+        }
         if laid.count < burst.totalCodes {
-            log("Oura: hypnogram start clamped to 0x49 onset - dropped \(burst.totalCodes - laid.count) pre-window code(s)")
+            // Fewer laid than decoded = unwritten (#1246, 0xFF pages) and/or pre-0x49-onset epochs trimmed.
+            log("Oura: hypnogram trimmed \(burst.totalCodes - laid.count) code(s) - unwritten (0xFF) and/or pre-onset")
         }
         for code in laid {
             enqueue([.sleepPhase(code.phase)], ts: code.ts)
@@ -776,9 +793,27 @@ public final class OuraLiveSource: NSObject, ObservableObject {
         self.activityDump = feedsLive && !deviceId.isEmpty ? OuraActivityDump(deviceId: deviceId, log: log) : nil
         // 0x47 motion calibration corpus: same gate as the activity dump (live/persisting source only).
         self.motionDump = feedsLive && !deviceId.isEmpty ? OuraMotionDump(deviceId: deviceId, log: log) : nil
+        // RAW undecoded history-drain capture: same live/persisting gate; complements the decoded sidecars.
+        self.rawDump = feedsLive && !deviceId.isEmpty ? OuraRawDump(deviceId: deviceId, log: log) : nil
         super.init()
         // Dedicated queue-less central -> callbacks arrive on the main queue, matching @MainActor.
+        #if os(iOS)
+        // iOS state restoration (#1213): only the PERSISTENT live source (feedsLive, real deviceId) carries a
+        // restore identifier, so CoreBluetooth relaunches the app into the background and delivers
+        // willRestoreState after a suspend-then-jettison — without it an overnight Oura session dies with the
+        // process and nothing reconnects until the user re-opens the app. The discovery-only wizard scanner
+        // (feedsLive == false, deviceId "scan-preview") must NOT restore, and two centrals may never share one
+        // restore identifier, so it is deliberately excluded. Mirrors the WHOOP central in BLEManager.
+        if feedsLive && !deviceId.isEmpty {
+            self.central = CBCentralManager(delegate: self, queue: nil,
+                                            options: [CBCentralManagerOptionRestoreIdentifierKey: Self.restoreID])
+        } else {
+            self.central = CBCentralManager(delegate: self, queue: nil)
+        }
+        #else
+        // Strand (macOS desktop): no state-restoration identifier (iOS background feature).
         self.central = CBCentralManager(delegate: self, queue: nil)
+        #endif
     }
 
     // MARK: - Scanning
@@ -1057,9 +1092,10 @@ public final class OuraLiveSource: NSObject, ObservableObject {
     private func drainPendingAnchorEvents() {
         guard !pendingAnchorEvents.isEmpty, let driver else { return }
         let now = Int(Date().timeIntervalSince1970)
+        var stamped: [(event: OuraEvent, ts: Int)] = []
         for pending in pendingAnchorEvents {
             if let ts = driver.unixSeconds(forRingTimestamp: pending.ringTimestamp) {
-                enqueue([pending.event], ts: ts)
+                stamped.append((event: pending.event, ts: ts))
                 // A parked IBI can be a LIVE beat that arrived before the anchor (see .ibi in ingest());
                 // it must never advance the resume cursor either, or a live push could skip un-drained
                 // backlog on a force-stopped drain. Only the history-only siblings drive the cursor.
@@ -1067,8 +1103,13 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                     noteStoredHistoryRingTime(pending.ringTimestamp)   // parked history sample placed → advance resume cursor
                 }
             } else {
-                enqueue([pending.event], ts: now)   // honest wall-clock fallback; NEVER advances the cursor
+                stamped.append((event: pending.event, ts: now))   // honest wall-clock fallback; NEVER advances the cursor
             }
+        }
+        // Batched by resolved second, exactly like the live path (#1072): a record's parked beats are
+        // released as ONE insert so `ord` records their emission order instead of restarting at 0 per beat.
+        for batch in OuraStreamMapping.batched(stamped) {
+            enqueue(batch.events, ts: batch.ts)
         }
         pendingAnchorEvents.removeAll()
     }
@@ -1148,6 +1189,24 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 }
             }
         }
+        // #1072 (root cause for #823): a RECORD's beats must reach the store as ONE batch. `StreamStore`'s
+        // `ord` counter is batch-local — a beat's position among the beats sharing its second WITHIN one
+        // insert is the only place emission order still exists — so enqueuing one beat at a time (what the
+        // `.ibi` arm below used to do) restarted the counter on every beat and wrote `ord = 0` on every
+        // row: 575,630 of 575,630 rows in a real database. With `ord` tied the read falls through to
+        // `(rrMs, seq)`, i.e. a second's beats come back sorted by VALUE, which minimises successive
+        // differences by construction and biases RMSSD down (#823). All of one record's beats carry that
+        // record's ring time, so grouping the anchored ones by their resolved `ts` hands the store a
+        // record at a time and `ord` becomes their real emission order. Unanchored beats still park below
+        // and are batched the same way when the 0x42 lands (`drainPendingAnchorEvents`).
+        let anchoredBeats: [(event: OuraEvent, ts: Int)] = events.compactMap { e in
+            guard case .ibi(let ibi) = e,
+                  let ts = driver.unixSeconds(forRingTimestamp: ibi.ringTimestamp) else { return nil }
+            return (event: e, ts: ts)
+        }
+        for batch in OuraStreamMapping.batched(anchoredBeats) {
+            enqueue(batch.events, ts: batch.ts)
+        }
         for e in events {
             switch e {
             case .hr(let hr):
@@ -1180,17 +1239,18 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 // A banked IBI is history data: anchor it to its REAL ring-time, exactly like the sibling
                 // banked streams (.hrv/.temp/.spo2/.sleepPhase) below — never the drain-arrival `now`.
                 // Stamping it at `now` (52b6e88d) misfiled every overnight beat to the daytime sync moment,
-                // so the sleep window ended up with zero R-R -> no restingHr/avgHrv for the night.
-                if let ts = driver.unixSeconds(forRingTimestamp: ibi.ringTimestamp) {
-                    enqueue([e], ts: ts)
-                    // NOTE: unlike the history-only siblings, do NOT noteStoredHistoryRingTime here — IBI is
-                    // the one stream that arrives both LIVE (ring-time ~now) and banked, indistinguishable
-                    // at this call site except by ring-time. Letting a live beat advance the resume cursor
-                    // could leap `maxStoredRingTime` to ~now during a force-stopped drain (300s/stall guard,
-                    // bytes_left > 0) and permanently skip the un-drained backlog. The resume cursor is still
-                    // driven correctly by the history-only siblings (hrv/temp/spo2/sleepPhase) that share the
-                    // same night window; this also matches Kotlin, which notes no stream's ring-time.
-                } else {
+                // so the sleep window ended up with zero R-R -> no restingHr/avgHrv for the night. The
+                // anchored beats were ALREADY enqueued above, as one batch per record (#1072); all this arm
+                // still owns is the live readout and parking the ones no anchor can place yet.
+                //
+                // NOTE: unlike the history-only siblings, an IBI never calls noteStoredHistoryRingTime — it
+                // is the one stream that arrives both LIVE (ring-time ~now) and banked, indistinguishable
+                // at this call site except by ring-time. Letting a live beat advance the resume cursor
+                // could leap `maxStoredRingTime` to ~now during a force-stopped drain (300s/stall guard,
+                // bytes_left > 0) and permanently skip the un-drained backlog. The resume cursor is still
+                // driven correctly by the history-only siblings (hrv/temp/spo2/sleepPhase) that share the
+                // same night window; this also matches Kotlin, which notes no stream's ring-time.
+                if driver.unixSeconds(forRingTimestamp: ibi.ringTimestamp) == nil {
                     pendingAnchorEvents.append((e, ibi.ringTimestamp))
                 }
 
@@ -1377,15 +1437,19 @@ public final class OuraLiveSource: NSObject, ObservableObject {
                 }
 
             case .motionEvent(let m):
-                // 0x47 averaged accel vector (Tier-A). Diagnostic sidecar ONLY for now: decode + store + log
-                // the vector beside the incumbent so the LSB→g scale + cadence can be pinned offline from a
-                // still capture (issue #804). Never persisted to SQLite, never scored — OuraStreamMapping
-                // drops .motionEvent until the scale is calibrated. Anchored records only (deduped by
-                // ring-time inside the writer).
-                if let utc = driver.unixSeconds(forRingTimestamp: m.ringTimestamp) {
-                    motionDump?.record(ringTs: m.ringTimestamp, utc: utc, orientation: m.orientation,
+                // 0x47 averaged accel vector (Tier-A). Persisted as an OURA_MOTION event (same event-table
+                // path as OURA_HRV / OURA_SLEEP_PHASE — see OuraStreamMapping), AND appended to the raw
+                // calibration sidecar. Instrumentation only: never scored, never fed to the sleep stager
+                // (0x47 is movement-gated, a shape mismatch for the gravity-stillness stager, #804). Anchor
+                // per record (its own ring-time) so each window lands on a distinct (deviceId, ts, kind) row.
+                if let ts = driver.unixSeconds(forRingTimestamp: m.ringTimestamp) {
+                    motionDump?.record(ringTs: m.ringTimestamp, utc: ts, orientation: m.orientation,
                                        motionSeconds: m.motionSeconds, x: m.avgX, y: m.avgY, z: m.avgZ,
                                        lowIntensity: m.lowIntensity, highIntensity: m.highIntensity)
+                    enqueue([e], ts: ts)
+                    noteStoredHistoryRingTime(m.ringTimestamp)
+                } else {
+                    pendingAnchorEvents.append((e, m.ringTimestamp))
                 }
 
             default:
@@ -1534,6 +1598,37 @@ public final class OuraLiveSource: NSObject, ObservableObject {
 // MARK: - CBCentralManagerDelegate
 
 extension OuraLiveSource: @preconcurrency CBCentralManagerDelegate {
+    /// iOS relaunched us into the background after a suspend-then-jettison and handed back the Oura central's
+    /// peripheral (#1213). Re-adopt it so an overnight session resumes without the user opening the app. Only
+    /// the persistent live source carries the restore identifier, so only it is ever restored here. Mirrors
+    /// `BLEManager.willRestoreState`; never called on macOS (no restore identifier is set there).
+    public func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
+        guard let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
+              let p = peripherals.first else {
+            log("Oura restore: no peripherals in restore state")
+            return
+        }
+        let id = p.identifier
+        seenPeripherals[id] = p
+        peripheral = p
+        p.delegate = self
+        reconnectID = id                 // an involuntary drop re-targets this ring (#912)
+        intentionalDisconnect = false
+        if p.state == .connected {
+            // The link survived; CoreBluetooth does NOT re-fire didConnect for an already-connected restored
+            // peripheral, so re-run the session bring-up (fresh driver + service discovery) directly.
+            log("Oura restore: peripheral \(id) still connected — resuming session")
+            centralManager(central, didConnect: p)
+        } else if central.state == .poweredOn {
+            log("Oura restore: peripheral \(id) disconnected — reconnecting")
+            central.connect(p, options: nil)
+        } else {
+            // Radio not ready yet; centralManagerDidUpdateState replays pendingConnectID on poweredOn.
+            pendingConnectID = id
+            log("Oura restore: peripheral \(id) disconnected, central not poweredOn — deferring to poweredOn")
+        }
+    }
+
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
@@ -1861,11 +1956,13 @@ extension OuraLiveSource: @preconcurrency CBPeripheralDelegate {
             let tlvBytes = frames.filter { $0.op != OuraFraming.secureSessionOp && $0.op != Self.setAuthKeyRespOp }
                                  .flatMap { [$0.op, UInt8($0.body.count)] + $0.body }
             if !tlvBytes.isEmpty {
+                rawDump?.record(bytes: tlvBytes)
                 ingestHistory(driver.ingest(notification: tlvBytes, reassembler: reassembler))
             }
             return
         }
         // No secure frame in this notification: treat the whole value as TLV record bytes.
+        rawDump?.record(bytes: bytes)
         ingestHistory(driver.ingest(notification: bytes, reassembler: reassembler))
     }
 

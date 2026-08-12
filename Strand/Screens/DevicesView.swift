@@ -3,6 +3,7 @@ import StrandDesign
 import StrandAnalytics   // ConnectionReadout - the #987 clock-latch / RTC-epoch readout parsers
 import WhoopStore
 import OuraProtocol
+import WhoopProtocol   // Whoop5Ecg.WristSelection — the MG ECG wrist-selection step
 
 // MARK: - Devices
 //
@@ -56,6 +57,7 @@ private struct DevicesContent: View {
     @State private var renameDraft = ""
     @State private var removeTarget: PairedDevice?
     @State private var deleteDataTarget: PairedDevice?
+    @State private var forgetTarget: PairedDevice?
     @State private var rebootTarget: PairedDevice?
     /// WHOOP 4.0 reboot probe (Test Centre → Connection, 4.0 only) — the device whose probe sheet is open.
     @State private var probeTarget: PairedDevice?
@@ -63,6 +65,17 @@ private struct DevicesContent: View {
     @State private var batteryProbeTarget: PairedDevice?
     /// #690 body-location probe (Test Centre → Connection) — the device whose confirm dialog is open.
     @State private var bodyLocationProbeTarget: PairedDevice?
+    /// #761 feature-flag enumeration probe (Test Centre → Connection) — the device whose dialog is open.
+    @State private var featureFlagProbeTarget: PairedDevice?
+    /// MG ECG (Labrador) probe — the device whose action dialog is open.
+    @State private var ecgProbeTarget: PairedDevice?
+    /// The SEPARATE wrist-selection confirm. Its own state (and its own dialog) because SELECT_WRIST is a
+    /// persistent strap write and must never ride along inside a start flow.
+    @State private var ecgWristTarget: PairedDevice?
+    /// The Experimental ECG opt-in. Read here so the menu entry appears only once the user has opted in.
+    @AppStorage(PuffinExperiment.ecgKey) private var ecgEnabled = false
+    /// #103 device-config READ probe (Test Centre → Connection) — the device whose dialog is open.
+    @State private var deviceConfigProbeTarget: PairedDevice?
     /// After removing the ACTIVE device with other devices still paired, prompt to pick a new active one.
     @State private var pickNewActive = false
 
@@ -135,7 +148,7 @@ private struct DevicesContent: View {
             Spacer(minLength: 0)
         }
         .padding(NoopMetrics.space3)
-        .background(StrandPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(NoopPanelSurface(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
             .strokeBorder(StrandPalette.statusWarning.opacity(0.5), lineWidth: 1))
         .accessibilityElement(children: .combine)
@@ -150,6 +163,7 @@ private struct DevicesContent: View {
             // with the guide already armed, because nothing on Devices said so. Same state and same string
             // as LiveView's banner; no new copy.
             if let guide = live.reconnectGuide { repairGuideBanner(guide) }
+            DeviceSyncStatusCard()
             // UPPERCASE overline section header, matching the liquid Today. Counts the paired bands so the
             // multi-WHOOP reality reads at a glance.
             sectionHead("YOUR BANDS", trailing: activeDevices.count == 1
@@ -161,6 +175,14 @@ private struct DevicesContent: View {
                 // type-checker over its budget ("unable to type-check this expression in reasonable time").
                 let probeGate = device.status == .active && live.connected
                     && SourceCoordinator.isWhoop(device) && TestCentre.active(.connection)
+                // The ECG probe WRITES to the strap, so it carries two gates the read-only probes don't:
+                // the Experimental opt-in, and a strap that has positively attested itself a WHOOP MG
+                // (a plain 5.0 has no electrodes; `.unknown` is not MG).
+                //
+                // `|| model.ecgMayBeRunning` keeps the entry — and therefore Stop — reachable after the
+                // opt-in has been switched off mid-session. Turning a feature off must not remove the
+                // only control that turns the STRAP off; the MG gate still applies either way.
+                let ecgGate = probeGate && (ecgEnabled || model.ecgMayBeRunning) && model.isWhoop5MG
                 DeviceCard(
                     device: device,
                     isActive: device.status == .active,
@@ -181,9 +203,19 @@ private struct DevicesContent: View {
                     // generic strap, or an FTMS machine all funnel into live.batteryPct). nil otherwise.
                     liveBatteryPct: (device.status == .active && live.connected) ? live.batteryPct.map { Int($0.rounded()) } : nil,
                     liveBatteryMv: (device.status == .active && live.connected) ? live.batteryMv : nil,
-                    // Firmware version belongs to the active + connected strap only; nil otherwise (and
-                    // for a non-WHOOP source that never reports one).
-                    liveFirmware: (device.status == .active && live.connected) ? live.strapFirmware : nil,
+                    // Firmware version for the ACTIVE strap. It's a STABLE property (NOOP can't change a
+                    // strap's firmware), so prefer the live handshake value but fall back to the last-known
+                    // persisted firmware (written on connect in FrameRouter) when the live value is momentarily
+                    // nil — mid-handshake, or a connection that hasn't re-read GET_HELLO/REPORT_VERSION_INFO
+                    // yet this session. Without this the "· FW x" blanks out while actively connected. The
+                    // persisted fallback is WHOOP-only: "noop.lastFirmware" is written solely from a WHOOP
+                    // handshake, so a non-WHOOP active device (Oura) must NOT inherit it. Single last-connected-
+                    // strap key, so a not-yet-connected active strap can briefly show the other strap's build on
+                    // a multi-WHOOP install until it republishes. Twin of Android.
+                    liveFirmware: device.status == .active
+                        ? (live.strapFirmware
+                            ?? (SourceCoordinator.isWhoop(device) ? UserDefaults.standard.string(forKey: "noop.lastFirmware") : nil))
+                        : nil,
                     // Historical record layout (v24/v25 on WHOOP 4.0) observed from this connection's
                     // backfill. Distinct from the strap firmware build shown as FW.
                     liveHistoryLayout: (device.status == .active && live.connected) ? live.strapRange?.firmwareLayout : nil,
@@ -214,7 +246,25 @@ private struct DevicesContent: View {
                     // Same Test Centre → Connection gate as the reboot probe, minus the 4.0-only clause.
                     onExtendedBatteryProbe: probeGate ? { batteryProbeTarget = device } : nil,
                     // #690 body-location probe: read-only, both families. Same Test Centre → Connection gate.
-                    onBodyLocationProbe: probeGate ? { bodyLocationProbeTarget = device } : nil)
+                    onBodyLocationProbe: probeGate ? { bodyLocationProbeTarget = device } : nil,
+                    // #761 feature-flag ENUMERATION probe: read-only (names only, nothing written), both
+                    // families. Same Test Centre → Connection gate.
+                    onFeatureFlagProbe: probeGate ? { featureFlagProbeTarget = device } : nil,
+                    // Stop an offload already in flight. Offered ONLY while one is running on this
+                    // strap — not a Test Centre probe but an ordinary escape hatch, because until now
+                    // a long drain could only be ended by the 15-minute timeout or walking out of
+                    // range. Nothing is lost: unacked records stay on the strap.
+                    onAbortSync: (device.status == .active && live.connected && live.backfilling
+                                  && SourceCoordinator.isWhoop(device))
+                        ? { model.ble.abortBackfill() } : nil,
+                    // MG ECG probe: the Test Centre gate PLUS the Experimental ECG opt-in PLUS a
+                    // positively-identified MG. `ecgGate` is hoisted for the same type-checker reason as
+                    // `probeGate`; BLEManager gates the sends again, so the UI gate is defence in depth,
+                    // never the only thing standing between a 5.0 and an ECG command.
+                    onEcgProbe: ecgGate ? { ecgProbeTarget = device } : nil,
+                    // #103 device-config READ probe: read-only (asks for VALUES, writes none), both
+                    // families. Same Test Centre → Connection gate.
+                    onDeviceConfigProbe: probeGate ? { deviceConfigProbeTarget = device } : nil)
                     .staggeredAppear(index: idx)
             }
 
@@ -320,6 +370,13 @@ private struct DevicesContent: View {
         // iOS Swift type-checker's budget, and inlining a 6th/7th modifier here tips it over ("unable to
         // type-check in reasonable time"). macOS tolerates the inline form; iOS's type-inference is stricter.
         .modifier(BodyLocationProbeSheets(target: $bodyLocationProbeTarget))
+        // #761 feature-flag enumeration probe (confirm + result) — same ViewModifier isolation.
+        .modifier(FeatureFlagProbeSheets(target: $featureFlagProbeTarget))
+        // MG ECG probe (actions + the separate wrist confirm + result), isolated into its own
+        // ViewModifier for the same iOS type-checker reason as the #690 block above.
+        .modifier(EcgProbeSheets(target: $ecgProbeTarget, wristTarget: $ecgWristTarget))
+        // #103 device-config READ probe (confirm + result) — same ViewModifier isolation.
+        .modifier(DeviceConfigProbeSheets(target: $deviceConfigProbeTarget))
         // Second, strongly-worded delete-data confirm (reached from the Remove card's secondary control)
         .alert("Delete all of this device's data?",
                isPresented: Binding(get: { deleteDataTarget != nil },
@@ -342,6 +399,11 @@ private struct DevicesContent: View {
         } message: { device in
             Text("This permanently deletes all data recorded from \(device.displayName). This can't be undone.")
         }
+        // Hard-delete confirm (reached from a REMOVED card's ⋮ menu): purge the registry entry itself,
+        // not just its data — the only way to get a duplicate/stale strap out of the list for good (#1193).
+        // Isolated into its own ViewModifier for the same iOS type-checker-budget reason as the probe
+        // sheets above (the dialog chain is already near the limit; a 6th/7th inline modifier tips it over).
+        .modifier(ForgetDeviceSheet(registry: registry, target: $forgetTarget))
         // After removing the active device, offer to pick a new active one (if any remain).
         .confirmationDialog("Pick a new active strap",
                             isPresented: $pickNewActive,
@@ -379,7 +441,8 @@ private struct DevicesContent: View {
                     onRename: { renameDraft = device.nickname ?? device.displayName; renameTarget = device },
                     onRemove: nil,
                     onReAdd: { registry.setActive(device.id) },
-                    onDeleteData: { deleteDataTarget = device })
+                    onDeleteData: { deleteDataTarget = device },
+                    onForget: { forgetTarget = device })
             }
         }
     }
@@ -431,6 +494,74 @@ private struct DevicesContent: View {
                 pickNewActive = true
             }
         }
+    }
+}
+
+// MARK: - Strap-history sync card
+
+/// The sync status formerly shown as a compact control in the Today header. Devices is the natural home
+/// for this device-level state, and the full card gives the status enough room to read without crowding
+/// Today's primary actions. This remains display-only and resolves through the existing shared state.
+private struct DeviceSyncStatusCard: View {
+    @EnvironmentObject private var live: LiveState
+
+    var body: some View {
+        switch SyncChipState.resolve(live: live) {
+        case .syncing(let chunks):
+            statusCard(
+                systemImage: "arrow.triangle.2.circlepath",
+                detail: chunks > 0
+                    ? String(localized: "Syncing… \(chunks) chunks")
+                    : String(localized: "Syncing…"),
+                tint: StrandPalette.accent,
+                accessibility: String(localized: "Syncing strap history, \(chunks) chunks")
+            )
+        case .synced(let agoText):
+            statusCard(
+                systemImage: "checkmark.circle.fill",
+                detail: String(localized: "Synced \(agoText) ago"),
+                tint: StrandPalette.statusPositive,
+                accessibility: String(localized: "Strap history synced \(agoText) ago")
+            )
+        case .experimentalLive:
+            statusCard(
+                systemImage: "checkmark.circle.fill",
+                detail: String(localized: "Connected; strap history sync is experimental on this strap"),
+                tint: StrandPalette.textSecondary,
+                accessibility: String(localized: "Connected; strap history sync is experimental on this strap")
+            )
+        case .hidden:
+            EmptyView()
+        }
+    }
+
+    private func statusCard(
+        systemImage: String,
+        detail: String,
+        tint: Color,
+        accessibility: String
+    ) -> some View {
+        NoopCard(tint: tint) {
+            HStack(alignment: .center, spacing: NoopMetrics.space3) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: NoopMetrics.space1) {
+                    Text("Strap history")
+                        .font(StrandFont.headline)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                    Text(detail)
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(accessibility))
     }
 }
 
@@ -513,9 +644,21 @@ private struct DeviceCard: View {
     /// #592 extended-battery opcode probe (Test Centre → Connection, both WHOOP families). Read-only.
     var onExtendedBatteryProbe: (() -> Void)? = nil
     var onBodyLocationProbe: (() -> Void)? = nil
-    /// Removed-section affordances (re-add as active / delete its data).
+    /// #761 feature-flag ENUMERATION probe (Test Centre → Connection, both WHOOP families). Read-only:
+    /// it reads the flag NAMES the strap's firmware knows and writes nothing.
+    var onFeatureFlagProbe: (() -> Void)? = nil
+    var onAbortSync: (() -> Void)? = nil
+    /// WHOOP MG ECG (Labrador) probe. Non-nil only for an MG with the Experimental ECG opt-in on.
+    var onEcgProbe: (() -> Void)? = nil
+    /// #103 device-config READ probe (Test Centre → Connection, both WHOOP families). Read-only: it asks
+    /// the strap for a config key's VALUE and writes none.
+    var onDeviceConfigProbe: (() -> Void)? = nil
+    /// Removed-section affordances (re-add as active / delete its data / forget it entirely).
     var onReAdd: (() -> Void)? = nil
     var onDeleteData: (() -> Void)? = nil
+    /// Hard-delete: purge the registry entry itself (and its data), so a duplicate/stale strap can be
+    /// removed from the list for good rather than lingering in "Removed" forever (#1193). Archived-only.
+    var onForget: (() -> Void)? = nil
 
     /// The card's visible content. The required `body` wraps this in the whole-card liquid press button +
     /// the ⋮ menu overlay.
@@ -760,6 +903,13 @@ private struct DeviceCard: View {
                         Label("Delete this device's data…", systemImage: "trash")
                     }
                 }
+                // Purge the registry entry itself — the only way to get a duplicate/stale strap out of
+                // the "Removed" list for good (#1193). Below "Delete data" as the stronger, final action.
+                if let onForget {
+                    Button(role: .destructive) { onForget() } label: {
+                        Label("Forget device…", systemImage: "trash.slash")
+                    }
+                }
             } else {
                 if !isActive && !device.isImportSource {
                     Button { onMakeActive() } label: { Label("Make active", systemImage: "bolt.fill") }
@@ -769,6 +919,11 @@ private struct DeviceCard: View {
                 // BLE link). Confirmation-gated by the parent. (#166)
                 if isLiveConnected, SourceCoordinator.isWhoop(device), let onReboot {
                     Button { onReboot() } label: { Label("Restart strap…", systemImage: "arrow.clockwise") }
+                }
+                // Stop a sync that is part-way through. Present only while this strap is actually
+                // offloading; the parent owns that condition.
+                if let onAbortSync {
+                    Button { onAbortSync() } label: { Label("Stop sync", systemImage: "stop.circle") }
                 }
                 // 4.0 reboot probe (RE): only present when the parent passed a closure (Test Centre →
                 // Connection on + a live WHOOP 4.0). Finds the real reboot frame the 4.0 accepts (#235).
@@ -782,6 +937,22 @@ private struct DeviceCard: View {
                 // #690 body-location opcode probe (RE): read-only, both families. Test Centre → Connection.
                 if let onBodyLocationProbe {
                     Button { onBodyLocationProbe() } label: { Label("Body-location probe (#690 RE)…", systemImage: "ladybug") }
+                }
+                // #761 feature-flag ENUMERATION probe (RE): read-only key-name listing, both families.
+                // Test Centre → Connection.
+                if let onFeatureFlagProbe {
+                    Button { onFeatureFlagProbe() } label: { Label("Feature-flag probe (#761 RE)…", systemImage: "ladybug") }
+                }
+                // WHOOP MG ECG (Labrador) probe: WRITES ECG control commands, so unlike the read-only
+                // probes above the parent only passes a closure when the Experimental ECG opt-in is on
+                // AND the strap has identified itself as an MG.
+                if let onEcgProbe {
+                    Button { onEcgProbe() } label: { Label("ECG capture (MG, experimental)…", systemImage: "waveform.path.ecg") }
+                }
+                // #103 device-config READ probe (RE): read-only VALUE reads, both families.
+                // Test Centre → Connection.
+                if let onDeviceConfigProbe {
+                    Button { onDeviceConfigProbe() } label: { Label("Device-config read probe (#103 RE)…", systemImage: "ladybug") }
                 }
                 if let onRemove {
                     Divider()
@@ -1085,7 +1256,40 @@ private struct ExtendedBatteryProbeResultView: View {
         }
         .padding(20)
         .frame(minWidth: 340, minHeight: 260)
-        .background(StrandPalette.surfaceOverlay)
+        .background(NoopChromeSurface())
+    }
+}
+
+/// The hard-delete ("Forget device") confirm for an archived row (#1193). Isolated into its own
+/// ViewModifier — like the probe sheets below — so this extra dialog doesn't push the DevicesContent
+/// body over the iOS Swift type-checker budget. `registry` is threaded in (it's an `@ObservedObject`
+/// param on `DevicesContent`, not an environment object).
+private struct ForgetDeviceSheet: ViewModifier {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var registry: DeviceRegistry
+    @Binding var target: PairedDevice?
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Forget this device?",
+                   isPresented: Binding(get: { target != nil },
+                                        set: { if !$0 { target = nil } }),
+                   presenting: target) { device in
+                Button("Cancel", role: .cancel) { target = nil }
+                Button("Forget device", role: .destructive) {
+                    // Same off-main routing as delete-data: the sample wipe runs on the WhoopStore actor,
+                    // then the registry row is removed and the list reloads. Resolve the store handle
+                    // inside the Task so the main thread never blocks on it.
+                    let deviceId = device.id
+                    Task {
+                        guard let store = await model.repo.storeHandle() else { return }
+                        await registry.forget(deviceId, store: store)
+                    }
+                    target = nil
+                }
+            } message: { _ in
+                Text("NOOP removes this device from your list and deletes its recorded data here. You can re-pair the strap to pull its recent history back.")
+            }
     }
 }
 
@@ -1154,7 +1358,275 @@ private struct BodyLocationProbeResultView: View {
         }
         .padding(20)
         .frame(minWidth: 340, minHeight: 260)
-        .background(StrandPalette.surfaceOverlay)
+        .background(NoopChromeSurface())
+    }
+}
+
+/// #761: the READ-ONLY feature-flag enumeration probe's confirm + result dialogs, isolated into a
+/// ViewModifier for the same reason `BodyLocationProbeSheets` is — keeping the DevicesView
+/// `.confirmationDialog`/`.sheet` chain inside the iOS Swift type-checker's budget.
+private struct FeatureFlagProbeSheets: ViewModifier {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var live: LiveState
+    @Binding var target: PairedDevice?
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog("Feature-flag probe (#761 RE)",
+                                isPresented: Binding(get: { target != nil },
+                                                     set: { if !$0 { target = nil } }),
+                                titleVisibility: .visible,
+                                presenting: target) { _ in
+                Button("Send probe (read-only)") { model.probeFeatureFlags(); target = nil }
+                Button("Cancel", role: .cancel) { target = nil }
+            } message: { _ in
+                Text("Asks the strap to list the feature-flag NAMES its own firmware knows: START_FF_KEY_EXCHANGE (0x75) then SEND_NEXT_FF (0x76) until the strap says it's done. Read-only — no flag value is written, and the SET commands are never sent from this probe. The list is shown here and written to the strap log.")
+            }
+            .sheet(isPresented: Binding(get: { live.featureFlagProbe != nil },
+                                        set: { if !$0 { model.clearFeatureFlagProbe() } })) {
+                FeatureFlagProbeResultView(
+                    text: live.featureFlagProbe ?? "",
+                    onClose: { model.clearFeatureFlagProbe() })
+            }
+    }
+}
+
+// MARK: - WHOOP MG ECG (Labrador) probe
+
+/// The MG ECG probe's dialogs as one ViewModifier — the action sheet, the SEPARATE wrist confirm, and
+/// the result sheet — isolated for the same iOS type-checker reason as `BodyLocationProbeSheets`.
+///
+/// The wrist selection is deliberately a second, independent confirmation rather than a button inside
+/// the start flow: `SELECT_WRIST` writes strap state that survives a disconnect, and the right/left
+/// mapping is inferred from the client enum's order rather than confirmed on hardware. A persistent
+/// write nobody has verified is exactly the kind of thing that should cost a deliberate extra tap.
+private struct EcgProbeSheets: ViewModifier {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var live: LiveState
+    @Binding var target: PairedDevice?
+    @Binding var wristTarget: PairedDevice?
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog("WHOOP MG ECG capture (experimental)",
+                                isPresented: Binding(get: { target != nil },
+                                                     set: { if !$0 { target = nil } }),
+                                titleVisibility: .visible,
+                                presenting: target) { device in
+                Button("Start ECG capture") { model.ecgStartCapture(); target = nil }
+                Button("Stop ECG capture") { model.ecgStopCapture(); target = nil }
+                Button("Set which wrist you wear it on…") { target = nil; wristTarget = device }
+                Button("Cancel", role: .cancel) { target = nil }
+            } message: { _ in
+                Text("NOOP is not a medical device and this is not an ECG test. It asks your MG to start its ECG subsystem and logs whatever comes back — unvalidated instrumentation for protocol research, never a measurement or a diagnosis, including any heart-rhythm classification the strap happens to send. Don't use it to make a health decision; see a doctor if you have symptoms.\n\nHold the two indents on the clasp with the fingers of your other hand for the whole capture. The MG measures across your wrist AND that clasp, so until you hold it the circuit is open, the strap has nothing to record, and you would see zero packets whatever the firmware did.\n\nNobody has confirmed a strap honours these commands, so the likely outcome is that nothing happens. Everything here is reversible: “Stop” turns the streams back off. Results land in the strap log.")
+            }
+            // Wrist selection: its own step, with its own confirmation and its own warning.
+            //
+            // A SHEET rather than a second confirmationDialog for two reasons: presenting one dialog from
+            // another in the same runloop tick races (the first is still dismissing, and the second can be
+            // dropped), and a dialog's message truncates on iOS — while the persistence warning here is
+            // the whole point of the step and has to be readable in full.
+            .sheet(isPresented: Binding(get: { wristTarget != nil },
+                                        set: { if !$0 { wristTarget = nil } })) {
+                EcgWristSheet(onPick: { wrist in model.ecgSelectWrist(wrist); wristTarget = nil },
+                              onCancel: { wristTarget = nil })
+            }
+            .sheet(isPresented: Binding(get: { live.ecgProbe != nil },
+                                        set: { if !$0 { model.clearEcgProbe() } })) {
+                EcgProbeResultView(text: live.ecgProbe ?? "",
+                                   onClose: { model.clearEcgProbe() })
+            }
+    }
+}
+
+/// The #761 enumeration report (the strap's own flag-name list + the exchange trace), or a "waiting…"
+/// state while the walk runs. Selectable text + a Copy button, structurally identical to the #592/#690
+/// result views. Twin of the Android feature-flag probe result dialog.
+private struct FeatureFlagProbeResultView: View {
+    let text: String
+    let onClose: () -> Void
+    private var waiting: Bool { text == BLEManager.featureFlagProbeWaiting }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Feature-flag probe result (#761)")
+                .font(StrandFont.title2)
+                .foregroundStyle(StrandPalette.textPrimary)
+            if waiting {
+                // Reuses the #592/#690 waiting copy — the walk sends one 118 per reply, so at any moment
+                // it is waiting on exactly one strap reply, and the catalog keeps a single translation.
+                Text("Waiting for the strap's reply…")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textSecondary)
+            } else {
+                ScrollView {
+                    Text(text)
+                        .font(StrandFont.mono)
+                        .foregroundStyle(StrandPalette.textSecondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            HStack {
+                if !waiting {
+                    Button("Copy") { PlatformPasteboard.copy(text) }
+                }
+                Spacer()
+                Button("Close") { onClose() }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 340, minHeight: 260)
+        .background(NoopChromeSurface())
+    }
+}
+
+/// The wrist-selection step: the one ECG command that writes strap state outliving the session, so it
+/// gets its own screen, its own warning, and its own confirmation rather than a button inside the start
+/// flow. The copy names both caveats plainly — that the value persists on the strap, and that the
+/// left/right mapping is read off the order in WHOOP's own app rather than verified on hardware.
+private struct EcgWristSheet: View {
+    let onPick: (Whoop5Ecg.WristSelection) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Which wrist do you wear it on?")
+                .font(StrandFont.title2)
+                .foregroundStyle(StrandPalette.textPrimary)
+            Text("This one is different from the other ECG controls: it is a setting written to the strap, and it stays there after you disconnect until you change it again.")
+                .font(StrandFont.subhead)
+                .foregroundStyle(StrandPalette.statusWarning)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("It is also not fully confirmed. Which value means “left” and which means “right” is read off the order they appear in WHOOP's own app, not verified on a strap — so it may set the opposite wrist. You can send it again with the other choice at any time, and it changes nothing about your recorded data.")
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: NoopMetrics.space3) {
+                Button("Left wrist") { onPick(.left) }
+                Button("Right wrist") { onPick(.right) }
+                Spacer()
+                Button("Cancel", role: .cancel) { onCancel() }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 340, minHeight: 220)
+        .background(NoopChromeSurface())
+    }
+}
+
+/// The MG ECG probe's report (verdict + per-command outcomes + candidate packet lines), or a "waiting…"
+/// state while the listen window is open. Read-only, selectable, copyable — structurally identical to
+/// `BodyLocationProbeResultView`, with the non-medical framing pinned above the text so it is read first.
+private struct EcgProbeResultView: View {
+    let text: String
+    let onClose: () -> Void
+    private var waiting: Bool { text == BLEManager.ecgProbeWaiting }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("ECG capture probe result")
+                .font(StrandFont.title2)
+                .foregroundStyle(StrandPalette.textPrimary)
+            Text("Unvalidated instrumentation, not a medical measurement and not a diagnosis.")
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.statusWarning)
+                .fixedSize(horizontal: false, vertical: true)
+            if waiting {
+                Text("Listening for the strap's reply…")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textSecondary)
+            } else {
+                ScrollView {
+                    Text(text)
+                        .font(StrandFont.mono)
+                        .foregroundStyle(StrandPalette.textSecondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            HStack {
+                if !waiting {
+                    Button("Copy") { PlatformPasteboard.copy(text) }
+                }
+                Spacer()
+                Button("Close") { onClose() }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 340, minHeight: 260)
+        .background(NoopChromeSurface())
+    }
+}
+
+/// #103: the READ-ONLY device-config read probe's confirm + result dialogs, isolated into a
+/// ViewModifier for the same reason `FeatureFlagProbeSheets` is — keeping the DevicesView
+/// `.confirmationDialog`/`.sheet` chain inside the iOS Swift type-checker's budget.
+private struct DeviceConfigProbeSheets: ViewModifier {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var live: LiveState
+    @Binding var target: PairedDevice?
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog("Device-config read probe (#103 RE)",
+                                isPresented: Binding(get: { target != nil },
+                                                     set: { if !$0 { target = nil } }),
+                                titleVisibility: .visible,
+                                presenting: target) { _ in
+                Button("Send probe (read-only)") { model.probeDeviceConfigValues(); target = nil }
+                Button("Cancel", role: .cancel) { target = nil }
+            } message: { _ in
+                Text("Asks the strap for config VALUES: GET_DEVICE_CONFIG_VALUE (0x79) and GET_FF_VALUE (0x80), one key per round-trip. Both commands may simply not exist in this firmware — finding that out is the point. Read-only — no value is written, and the SET commands are never sent from this probe. The result is shown here and written to the strap log.")
+            }
+            .sheet(isPresented: Binding(get: { live.deviceConfigProbe != nil },
+                                        set: { if !$0 { model.clearDeviceConfigProbe() } })) {
+                DeviceConfigProbeResultView(
+                    text: live.deviceConfigProbe ?? "",
+                    onClose: { model.clearDeviceConfigProbe() })
+            }
+    }
+}
+
+/// The #103 read report (per-verb verdict, the values read, the exchange transcript), or a "waiting…"
+/// state while the plan runs. Selectable text + a Copy button, structurally identical to the #592/#690/
+/// #761 result views. Twin of the Android device-config probe result dialog.
+private struct DeviceConfigProbeResultView: View {
+    let text: String
+    let onClose: () -> Void
+    private var waiting: Bool { text == BLEManager.deviceConfigProbeWaiting }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Device-config read probe result (#103)")
+                .font(StrandFont.title2)
+                .foregroundStyle(StrandPalette.textPrimary)
+            if waiting {
+                // Reuses the #592/#690/#761 waiting copy — the plan sends one read per reply, so at any
+                // moment it is waiting on exactly one strap reply, and the catalog keeps one translation.
+                Text("Waiting for the strap's reply…")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textSecondary)
+            } else {
+                ScrollView {
+                    Text(text)
+                        .font(StrandFont.mono)
+                        .foregroundStyle(StrandPalette.textSecondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            HStack {
+                if !waiting {
+                    Button("Copy") { PlatformPasteboard.copy(text) }
+                }
+                Spacer()
+                Button("Close") { onClose() }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 340, minHeight: 260)
+        .background(NoopChromeSurface())
     }
 }
 
@@ -1185,7 +1657,7 @@ struct DeviceCardCatalog: View {
     static func oura(_ model: String, status: DeviceStatus = .paired) -> PairedDevice {
         PairedDevice(id: "oura-demo-\(model)", brand: "Oura", model: model, nickname: nil,
                      peripheralId: "00000000-0000-0000-0000-0000000000aa", sourceKind: .oura,
-                     capabilities: [.hr, .hrv, .spo2, .skinTemp, .sleep],
+                     capabilities: WhoopLiveCapabilities.metrics(forModel: "4.0"),
                      status: status, addedAt: 0, lastSeenAt: 0)
     }
 
@@ -1261,7 +1733,7 @@ struct BondRefusedDemoScreen: View {
                        topBackground: liquidScaffoldSky()) {
             DeviceCard(device: PairedDevice(id: "whoop-5-refused-solo", brand: "WHOOP", model: "5.0 MG",
                                             nickname: nil, peripheralId: nil, sourceKind: .liveBLE,
-                                            capabilities: [.hr, .hrv, .spo2, .skinTemp, .sleep, .strainLoad, .steps],
+                                            capabilities: WhoopLiveCapabilities.metrics(forModel: "5.0 MG"),
                                             status: .active, addedAt: 0, lastSeenAt: 0),
                        isActive: true, isLiveConnected: true, bondRefused: true,
                        pairingHint: "NOOP can see your strap but it's refusing to pair - it's likely still bonded to the official WHOOP app, or your phone is holding an old pairing. To fix it: (1) fully close the WHOOP app, (2) on a 5.0/MG, tap the band repeatedly until the LEDs flash blue (pairing mode), (3) if your strap is listed under iPhone Settings → Bluetooth, tap it and choose Forget This Device, then reconnect in NOOP.",

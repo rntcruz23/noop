@@ -15,6 +15,11 @@ import WhoopStore
 ///     latest night). Used by the interactive "Save…/Share log" buttons, which hold `model.repo`.
 enum DebugDataDiagnostics {
 
+    /// Aux rows read for one night's SpO₂-candidate line (#112). Explicit rather than the store default
+    /// so the Kotlin twin can state the SAME number — a night is ~30k rows at 1 Hz, so this is slack.
+    static let spo2CandidateAuxLimit = 200_000
+
+
     /// Strap identity + timezone from persisted defaults (sync, offline-safe). Mirrors the prefs-backed
     /// portion of the Android strap-state block; keys match the iOS @AppStorage / persisted values.
     static func strapStateLines() -> [String] {
@@ -110,7 +115,20 @@ enum DebugDataDiagnostics {
         // Pick the MOST RECENT night that actually carries skin-temp — not the OLDEST in the window. The old
         // `sleepSessions(…, limit: 1).last` returned the oldest session (ASC order), so a fresh gap night read
         // "skin=0" and the funnel never saw a real night. Walk newest→oldest and stop at the first with skin.
-        let recent = await repo.sleepSessions(from: nowSec - 14 * 86400, to: nowSec, limit: 200)
+        var recent = await repo.sleepSessions(from: nowSec - 14 * 86400, to: nowSec, limit: 200)
+        if recent.isEmpty {
+            // #1150: a Bluetooth-only strap (no WHOOP/Apple import) banks every night under the COMPUTED
+            // "-noop" source, so the imported union above is empty and the funnel reported "no session in
+            // 14 days" for a 4.0 user whose nights are all computed — even though computed session rows
+            // exist. Fall back to the computed sessions so a real night is analysed. Only on an empty
+            // imported read ⇒ a mixed/imported install's funnel is byte-unchanged. Mirrors Android funnelLines.
+            recent = await repo.computedSleepSessions(from: nowSec - 14 * 86400, to: nowSec, limit: 200)
+        }
+        // `.last`/`.reversed()` below assume ASC-by-onset order. The imported union concatenates per-id
+        // blocks and is NOT globally sorted for a multi-id (re-added strap + canonical) install, so sort
+        // here — else `.last` can pick a non-newest night, and the pick would diverge from Android, which
+        // sorts explicitly. A single-source read is already ASC, so this is a no-op there.
+        recent.sort { $0.startTs < $1.startTs }
         guard let newest = recent.last else {
             lines.append("(no sleep session in the last 14 days to analyze)")
             return lines
@@ -145,6 +163,31 @@ enum DebugDataDiagnostics {
         let devAnchor = family == .whoop4 ? Whoop4SkinTemp.deviceAnchorRaw(windowSkin.map { $0.raw }) : nil
         lines.append(AnalyticsEngine.skinTempFunnel([det], hr: hr, skinTemp: skin,
                                                     family: family, anchorRaw: devAnchor).summary)
+
+        // #112/#103 — the 5/MG SpO2 CANDIDATE (@82), as one number a wearer can check against the figure
+        // the WHOOP app reports for the same night. The candidate cannot be promoted while two straps
+        // disagree about it, and the only way to read it until now was to scroll the Deep Timeline and
+        // eyeball it — which is not an instrument to hand a volunteer. Diagnostic only: nothing scores
+        // this, and it is NOT a blood-oxygen reading. Absent on a WHOOP 4.0, which carries raw red/IR ADC
+        // and no candidate at all — said explicitly so a 4.0 owner is not left wondering.
+        //
+        // The read is NOT collapsed to `?? []`. A failed read and a night with no candidate are different
+        // facts, and this is a diagnostic — printing "no in-band readings" because the query threw would
+        // be a confident false statement in the one place whose whole job is to say what is actually
+        // there. Same distinction as the imported-water and caffeine read gates (#949).
+        let auxRead = try? await store.v18AuxSamples(deviceId: did, from: cs.startTs, to: cs.endTs,
+                                                     limit: spo2CandidateAuxLimit)
+        if auxRead == nil {
+            lines.append("SpO₂ candidate @82: could not read the aux stream for this night — "
+                         + "a read failure, NOT an absence of readings.")
+        } else if let cand = AnalyticsEngine.nightlySpo2CandidateMean([det], aux: auxRead ?? []) {
+            lines.append("SpO₂ candidate @82 (5/MG): mean \(cand.mean) over \(cand.samples) in-band readings "
+                         + "— UNVERIFIED, compare against the WHOOP app's figure for this night (#103).")
+        } else if family == .whoop5 {
+            lines.append("SpO₂ candidate @82 (5/MG): no in-band readings inside this night's span.")
+        } else {
+            lines.append("SpO₂ candidate @82: not carried by a WHOOP 4.0 (raw red/IR ADC only).")
+        }
         return lines
     }
 

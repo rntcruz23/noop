@@ -7,6 +7,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * Pins the Sleep screen's prefer-imported logic: where the WHOOP export carried a figure
@@ -57,7 +59,7 @@ class SleepImportedFiguresTest {
         val m = buildSleepModel(days, session = null, imported = imported)!!
         assertEquals(RestScorer.restFromDaily(days[1])!!, m.performance.latest!!, 1e-9)
         // …and it is NOT the retired asleep/need approximation.
-        assertNotEquals(410.0 / 450.0 * 100.0, m.performance.latest!!, 1e-6)
+        assertNotEquals(410.0 / 450.0 * 100.0, m.performance.latest, 1e-6)
         // …and the imported day still carries the verbatim figure inside the series.
         assertEquals(85.0, m.performance.series.first(), 1e-9)
     }
@@ -82,7 +84,7 @@ class SleepImportedFiguresTest {
         val composite = RestScorer.restFromDaily(night)!!
         assertEquals(composite, m.performance.latest!!, 1e-9)
         assertTrue("composite should be below the 100% proxy ceiling", composite < 100.0)
-        assertNotEquals(100.0, m.performance.latest!!, 1e-6)
+        assertNotEquals(100.0, m.performance.latest, 1e-6)
     }
 
     @Test
@@ -127,7 +129,7 @@ class SleepImportedFiguresTest {
         // Debt tile reads ASLEEP too: max(0, 450 − 410) = 40, never max(0, 450 − 600) = 0.
         assertEquals(40.0, m.sleepDebt.latest!!, 1e-9)
         // The debt TILE and the LEDGER agree (both asleep over the full history) — the #5 symptom.
-        assertEquals(m.sleepDebt.latest!!, -m.sleepDebtLedger.nights.last().deltaMin, 1e-9)
+        assertEquals(m.sleepDebt.latest, -m.sleepDebtLedger.nights.last().deltaMin, 1e-9)
     }
 
     /** A passed session must give the SAME tiles/ledger as no session — there is no display-time
@@ -145,6 +147,60 @@ class SleepImportedFiguresTest {
         assertEquals(noSession.sleepDebt, withSession.sleepDebt)
         assertEquals(noSession.sleepDebtLedger, withSession.sleepDebtLedger)
         assertEquals(noSession.typicalTotalMin, withSession.typicalTotalMin)
+    }
+
+    /** A detected nap repays debt on every local fallback surface without changing the canonical
+     *  main-night total used by Hours vs Needed. Mirrors StrandTests/SleepNapDebtTests.swift. */
+    @Test
+    fun napSleepRepaysDebtWithoutChangingMainNightMetrics() {
+        val zone = ZoneId.systemDefault()
+        val nightStart = LocalDate.of(2026, 6, 2).atStartOfDay(zone).toEpochSecond()
+        val napStart = LocalDate.of(2026, 6, 2).atTime(14, 0).atZone(zone).toEpochSecond()
+        val night = SleepSession(
+            deviceId = "my-whoop", startTs = nightStart, endTs = nightStart + 416 * 60,
+            stagesJSON = """{"awake":24,"light":214,"deep":82,"rem":96}""", // 392 asleep
+        )
+        val nap = SleepSession(
+            deviceId = "my-whoop", startTs = napStart, endTs = napStart + 50 * 60,
+            stagesJSON = """{"awake":2,"light":30,"deep":10,"rem":8}""", // 48 asleep
+        )
+        val napCredit = napSleepMinutesByDay(listOf(night, nap))
+        assertEquals(48.0, napCredit["2026-06-02"]!!, 1e-9)
+
+        // Mean main-night sleep is exactly 480 min, so personal need is 480. The latest day is
+        // 392 main + 48 nap = 440 credited: 40 min debt rather than the old 88 min.
+        val m = buildSleepModel(
+            days = listOf(day("2026-06-01", 568.0), day("2026-06-02", 392.0)),
+            session = night,
+            napSleepMinByDay = napCredit,
+        )!!
+        assertEquals(40.0, m.sleepDebt.latest!!, 1e-9)
+        assertEquals(40.0 / 60.0, m.trendDebtHours.last(), 1e-9)
+        assertEquals(440.0, m.sleepDebtLedger.nights.last().sleptMin, 1e-9)
+        assertEquals(-40.0, m.sleepDebtLedger.nights.last().deltaMin, 1e-9)
+        assertEquals(392.0 / 480.0 * 100.0, m.hoursVsNeeded.latest!!, 1e-9)
+    }
+
+    @Test
+    fun bridgedMainNightFragmentsAreNotDoubleCreditedAsNaps() {
+        val zone = ZoneId.systemDefault()
+        val midnight = LocalDate.of(2026, 6, 2).atStartOfDay(zone).toEpochSecond()
+        val first = SleepSession(
+            deviceId = "my-whoop", startTs = midnight - 60 * 60, endTs = midnight + 60 * 60,
+            stagesJSON = """{"awake":10,"light":70,"deep":25,"rem":15}""",
+        )
+        val second = SleepSession(
+            deviceId = "my-whoop", startTs = midnight + 90 * 60, endTs = midnight + 300 * 60,
+            stagesJSON = """{"awake":15,"light":120,"deep":40,"rem":35}""",
+        )
+        val napStart = midnight + 14 * 60 * 60
+        val nap = SleepSession(
+            deviceId = "my-whoop", startTs = napStart, endTs = napStart + 50 * 60,
+            stagesJSON = """{"awake":2,"light":30,"deep":10,"rem":8}""",
+        )
+
+        val credit = napSleepMinutesByDay(listOf(first, second, nap))
+        assertEquals(48.0, credit["2026-06-02"]!!, 1e-9)
     }
 
     /** Browsing a PAST night (selectedDay = an earlier day) leaves the at-a-glance tiles and the

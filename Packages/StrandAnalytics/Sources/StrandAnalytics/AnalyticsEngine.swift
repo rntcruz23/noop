@@ -212,6 +212,37 @@ public enum AnalyticsEngine {
         return String(data: data, encoding: .utf8)
     }
 
+    /// Inverse of `encodeStages`: decode a stored `stagesJSON` back to `[StageSegment]`. Only the on-device
+    /// SEGMENT-ARRAY shape (`[{start,end,stage}]`) decodes; the imported minute-dict shape
+    /// (`{light,deep,rem,awake}`) is not a segment timeline and yields `[]` (key-order-independent). (#804)
+    public static func decodeStages(_ json: String?) -> [StageSegment] {
+        guard let json, let data = json.data(using: .utf8),
+              let stages = try? JSONDecoder().decode([StageSegment].self, from: data) else { return [] }
+        return stages
+    }
+
+    /// Reconstruct the pure `SleepSession` the analyzer stages from a persisted, device-PROVIDED
+    /// `CachedSleepSession` — e.g. an Oura ring's own SleepNet hypnogram (#773), whose `stagesJSON` uses the
+    /// same `deep/light/rem/wake` vocabulary `hypnogramMetrics` reads. Uses the effective (edit-aware) onset,
+    /// preserves the stored efficiency (deriving it from the decoded stage minutes only when the row stored
+    /// none), and passes `restingHR`/`avgHRV` through as stored — nil for a ring night, which `analyzeDay`
+    /// then re-derives from that day's hr/rr over this window. Returns nil when the row has no decodable
+    /// stage timeline, so a non-hypnogram (minute-dict) row is never injected. (#804 Fix A)
+    public static func sleepSession(fromProvided c: CachedSleepSession) -> SleepSession? {
+        let stages = decodeStages(c.stagesJSON)
+        guard !stages.isEmpty else { return nil }
+        let efficiency: Double
+        if let e = c.efficiency {
+            efficiency = e
+        } else if let m = SleepStageTotals.minutes(fromStagesJSON: c.stagesJSON), m.inBed > 0 {
+            efficiency = m.asleep / m.inBed
+        } else {
+            efficiency = 0
+        }
+        return SleepSession(start: c.effectiveStartTs, end: c.endTs, efficiency: efficiency,
+                            stages: stages, restingHR: c.restingHr, avgHRV: c.avgHrv)
+    }
+
     /// Analyze one day's streams into a `DayResult`.
     ///
     /// - Parameters:
@@ -319,10 +350,12 @@ public enum AnalyticsEngine {
                                   // pure-function callers/tests free of it; IntelligenceEngine threads the
                                   // night window's persisted band state. (#531 / H8 consume)
                                   bandSleepState: [(ts: Int, state: Int)] = [],
-                                  // Opt-in experimental sleep staging (V2). When true, detected nights are
-                                  // staged by `SleepStagerV2` instead of V1. Default false keeps V1 the
-                                  // byte-identical default for pure-function callers/tests; IntelligenceEngine
-                                  // threads `PuffinExperiment.experimentalSleepV2Enabled`. (V7 / #690)
+                                  // Which sleep-staging recipe runs (V2 vs V1). When true, detected nights
+                                  // are staged by `SleepStagerV2` instead of V1. This PARAMETER defaults
+                                  // false to keep pure-function callers/tests byte-identical — it is NOT
+                                  // the product default. IntelligenceEngine threads
+                                  // `PuffinExperiment.experimentalSleepV2Enabled`, which is default ON
+                                  // (#277/#351), so the shipped app stages with V2. (7.0.0)
                                   useSleepStagerV2: Bool = false,
                                   // Opt-in motion-aware wake refinement (#364 "Proposal 2" follow-up; density
                                   // gate precedent #345). When true, `WakeMotionRefinement` re-derives each
@@ -334,6 +367,22 @@ public enum AnalyticsEngine {
                                   // caller/test byte-identical; IntelligenceEngine threads
                                   // `PuffinExperiment.motionAwareWakeEnabled`.
                                   useMotionAwareWake: Bool = false,
+                                  // Caller-supplied, already-staged sleep sessions to fold in ALONGSIDE the
+                                  // motion detector's — the day owner's OWN device-provided hypnogram (an
+                                  // Oura ring's SleepNet night, #773), reconstructed from its persisted
+                                  // `CachedSleepSession` via `sleepSession(fromProvided:)`. This is the fix
+                                  // for #804: a ring sends no gravity vector, so `detectSleep` stages nothing
+                                  // and the night scored blank (totalSleepMin/eff/avgHrv nil) even though the
+                                  // ring's hypnogram was persisted and shown on the timeline. Provided
+                                  // sessions are PRE-staged: they bypass detectSleep AND wake refinement.
+                                  // Where a provided session overlaps a detected one the PROVIDED session
+                                  // wins (authoritative device staging over motion inference); non-overlapping
+                                  // detected sessions (a nap the ring didn't report) are kept. Each provided
+                                  // session's nightly restingHR/avgHRV is (re)derived HERE from this day's
+                                  // hr/rr over its window when the stored row carried none, so the daily
+                                  // RHR/HRV light up. Default `[]` (every WHOOP / pure-function caller) keeps
+                                  // the byte-identical motion-only path.
+                                  providedSleep: [SleepSession] = [],
                                   // Sleep PROVENANCE for the per-day sleep trace (CAPTURE-C / #799). The
                                   // measured BLE path is `.measured` (the default); the caller passes
                                   // `.imported(...)` when a previously-imported sleep row WON the daily merge,
@@ -381,9 +430,31 @@ public enum AnalyticsEngine {
         // night-window stream the caller passed for the rest of this analysis; the pass self-gates on its
         // observed density, so an empty/sparse `steps` (e.g. a WHOOP 4.0, which never emits StepSample at
         // all) is a no-op regardless of `useMotionAwareWake`.
-        let allSessions = useMotionAwareWake
+        let refinedSessions = useMotionAwareWake
             ? detectedSessions.map { WakeMotionRefinement.refine($0, grav: gravity, steps: steps) }
             : detectedSessions
+        // #804 Fix A: fold in the caller's device-provided hypnogram (see `providedSleep`). Empty = the
+        // byte-identical motion-only path. Otherwise enrich each provided session's nightly restingHR/avgHRV
+        // from THIS day's hr/rr over its window (the stored ring row carries neither), using the SAME helpers
+        // detectSleep populates a session with, then keep only the detected sessions that DON'T overlap a
+        // provided one (provided is authoritative where they collide; a separate nap survives).
+        let allSessions: [SleepSession]
+        if providedSleep.isEmpty {
+            allSessions = refinedSessions
+        } else {
+            let rrSorted = rr.sortedByTsStable()
+            let enrichedProvided: [SleepSession] = providedSleep.map { s in
+                guard s.restingHR == nil || s.avgHRV == nil else { return s }
+                let rhr = s.restingHR ?? SleepStager.sessionRestingHR(start: s.start, end: s.end, hr: hr)
+                let hrv = s.avgHRV ?? SleepStager.sessionAvgHRV(start: s.start, end: s.end, rr: rrSorted)
+                return SleepSession(start: s.start, end: s.end, efficiency: s.efficiency,
+                                    stages: s.stages, restingHR: rhr, avgHRV: hrv)
+            }
+            let keptDetected = refinedSessions.filter { d in
+                !enrichedProvided.contains { $0.start < d.end && d.start < $0.end }
+            }
+            allSessions = keptDetected + enrichedProvided
+        }
         // Sessions attributed to `day` = those whose end falls on `day` (LOCAL day, #277). `day` is
         // the caller's local-day key; attribute by the same offset so the bucket and the key agree.
         let matched = allSessions.filter { tsInDay($0.end) }
@@ -735,7 +806,11 @@ public enum AnalyticsEngine {
                 efficiency: s.efficiency,
                 restingHr: s.restingHR,
                 avgHrv: s.avgHRV,
-                stagesJSON: encodeStages(s.stages))
+                stagesJSON: encodeStages(s.stages),
+                // #345 follow-up: stamp the DAY's motion-coverage verdict on every session so the Sleep
+                // tab can caption a sparse (likely under-detected) night. A NOOP-computed night is always
+                // true/false here; imported nights never reach this path and keep nil (unknown).
+                stagingSparse: gravitySparse)
         }
 
         // ── Per-session per-epoch motion (H8) ─────────────────────────────────
@@ -935,6 +1010,93 @@ public enum AnalyticsEngine {
         }
         guard kept > 0 else { return nil }
         return (red: redSum / kept, ir: irSum / kept)
+    }
+
+    /// Nightly gated mean of the 5/MG SpO2 **candidate** byte (`@82`) over the detected in-bed
+    /// `sessions`, with the sample count it rests on — or nil when no in-band reading fell inside any
+    /// span. (#112, tracking #103.)
+    ///
+    /// WHY THIS EXISTS. The candidate is decoded and stored but deliberately never scored: `@82` looks
+    /// like a strap-computed SpO2 %, and on one independent 8-night check it tracked the WHOOP app almost
+    /// exactly, but on the two nights from the strap it was found on it moved the OPPOSITE way. Two
+    /// devices, contradictory answers, so it cannot be promoted. Breaking that tie needs a third strap —
+    /// and until now the only way to read the candidate was to scroll the Deep Timeline chart and eyeball
+    /// it, which is a poor instrument to ask a volunteer to use and produces a number nobody can check.
+    ///
+    /// This makes the comparison one number against one number: the wearer reads this and the figure the
+    /// WHOOP app reports for the same night. `samples` travels with the mean on purpose — a mean over 11
+    /// readings and a mean over 1100 are not the same evidence, and a correlation built from the first
+    /// would be worthless.
+    ///
+    /// Gated to `70...100`, the SAME in-band window the decoder applies when it emits
+    /// `spo2_candidate_82`: sub-70 nonzero values are diagnostic codes and bit-7 values are saturation
+    /// sentinels, so averaging them in would produce a number that is not a percentage of anything.
+    ///
+    /// DIAGNOSTIC ONLY. Nothing scores this, it never writes `spo2Pct`, and it is not a blood-oxygen
+    /// reading — it is the raw candidate averaged, surfaced so it can be checked against a real one.
+    /// Byte-parity twin of the Kotlin `nightlySpo2CandidateMean`.
+    public static func nightlySpo2CandidateMean(_ sessions: [SleepSession],
+                                         aux: [V18AuxSample]) -> (mean: Int, samples: Int)? {
+        guard !sessions.isEmpty, !aux.isEmpty else { return nil }
+        var sum = 0, kept = 0
+        for a in aux {
+            guard let v = a.auxByte82, (70...100).contains(v) else { continue }
+            guard sessions.contains(where: { $0.start <= a.ts && a.ts <= $0.end }) else { continue }
+            sum += v; kept += 1
+        }
+        guard kept > 0 else { return nil }
+        return (mean: sum / kept, samples: kept)
+    }
+
+    /// #1169 SHADOW METRIC: the primary-session MEAN resting HR — window each detected sleep session's HR
+    /// samples to `[start, end)` and delegate to the #1174-defined `PrimarySessionRestingHR.meanHR` (that
+    /// definition is UNCHANGED). `IntelligenceEngine` stores the result beside the shipped nightly HR FLOOR
+    /// (`daily.restingHr`) as "rhr_primary_session" — instrumentation only, never shown, never scored — so
+    /// the mean-vs-floor comparison #1169 asks for can be evaluated from exports without a headline switch.
+    /// Byte-parity twin of the Kotlin `primarySessionRestingHR`.
+    public static func primarySessionRestingHR(
+        sessions: [SleepSession], hr: [HRSample],
+        validBpm: ClosedRange<Int> = PrimarySessionRestingHR.defaultValidBpm,
+        minValidSamples: Int = PrimarySessionRestingHR.defaultMinValidSamples) -> Double? {
+        PrimarySessionRestingHR.meanHR(sessions: primarySessions(sessions: sessions, hr: hr),
+                                       validBpm: validBpm, minValidSamples: minValidSamples)
+    }
+
+    /// #1169 coverage inputs for the shadow `rhr_primary_session` mean (valid-sample count + primary-session
+    /// duration). Builds the SAME per-session inputs as `primarySessionRestingHR` and delegates to
+    /// `PrimarySessionRestingHR.coverage`, so it is `nil` in lockstep with the mean. Byte-parity twin of the
+    /// Kotlin `primarySessionRestingHRCoverage`.
+    public static func primarySessionRestingHRCoverage(
+        sessions: [SleepSession], hr: [HRSample],
+        validBpm: ClosedRange<Int> = PrimarySessionRestingHR.defaultValidBpm,
+        minValidSamples: Int = PrimarySessionRestingHR.defaultMinValidSamples) -> PrimarySessionRestingHR.Coverage? {
+        PrimarySessionRestingHR.coverage(sessions: primarySessions(sessions: sessions, hr: hr),
+                                         validBpm: validBpm, minValidSamples: minValidSamples)
+    }
+
+    /// Window `hr` to each session's `[start, end)` once — the shared input BOTH the #1169 mean and its coverage
+    /// average over. Extracted so a caller that needs both windows the samples a SINGLE time (this is O(sessions
+    /// × hr); doing it once per metric is pure duplicate work). Twin of the Kotlin `primarySessions`.
+    private static func primarySessions(sessions: [SleepSession], hr: [HRSample]) -> [PrimarySessionRestingHR.Session] {
+        sessions.map { s in
+            PrimarySessionRestingHR.Session(
+                durationSec: Double(s.end - s.start),
+                bpm: hr.filter { $0.ts >= s.start && $0.ts < s.end }.map { $0.bpm })
+        }
+    }
+
+    /// The #1169 mean AND its coverage from ONE windowing of `hr` (both read the same longest primary session).
+    /// Byte-identical to calling `primarySessionRestingHR` + `primarySessionRestingHRCoverage` separately, but
+    /// windows the per-session samples once instead of twice — the only caller (IntelligenceEngine) needs both.
+    /// Twin of the Kotlin `primarySessionRestingHRWithCoverage`.
+    public static func primarySessionRestingHRWithCoverage(
+        sessions: [SleepSession], hr: [HRSample],
+        validBpm: ClosedRange<Int> = PrimarySessionRestingHR.defaultValidBpm,
+        minValidSamples: Int = PrimarySessionRestingHR.defaultMinValidSamples)
+        -> (mean: Double?, coverage: PrimarySessionRestingHR.Coverage?) {
+        let built = primarySessions(sessions: sessions, hr: hr)
+        return (PrimarySessionRestingHR.meanHR(sessions: built, validBpm: validBpm, minValidSamples: minValidSamples),
+                PrimarySessionRestingHR.coverage(sessions: built, validBpm: validBpm, minValidSamples: minValidSamples))
     }
 
     // MARK: - Skin-temp funnel diagnostic (#752)

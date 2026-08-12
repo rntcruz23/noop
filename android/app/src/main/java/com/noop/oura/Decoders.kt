@@ -87,8 +87,16 @@ object OuraDecoders {
      * decoded to an 82% beat-to-beat >200ms "jump" rate (not a heartbeat train). This byte-scatter
      * layout yields a coherent ~60 bpm train (10% jump rate). Validated against open_oura. Byte-identical
      * twin of Swift's decodeIBIAmplitude.
+     *
+     * @param channel which tag's record this is. 0x60 and 0x44 share this layout byte for byte, so they
+     *   share the decoder — but they are different tags on the wire, and the caller states which one it
+     *   routed here so the beat carries its true origin (#1071 follow-up). Defaults to 0x60's channel,
+     *   which is what every existing call site means.
      */
-    fun decodeIBIAmplitude(rec: OuraRecord): List<OuraIBI>? {
+    fun decodeIBIAmplitude(
+        rec: OuraRecord,
+        channel: OuraIbiChannel = OuraIbiChannel.IBI_AMPLITUDE,
+    ): List<OuraIBI>? {
         val b = rec.payload
         if (b.size < 14) return null   // fixed 14-byte packet (body bytes 6..19)
         val b12 = b[12] and 0xFF
@@ -107,7 +115,12 @@ object OuraDecoders {
         for (k in 0 until 6) {
             if (ibi[k] <= 0) continue                      // drop a zero IBI, never invent one
             val amp = ((b[6 + k] and 0xFF) shr 1) shl shift   // 7-bit mantissa << exponent
-            out.add(OuraIBI(ringTimestamp = rec.ringTimestamp, ibiMs = ibi[k], amplitude = amp))
+            out.add(
+                OuraIBI(
+                    ringTimestamp = rec.ringTimestamp, ibiMs = ibi[k], amplitude = amp,
+                    channel = channel,
+                ),
+            )
         }
         return if (out.isEmpty()) null else out
     }
@@ -181,7 +194,12 @@ object OuraDecoders {
             val ibi = (b[i + 1] and 0x07) or ((b[i] and 0xFF) shl 3)   // high byte first
             val quality = (b[i + 1] shr 3) and 0x03
             if (quality == 1 && ibi in 300..2000) {
-                out.add(OuraIBI(ringTimestamp = rec.ringTimestamp, ibiMs = ibi))
+                out.add(
+                    OuraIBI(
+                        ringTimestamp = rec.ringTimestamp, ibiMs = ibi,
+                        channel = OuraIbiChannel.GREEN_QUALITY,
+                    ),
+                )
             }
             i += 2
             sampleCount += 1
@@ -210,7 +228,12 @@ object OuraDecoders {
         while (idx >= 1) {
             val ibi = b[idx] * 8                          // 8-bit count x8 -> ms
             if (ibi > 0) {
-                out.add(OuraIBI(ringTimestamp = rec.ringTimestamp, ibiMs = ibi))
+                out.add(
+                    OuraIBI(
+                        ringTimestamp = rec.ringTimestamp, ibiMs = ibi,
+                        channel = OuraIbiChannel.SPO2_IBI,
+                    ),
+                )
             }
             idx -= 1
         }
@@ -220,21 +243,53 @@ object OuraDecoders {
     // MARK: - HRV / RMSSD (0x5D; s6.9)
 
     /**
-     * Decode the 0x5D hrv_event: samples each carrying a time_ms field + two int8 fields (b1, b2).
-     * Per OURA_PROTOCOL.md s6.9 the per-sample stride is time(2 LE) + b1(1) + b2(1) = 4 bytes.
-     * Returns null on a short body. NOOP consumes this as the ring's OWN RMSSD-derived HRV tag.
+     * Decode the 0x5D hrv_event: a run of (u8 avg HR bpm, u8 avg RMSSD ms) pairs, ONE per 5-min bucket
+     * (per open_oura decode_hrv / OURA_PROTOCOL.md s6.9). The previous layout read a 4-byte
+     * (u16 time, int8, int8) stride — a mis-framing that garbled the first (hr,rmssd) byte-pair into a
+     * bogus time_ms, sign-flipped the RMSSD byte, and only its b1 accidentally landed on a real HR byte.
+     * Both bytes are UNSIGNED (no scaling). Returns null on an empty or ODD-length body (no partial pair).
+     * Validated overnight: the hr byte tracks sleeping HR (~52 bpm, matching the #511 IBI-derived median).
+     * Twin of Swift decodeHRV.
+     *
+     * PADDING (#1128): a record that closes early pads its tail with a `00 00` pair, and that is NOT a
+     * reading — a stored `hr_bpm: 0` is a value the ring never asserted, indistinguishable downstream from
+     * a measurement. Observed on a real overnight: 2 of 22 records were partial, both padded, and both
+     * zero pairs persisted into the 5-min series beside 110 genuine buckets running 45-64 bpm. They are
+     * skipped here, at decode, so an absent bucket stays absent instead of becoming a zero one.
+     *
+     * The test is BOTH bytes zero — the exact padding signature — not `hrBpm == 0` alone. A lone zero HR
+     * beside a non-zero RMSSD has never been observed, and if it ever occurs it is a DIFFERENT fault (a
+     * real record with a bad byte) that should stay visible rather than be silently swallowed by a padding
+     * rule. Narrower is the honest choice while one night is all the evidence there is.
+     *
+     * `index` advances for EVERY pair, including a skipped one, because it is not a label: the consumer
+     * derives the bucket's wall-clock from it (`OuraStreamMapping`, `bucketTs = ts - index * 300`).
+     * Renumbering the survivors would slide every later bucket 5 minutes. That is invisible for TAIL
+     * padding — the only shape observed — which is exactly why it is pinned by test instead of by luck.
      */
     fun decodeHRV(rec: OuraRecord): List<OuraHRV>? {
         val b = rec.payload
-        if (b.size < 4) return null
+        if (b.size < 2 || b.size % 2 != 0) return null   // N complete (hr, rmssd) pairs
+        val pairCount = b.size / 2       // BEFORE any padding pair is dropped — see OuraHRV.count
         val out = ArrayList<OuraHRV>()
         var i = 0
-        while (i + 4 <= b.size) {
-            val timeMs = u16le(b, i)
-            val v1 = i8(b[i + 2])
-            val v2 = i8(b[i + 3])
-            out.add(OuraHRV(ringTimestamp = rec.ringTimestamp, timeMs = timeMs, b1 = v1, b2 = v2))
-            i += 4
+        var index = 0
+        while (i + 2 <= b.size) {
+            val hr = b[i]
+            val rmssd = b[i + 1]
+            if (!(hr == 0 && rmssd == 0)) {
+                out.add(
+                    OuraHRV(
+                        ringTimestamp = rec.ringTimestamp,
+                        index = index,
+                        hrBpm = hr,
+                        rmssdMs = rmssd,
+                        count = pairCount,
+                    ),
+                )
+            }
+            i += 2
+            index += 1
         }
         return if (out.isEmpty()) null else out
     }
@@ -242,9 +297,21 @@ object OuraDecoders {
     // MARK: - SpO2 per-sample (0x6F; s6.5)
 
     /**
-     * Decode the 0x6F spo2_event: byte6 bits [7:4]=SpO2 base (<<7), [3:0]=status flag; then one
+     * Decode the 0x6F spo2_event: byte6 bits [7:4]=SpO2 base/status field, [3:0]=status flag; then one
      * uint8 SpO2 value per second from byte7 onward (optional 0xFF terminator). Per OURA_PROTOCOL.md
      * s6.5. Returns null on a short body.
+     *
+     * UNIT TAG: these samples carry the default `unit = "raw"`, which is a legacy CHANNEL label, not a
+     * claim about the quantity — 0x6F is a firmware-computed PERCENTAGE (s6.5, corroborated by
+     * open_oura), unlike 0x77 which really is a raw DC channel and tags itself `"dc_raw"`. The string is
+     * deliberately left alone: it is a persisted column, no consumer branches on it, and rewriting it
+     * would split stored history across two spellings of the same channel for a cosmetic gain. Swift
+     * `OuraDecoders.decodeSpO2PerSample` matches exactly.
+     *
+     * s6.5 also records an OPEN ISSUE: ~47% of decoded 0x6F samples exceed 100%, which no ground truth
+     * yet explains, so no offset is applied here — a guessed calibration would be worse than the gap.
+     * These land in the RAW channel (`Spo2Sample.red`), never in a percentage field, so an impossible
+     * value is not surfaced as a Blood Oxygen reading.
      */
     fun decodeSpO2PerSample(rec: OuraRecord): List<OuraSpO2>? {
         val b = rec.payload
@@ -257,10 +324,24 @@ object OuraDecoders {
         while (i < b.size) {
             val raw = b[i]
             if (raw == 0xFF) break                       // terminator
-            out.add(OuraSpO2(ringTimestamp = rec.ringTimestamp, value = raw))
+            // The samples are one PER SECOND, so each carries its position in the record: ringTimestamp
+            // stays the record's anchor and the consumer spreads them over their own seconds. Without the
+            // position the offset is unrecoverable downstream and 12 of every 13 samples collide away on
+            // the (deviceId, ts) primary key (#1070). Swift twin matches exactly.
+            out.add(OuraSpO2(ringTimestamp = rec.ringTimestamp, value = raw, index = out.size))
             i += 1
         }
-        return if (out.isEmpty()) null else out
+        return if (out.isEmpty()) null else stampSampleCount(out)
+    }
+
+    /**
+     * Fill in `count` (the number of samples the record yielded) on every sample of one record. The
+     * total is only known once the body has been walked, so the decoders stamp `index` inline and the
+     * count in one pass at the end. Twin of Swift `stampSampleCount`.
+     */
+    private fun stampSampleCount(samples: List<OuraSpO2>): List<OuraSpO2> {
+        val n = samples.size
+        return samples.map { it.copy(count = n) }
     }
 
     // MARK: - SpO2 stable, BIG-endian (0x7B; s6.6)
@@ -298,16 +379,18 @@ object OuraDecoders {
         }
         val out = ArrayList<OuraSpO2>()
         if (hasBase) {
-            out.add(OuraSpO2(ringTimestamp = rec.ringTimestamp, value = acc, unit = "dc_raw"))
+            out.add(OuraSpO2(ringTimestamp = rec.ringTimestamp, value = acc, unit = "dc_raw", index = 0))
         }
         while (i < b.size) {
             val v = i8(b[i])
             val mag = Math.abs(v) shl scale
             acc += if (v < 0) -mag else mag
-            out.add(OuraSpO2(ringTimestamp = rec.ringTimestamp, value = acc, unit = "dc_raw"))
+            // Same per-sample position as 0x6F (see #1070): this record is multi-sample too, and its
+            // samples reach the same (deviceId, ts)-keyed table, so they collide the same way.
+            out.add(OuraSpO2(ringTimestamp = rec.ringTimestamp, value = acc, unit = "dc_raw", index = out.size))
             i += 1
         }
-        return if (out.isEmpty()) null else out
+        return if (out.isEmpty()) null else stampSampleCount(out)
     }
 
     // MARK: - Temperature (0x46 / 0x69 / 0x75; s6.8)
@@ -460,6 +543,17 @@ object OuraDecoders {
         val b = rec.payload
         // body[0] is the header (spec offset 6); phase codes begin at body[1].
         if (b.size < 2) return null
+        // #1246: a whole record of 0xFF is an UNWRITTEN (erased-flash) hypnogram page, not sleep — the ring
+        // serves pages of it for a stretch it never classified (confirmed on-device: SpO2/R-R go dark in the
+        // SAME window). The 2-bit unpack would read each 0xFF as `11 11 11 11` = four AWAKE, manufacturing
+        // hours of fake wake (one night: 320 of 334 "awake" min were padding → 36 % efficiency). Detect it
+        // at the RECORD level (unambiguous; a byte-level filter would eat the four genuine AWAKE epochs that
+        // also encode as 0xFF) and flag the epochs unwritten so the assembler drops them as a GAP while they
+        // still hold their place in the time axis. Byte-parity twin of the Swift decodeSleepPhase.
+        // Require >=2 code bytes so a LONE 0xFF byte — four genuine AWAKE epochs, which also encode as 0xFF
+        // (the reporter's explicit caution) — is never mistaken for an erased page. Observed erased pages
+        // are whole ~13-byte records; a single byte is real wake.
+        val unwritten = (b.size - 1) >= 2 && (1 until b.size).all { (b[it].toInt() and 0xFF) == 0xFF }
         val out = ArrayList<OuraSleepPhase>()
         var index = 0
         for (k in 1 until b.size) {
@@ -470,7 +564,12 @@ object OuraDecoders {
                 val code = (byte shr shift) and 0x03
                 val stage = OuraSleepStage.fromRaw(code)
                 if (stage != null) {
-                    out.add(OuraSleepPhase(ringTimestamp = rec.ringTimestamp, index = index, stage = stage))
+                    out.add(
+                        OuraSleepPhase(
+                            ringTimestamp = rec.ringTimestamp, index = index,
+                            stage = stage, unwritten = unwritten,
+                        ),
+                    )
                     index += 1
                 }
                 shift -= 2

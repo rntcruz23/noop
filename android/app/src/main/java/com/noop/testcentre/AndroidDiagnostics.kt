@@ -32,6 +32,29 @@ object AndroidDiagnostics {
     }
 
     /**
+     * The strap family a diagnostic export should REPORT — the one that actually advertised, when we know
+     * it, and `null` when we genuinely do not.
+     *
+     * Two prefs hold a model and they disagree. `noop.selectedWhoopModel` is written by
+     * `WhoopBleClient.persistSelectedModel` from the family that actually advertised, so it is the truth.
+     * `noop.lastDeviceModel` is the pair-time memory, and `NoopPrefs.lastDevice` widens a missing value to
+     * `WHOOP4` — a sensible default for RECONNECTING (the code must pick a service to try) but a lie in a
+     * report, which is read as an observation.
+     *
+     * Two field logs from confirmed WHOOP 5 straps were headed "Model: WHOOP 4.0" (#1451, #1464), and both
+     * misdirected triage before the decoded layout version gave them away. A report may say "unknown"; it
+     * may not invent a model. Reads the raw prefs rather than `lastDevice` precisely so that "remembered as
+     * a 4.0" stays distinguishable from "nothing remembered".
+     */
+    private fun reportedModel(context: Context): com.noop.ble.WhoopModel? {
+        val prefs = com.noop.ui.NoopPrefs.of(context)
+        val detected = prefs.getString("noop.selectedWhoopModel", null)
+        val remembered = prefs.getString(com.noop.ui.NoopPrefs.KEY_LAST_DEVICE_MODEL, null)
+        return (detected ?: remembered)
+            ?.let { runCatching { com.noop.ble.WhoopModel.valueOf(it) }.getOrNull() }
+    }
+
+    /**
      * Strap identity + data-state lines for the debug export. Offline-safe: reads persisted prefs and the
      * canonical "my-whoop" daily spine, so it works from the scheduled background export too. Model,
      * last-known firmware, last-sync, timezone, days of history, and the most recent sleep + recovery day.
@@ -42,8 +65,29 @@ object AndroidDiagnostics {
         add("Strap & data")
         runCatching {
             val dev = com.noop.ui.NoopPrefs.lastDevice(context)
-            add("Model:       ${dev?.second?.displayName ?: "unknown (never paired)"}")
-            add("Firmware:    ${com.noop.ui.NoopPrefs.lastFirmware(context) ?: "unknown (connect to record)"}")
+            add(
+                "Model:       " + when {
+                    dev == null -> "unknown (never paired)"
+                    else -> reportedModel(context)?.displayName ?: "unknown (paired, family not yet detected)"
+                },
+            )
+            // #1633 follow-up: the ACTIVE device's own firmware. This read used to be the bare global key,
+            // so a two-strap log named whichever strap connected last - a 5/MG log reporting a 4.0's
+            // 41.17.6.0. resolveFirmware falls back to the legacy key only when one device is paired.
+            val fwRows = runCatching {
+                (context.applicationContext as? com.noop.NoopApplication)?.deviceRegistry?.all().orEmpty()
+            }.getOrDefault(emptyList())
+            val fwActive = runCatching {
+                (context.applicationContext as? com.noop.NoopApplication)?.deviceRegistry?.activeDeviceId()
+            }.getOrNull()
+            val fwRow = fwRows.firstOrNull { it.id == fwActive }
+            val fw = com.noop.ble.resolveFirmware(
+                live = null,
+                perDevice = com.noop.ui.NoopPrefs.firmwareFor(context, fwRow?.peripheralId),
+                legacyGlobal = com.noop.ui.NoopPrefs.lastFirmware(context),
+                pairedCount = fwRows.size,
+            )
+            add("Firmware:    ${fw ?: "unknown (connect to record)"}")
             val syncSec = com.noop.ui.NoopPrefs.lastSyncAt(context)
             add("Last sync:   ${if (syncSec > 0L) relTime(System.currentTimeMillis() - syncSec * 1000L) else "never"}")
             // #57: write-health. "Last sync" fires even on an empty/failed offload, so distinguish "rows
@@ -71,6 +115,22 @@ object AndroidDiagnostics {
             val merged = repo.daysMerged("my-whoop")
             add("Last sleep:  ${merged.lastOrNull { (it.totalSleepMin ?: 0.0) > 0.0 }?.let { "${it.day} · ${it.totalSleepMin?.toInt()} min" } ?: "none"}")
             add("Last recov.: ${merged.lastOrNull { it.recovery != null }?.let { "${it.day} · ${it.recovery?.toInt()}%" } ?: "none"}")
+            // #1300 follow-up: the header above describes ONE device because it reads the last-connected
+            // prefs, not the registry — so a two-strap install produced a log that never mentioned the
+            // second strap, leaving `dayOwner readId=` and the funnel's orphan check with nothing to be
+            // checked against. Name the whole set instead.
+            val invRows = runCatching {
+                (context.applicationContext as? com.noop.NoopApplication)?.deviceRegistry?.all().orEmpty()
+                    .map {
+                            InventoryRow(it.id, it.brand, it.model, it.status, it.lastSeenAt,
+                                         com.noop.ui.NoopPrefs.firmwareFor(context, it.peripheralId))
+                        }
+            }.getOrDefault(emptyList())
+            val invActive = runCatching {
+                (context.applicationContext as? com.noop.NoopApplication)?.deviceRegistry?.activeDeviceId()
+            }.getOrNull()
+            deviceInventoryLines(invRows, invActive, System.currentTimeMillis() / 1000L) { relTime(it) }
+                .forEach { add(it) }
         }.onFailure { add("(strap/data state unavailable: ${it.message})") }
     }
 
@@ -124,7 +184,19 @@ object AndroidDiagnostics {
             val resp = repo.respSamples(id, session.startTs, session.endTs, Int.MAX_VALUE)
             add("Night ${dayStamp(session.startTs)}: grav=${grav.size} hr=${hr.size} rr=${rr.size} resp=${resp.size} skin=${skin.size}")
             if (grav.isEmpty() && hr.isEmpty()) {
-                add("(no raw biometric samples under '$id' for this night — expected on a freshly re-added strap; reconnect + let a history sync run, then re-export)")
+                // #1617 follow-up: do NOT assert "freshly re-added" without testing the other explanation.
+                // Several ids can hold one physical strap's data (#1193/#740), and when the history spine
+                // and the raw stream split, the samples exist - just under a different id. The old line
+                // printed the innocent cause for that case, which stops the investigation at exactly the
+                // point it should start. Ask the SAMPLE TABLES, not the registry: "my-whoop" is a source
+                // label rather than a pairedDevice row, and forgetting a device drops its row while leaving
+                // its samples - so the registry is blind to exactly the ids worth naming here. Only runs
+                // when the active id came back empty, so a healthy install pays nothing.
+                val elsewhere = runCatching {
+                    repo.rawSampleCountsByDevice(session.startTs, session.endTs)
+                        .filter { it.first != id }
+                }.getOrDefault(emptyList())
+                add(orphanedSamplesLine(id, elsewhere))
                 return@runCatching
             }
             com.noop.analytics.SleepStager.remFunnelDiagnostic(session.startTs, session.endTs, grav, hr, rr, resp)
@@ -134,7 +206,9 @@ object AndroidDiagnostics {
                 efficiency = session.efficiency ?: 0.0, stages = emptyList(),
                 restingHR = session.restingHr, avgHRV = session.avgHrv,
             )
-            val family = if (com.noop.ui.NoopPrefs.lastDevice(context)?.second == com.noop.ble.WhoopModel.WHOOP5_MG)
+            // Unknown still resolves to WHOOP4 here: this one picks an analysis default, it does not
+            // report an observation, and every prior export took that branch.
+            val family = if (reportedModel(context) == com.noop.ble.WhoopModel.WHOOP5_MG)
                 com.noop.protocol.DeviceFamily.WHOOP5 else com.noop.protocol.DeviceFamily.WHOOP4
             // Mirror the real per-device anchor (#404): learn it from the WHOLE recent window's raws — not
             // just this night — so a single sparse night (<100 in-band) can't misreport under the global
@@ -221,16 +295,33 @@ object AndroidDiagnostics {
                 "apple-health", "health-connect").distinct()
             val dayCounts = ids.map { it to repo.days(it).size }
             add("Days: " + dayCounts.joinToString("  ") { "${it.first}=${it.second}" })
-            // Which metrics are actually populated over the recent week on the imported spine.
+            // Which metrics are actually populated over the recent week on the imported (raw) spine…
+            // The day-SPAN is stamped so a stale spine is visible: `takeLast(7)` can be the last 7 IMPORTED
+            // rows (months old), not the last 7 CALENDAR days — without the range they look identical. Twin
+            // of the Swift #731 fix.
             val recent = repo.days("my-whoop").takeLast(7)
             if (recent.isNotEmpty()) {
                 val n = recent.size
-                add("Recent ${n}d (my-whoop): " +
+                val span = "${recent.first().day}…${recent.last().day}"
+                add("Recent ${n}d (my-whoop, $span): " +
                     "sleep=${recent.count { (it.totalSleepMin ?: 0.0) > 0 }}/$n  " +
                     "recovery=${recent.count { it.recovery != null }}/$n  " +
                     "steps=${recent.count { it.steps != null }}/$n  " +
                     "kcal=${recent.count { it.activeKcalEst != null }}/$n")
             } else add("Recent: no day rows")
+            // …and on the COMPUTED "-noop" spine, where steps/activeKcalEst are actually written. Compare the
+            // two: if kcal/steps are populated here but 0 on the raw line above, the raw-spine merge/view is
+            // dropping them (cosmetic); if 0 on BOTH, the value genuinely wasn't computed (a real gap).
+            val recentNoop = repo.days("my-whoop-noop").takeLast(7)
+            if (recentNoop.isNotEmpty()) {
+                val nn = recentNoop.size
+                val spanNoop = "${recentNoop.first().day}…${recentNoop.last().day}"
+                add("Recent ${nn}d (my-whoop-noop, computed, $spanNoop): " +
+                    "sleep=${recentNoop.count { (it.totalSleepMin ?: 0.0) > 0 }}/$nn  " +
+                    "recovery=${recentNoop.count { it.recovery != null }}/$nn  " +
+                    "steps=${recentNoop.count { it.steps != null }}/$nn  " +
+                    "kcal=${recentNoop.count { it.activeKcalEst != null }}/$nn")
+            }
             val dv = repo.dataVolumeSnapshot(active)
             add("Volume: rawRows=${dv.dbRows}  importedDays=${dv.importedDays}  workouts=${dv.workouts}")
         }.onFailure { add("(daily data unavailable: ${it.message})") }
@@ -248,11 +339,18 @@ object AndroidDiagnostics {
             val mins = com.noop.ui.NoopPrefs.smartAlarmMinutes(context)
             add("Enabled: ${if (on) "yes" else "no"} · set ${"%02d:%02d".format(mins / 60, mins % 60)}")
             // #3: model + the 5/MG experimental gate (a 5/MG firmware alarm is NOT armed unless it's on).
-            if (com.noop.ui.NoopPrefs.lastDevice(context)?.second == com.noop.ble.WhoopModel.WHOOP5_MG) {
-                val exp = com.noop.ble.PuffinExperiment.from(context).isEnabled
-                add("Model: WHOOP 5.0/MG · experimental: ${if (exp) "on" else "off → firmware alarm NOT armed"}")
-            } else {
-                add("Model: WHOOP 4.0")
+            when (reportedModel(context)) {
+                com.noop.ble.WhoopModel.WHOOP5_MG -> {
+                    val exp = com.noop.ble.PuffinExperiment.from(context).isEnabled
+                    // displayName, not a literal: this block spelled it "WHOOP 5.0/MG" while the enum (and
+                    // the header a few lines up) says "WHOOP 5.0 / MG", so one export disagreed with itself.
+                    add(
+                        "Model: ${com.noop.ble.WhoopModel.WHOOP5_MG.displayName} · experimental: " +
+                            if (exp) "on" else "off → firmware alarm NOT armed",
+                    )
+                }
+                com.noop.ble.WhoopModel.WHOOP4 -> add("Model: ${com.noop.ble.WhoopModel.WHOOP4.displayName}")
+                null -> add("Model: unknown (family not yet detected)")
             }
             // #4: strap clock health — a reset/stale OR future-dated clock (the #34 / #928 causes) breaks
             // the alarm even when armed.
@@ -337,7 +435,7 @@ object AndroidDiagnostics {
      *  internal so it unit-tests without a Context (the suite stays Robolectric-free). */
     internal fun oemKillHeuristic(manufacturer: String): String =
         // Single source of truth for the aggressive-vendor set (#386): the same list the Settings
-        // "Keep NOOP alive overnight" toggle gates on, so the diagnostic and the fix never disagree.
+        // "Keep NOOP alive overnight" row gates on, so the diagnostic and the fix never disagree.
         if (com.noop.ble.BackgroundHealth.isAggressiveVendor(manufacturer))
             "aggressive vendor (${manufacturer.lowercase()}), whitelist NOOP to keep it alive"
         else "standard"
@@ -365,5 +463,38 @@ object AndroidDiagnostics {
             }.getOrDefault(false)
             "$label=${if (granted) "granted" else "denied"}"
         }
+    }
+
+    /**
+     * #1617 follow-up: the line the night funnel prints when the ACTIVE device id carries no raw samples.
+     *
+     * The previous wording asserted "expected on a freshly re-added strap" unconditionally. That is one of
+     * two explanations, and the other one is a bug: a registry can hold several ids for the same physical
+     * strap (#1193/#740), and when the history spine and the raw stream split, the samples are present -
+     * just filed under a different id. Printing the innocent cause for that case ends the investigation at
+     * the point it should begin, which is worse than printing nothing.
+     *
+     * [othersWithSamples] is (deviceId, sampleCount) for every OTHER registry id that does hold samples in
+     * the same window. Empty means the samples genuinely are not there and the fresh-re-add wording is
+     * right; non-empty names the id that has them so the split is visible rather than inferred.
+     *
+     * Pure so the wording is unit-tested without a database, a strap, or a registry.
+     */
+    internal fun orphanedSamplesLine(activeId: String, othersWithSamples: List<Pair<String, Int>>): String {
+        if (othersWithSamples.isEmpty()) {
+            return "(no raw biometric samples under '$activeId' for this night — expected on a freshly " +
+                "re-added strap; reconnect + let a history sync run, then re-export)"
+        }
+        // Tie-break on id: Kotlin's sortedByDescending is stable but Swift's `sorted` is NOT, so equal
+        // counts could otherwise order differently on the two platforms and the twin lines would diverge.
+        // The tie-break itself compares UTF-16 code units here and Unicode canonical order in Swift; those
+        // agree for the machine-generated ASCII ids this ever sees ("my-whoop", "whoop-<mac>"), and a
+        // device NICKNAME is a separate field that never reaches this id.
+        val named = othersWithSamples
+            .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first })
+            .joinToString(", ") { "'${it.first}' (${it.second} rows)" }
+        return "(no raw biometric samples under the ACTIVE id '$activeId' for this night — they are under " +
+            "$named instead. The history spine and the raw stream are on different device ids (#1193); this " +
+            "is NOT a fresh re-add, the samples exist and are not being read.)"
     }
 }

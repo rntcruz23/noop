@@ -60,7 +60,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -128,9 +127,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val repo: WhoopRepository get() = repository
 
-    /** The registry's active strap id (the same id the read path resolves to). Public so the Test Centre
-     *  can read the right source for the CAPTURE-D data-volume snapshot. */
-    val activeStrapId: String get() = deviceId
+    /** The registry's active strap id (the same id the read path resolves to). The getter stays source
+     * compatible for existing call sites; reactive screens collect [activeStrapIdFlow]. */
+    val activeStrapId: String get() = noopApp.sourceCoordinator.activeDeviceId.value ?: noopApp.activeDeviceId
+    val activeStrapIdFlow: StateFlow<String?> get() = noopApp.sourceCoordinator.activeDeviceId
 
     // MARK: - Devices screen (multi-source Phase 1B)
     //
@@ -169,8 +169,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *  (a no-op for a single-WHOOP install). Mirrors macOS DevicesView's `registry.setActive`. */
     suspend fun setActiveDevice(id: String) {
         noopApp.deviceRegistry.setActive(id)
-        noopApp.sourceCoordinator.onActiveDeviceChanged(id)
-        refreshActiveDeviceName()
+        // Publish only after BOTH authoritative mutations succeed. A registry/coordinator failure leaves
+        // observers on the last fully-applied id instead of advertising a half-switched source.
+        if (noopApp.sourceCoordinator.reconcileActiveDevice(id)) {
+            refreshActiveDeviceName()
+        }
     }
 
     /** The active band's display name (nickname, else collapsed brand+model), surfaced on the Live screen
@@ -198,6 +201,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000L),
                 com.noop.analytics.StreakCalculator.Streaks(0, 0),
             )
+
+    /** #1410: record an `APP_VERSION_CHANGED` event on the first launch after an update. `"noop-app"` is a
+     *  synthetic, non-strap deviceId sentinel (strap ids are BLE UUIDs, so it can't collide). */
+    private suspend fun recordAppVersionChange() {
+        val prefs = appContext.getSharedPreferences("noop_provenance", android.content.Context.MODE_PRIVATE)
+        val current = com.noop.BuildConfig.VERSION_NAME
+        val last = prefs.getString("lastSeenVersion", null)
+        if (com.noop.data.AppVersionEvent.shouldRecord(last, current)) {
+            // A real transition: advance the pointer only once the event is durably recorded, so a failed
+            // insert (or a not-yet-ready store) retries next launch instead of silently dropping the change.
+            val recorded = runCatching {
+                repository.recordEvent(
+                    deviceId = "noop-app",
+                    ts = System.currentTimeMillis() / 1000,
+                    kind = com.noop.data.AppVersionEvent.KIND,
+                    payloadJSON = com.noop.data.AppVersionEvent.payloadJson(
+                        from = last!!, to = current, schemaVersion = com.noop.data.WhoopDatabase.SCHEMA_VERSION,
+                    ),
+                )
+            }.isSuccess
+            if (recorded) prefs.edit().putString("lastSeenVersion", current).apply()
+        } else {
+            // First launch (last == null) or unchanged: nothing to record, just anchor the pointer.
+            prefs.edit().putString("lastSeenVersion", current).apply()
+        }
+    }
 
     /** Re-read the active device row and republish its display name. Called at launch + after a setActive. */
     fun refreshActiveDeviceName() {
@@ -513,6 +542,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // Cycle awareness (v5 skin-temp suite) — OPT-IN, default OFF (manual-first). Declared BEFORE init for
     // the same reason as _illnessWatchEnabled: the recentDays collector reads it on its synchronous first
     // (cached) emission. Gates whether CyclePhaseEngine actually classifies in the v5 analytics pass.
+    private val _cycleAwarenessHidden = MutableStateFlow(NoopPrefs.cycleAwarenessHidden(appContext))
+    /** #hide-cycle: the user's "not for me" opt-out (never age-based). Twin of iOS AppModel.cycleAwarenessHidden. */
+    val cycleAwarenessHidden: StateFlow<Boolean> = _cycleAwarenessHidden.asStateFlow()
+
     private val _cycleTrackingEnabled = MutableStateFlow(NoopPrefs.cycleTracking(appContext))
     /** Whether cycle-phase awareness is enabled (reads a coarse phase from nightly skin temperature). */
     val cycleTrackingEnabled: StateFlow<Boolean> = _cycleTrackingEnabled.asStateFlow()
@@ -606,6 +639,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _phoneAlarmWindowMinutes = MutableStateFlow(phoneAlarmStore.windowMinutes)
     /** How long after the target the guaranteed hard deadline sits. */
     val phoneAlarmWindowMinutes: StateFlow<Int> = _phoneAlarmWindowMinutes.asStateFlow()
+    private val _phoneAlarmWeekdays = MutableStateFlow(phoneAlarmStore.weekdays)
+    /** Days the phone alarm fires on (Calendar.DAY_OF_WEEK). EMPTY = every day — see
+     *  [SmartAlarmStore.weekdays]; same encoding as the strap alarm's `smartAlarmWeekdays`. */
+    val phoneAlarmWeekdays: StateFlow<Set<Int>> = _phoneAlarmWeekdays.asStateFlow()
     // "Buzz WHOOP 4" companion (#536): arm the strap's firmware alarm at the phone alarm's EARLIEST wake
     // time, so the strap buzzes first and the OS alarm fires at the hard deadline as backup. Declared here
     // with the phone-alarm flows (BEFORE init) so the init bond collector can read it. Default OFF.
@@ -658,6 +695,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var todayStressCache: Double? = null
     var todayFitnessAgeCache: Double? = null
     var todayVitalityCache: Double? = null
+    var todayVo2maxCache: Double? = null
 
     /**
      * Recent daily metrics (newest last), backing the Today grid + illness watch.
@@ -681,7 +719,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * Mirrors the iOS HealthView loading `spo2_candidate` from the repository.
      */
     val spo2CandidateByDay: StateFlow<Map<String, Double>> =
-        combine(recentDays, flowOf(NoopPrefs.spo2CandidateDisplay(appContext))) { days, toggleOn ->
+        combine(recentDays, NoopPrefs.spo2CandidateDisplayFlow(appContext)) { days, toggleOn ->
             if (!toggleOn || days.isEmpty()) emptyMap()
             else {
                 val from = days.first().day
@@ -689,6 +727,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 repository.metricSeriesComputedUnion(deviceId, "spo2_candidate", from, to)
                     .associate { it.day to it.value }
             }
+        }.flowOn(Dispatchers.IO)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /**
+     * #1118: per-night HRV over-count flags (1/0), loaded from the "hrv_rr_overcount" metricSeries key
+     * (written by IntelligenceEngine for every scored night with in-sleep R-R). Drives the HRV tile's
+     * "unverified · over-reports R-R" caveat on a WHOOP 4.0 over-counted night. Always loaded (no toggle,
+     * unlike the SpO₂ candidate). Mirrors iOS HealthView loading `hrv_rr_overcount`.
+     */
+    val hrvOverCountByDay: StateFlow<Map<String, Double>> =
+        recentDays.map { days ->
+            if (days.isEmpty()) emptyMap()
+            else repository.metricSeriesComputedUnion(deviceId, "hrv_rr_overcount", days.first().day, days.last().day)
+                .associate { it.day to it.value }
         }.flowOn(Dispatchers.IO)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
@@ -736,6 +788,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // existing WHOOP flow below runs unchanged; it only acts when a non-WHOOP strap is the active
         // device. The Devices screen (next task) calls onActiveDeviceChanged after a setActive.
         noopApp.sourceCoordinator.start()
+        // #1410: on the first launch after an update, append an APP_VERSION_CHANGED event so a single
+        // export can answer "what ran when". Idempotent — the stored last-seen version only advances
+        // once the transition is recorded, so a background-only launch is caught on the next UI open.
+        viewModelScope.launch { recordAppVersionChange() }
         // #1121: re-arm the opt-in detailed-capture rolling log on launch, so a capture the user started
         // keeps going across the process being killed (this phone class is not battery-exempt and Android
         // kills the background BLE overnight — the very window a battery capture needs to span).
@@ -947,6 +1003,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     maxHROverride = profileStore.hrMaxOverride.takeIf { it > 0 }?.toDouble(),
                     flagGet = { NoopPrefs.effortRescoreDone(appContext) },
                     flagSet = { NoopPrefs.setEffortRescoreDone(appContext) },
+                    // #1567: this rewrites the FULL history once, so a missing owner source would bake the
+                    // WHOOP5 skin-temp scale into every day of it.
+                    ownerSource = RegistryDayOwnerSource(noopApp.deviceRegistry),
                 )
             }.onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
             while (isActive) {
@@ -971,7 +1030,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // since the last COMPLETED run. Mirrors the Swift analyzeRecent(force:false) gate; the watermark
                 // advances only on success (below), so an interrupted run can never hide unscored data.
                 val analyzeFp = repository.hrFingerprint()
-                if (analyzeFp != NoopPrefs.analyzeWatermark(appContext)) runCatching {
+                // #1538: attribute the tick that is about to run. An idle-tick pass previously emitted NO
+                // trigger line at all — a "re-score: done" with nothing before it — so a strap log could not
+                // be read by pairing trigger->done, and a stalled background pass was easy to misattribute to
+                // the post-offload caller. Only logged when the gate lets the pass through, so a skipped tick
+                // stays silent and the 15-min cadence does not pad the log. newData is necessarily yes here:
+                // the gate IS the fingerprint-changed test. Twin of the Swift analyzeRecent(force:)
+                // attribution. Read the watermark ONCE — the gate and the log line must agree, and a second
+                // read could straddle a concurrent write from a completing pass.
+                val analyzeHasNewData = analyzeFp != NoopPrefs.analyzeWatermark(appContext)
+                if (analyzeHasNewData) ble.externalLog("re-score: trigger=idle newData=yes")
+                if (analyzeHasNewData) runCatching {
                     IntelligenceEngine.analyzeRecent(
                         repo = repository,
                         profile = currentProfile(),
@@ -1073,6 +1142,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         // #103: SpO₂ candidate @82 display toggle — when ON, the engine computes and
                         // persists the nightly @82 mean as "spo2_candidate" in metricSeries.
                         spo2CandidateDisplay = NoopPrefs.spo2CandidateDisplay(appContext),
+                        effortMethod = NoopPrefs.effortMethod(appContext),
                     )
                     // analyzeRecent now hops to Dispatchers.Default; a scope cancellation surfaces as a
                     // CancellationException that runCatching would otherwise swallow, breaking the loop's
@@ -1133,6 +1203,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // independent of the Power-saving master, and its own toggle so a field report can tell the two
         // apart (they have opposite battery profiles). No-op unless on.
         ble.setFastLinkPhy(NoopPrefs.fastLinkPhy(appContext))
+        // Low refresh is a sub-option too: only in effect while the master is on. Unlike the levers
+        // around it, it is NOT battery-gated once chosen — it moves the BASE cadence to hourly.
+        ble.setLowRefreshMode(on && NoopPrefs.lowRefresh(appContext))
         ble.setLowBatteryOffloadThrottle(if (on) NoopPrefs.powerSavingBatteryPct(appContext) else 0)
         // HRV pause is a sub-option: only effective while the master is on (defaults on when it is), and
         // now battery-%-aware like the offload lever — pass the same threshold.
@@ -1151,6 +1224,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Set the power-saving battery-% threshold (Settings). Persists + applies immediately. */
     fun setPowerSavingBatteryPct(pct: Int) {
         NoopPrefs.setPowerSavingBatteryPct(appContext, pct)
+        applyPowerSaving()
+    }
+
+    /** Flip "Low refresh" (Settings). Persists + applies immediately. */
+    fun setLowRefresh(enabled: Boolean) {
+        NoopPrefs.setLowRefresh(appContext, enabled)
         applyPowerSaving()
     }
 
@@ -1201,14 +1280,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Snapshot the user's body profile from SharedPreferences as an analytics [UserProfile]. */
-    private fun currentProfile(): UserProfile = UserProfile(
-        weightKg = profileStore.weightKg,
-        heightCm = profileStore.heightCm,
-        age = profileStore.age.toDouble(),
-        sex = profileStore.sex,
-        stepTicksPerStep = profileStore.stepTicksPerStep,
-        waistCm = profileStore.waistCm,
-    )
+    private fun currentProfile(): UserProfile = profileStore.toUserProfile()
 
     // MARK: - HR smoothing (median filter)
 
@@ -1242,6 +1314,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val liveStrain: Double = 0.0,
         val avgHr: Int = 0,
         val peakHr: Int = 0,
+        val pausedAtMs: Long? = null,
+        val pausedDurationMs: Long = 0L,
     )
 
     private val _activeWorkout = MutableStateFlow<ActiveWorkout?>(null)
@@ -1333,6 +1407,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     avgHr = w.avgHr,
                     peakHr = w.peakHr,
                     liveStrain = w.liveStrain,
+                    pausedAtMs = w.pausedAtMs,
+                    pausedDurationMs = w.pausedDurationMs,
                 ),
             )
         }
@@ -1363,6 +1439,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _activeWorkout.value = ActiveWorkout(
             startMs = s.startMs, sport = sport, gpsEnabled = true,
             track = s.track, distanceM = s.distanceM, paceSecPerKm = s.paceSecPerKm,
+            pausedAtMs = s.pausedAtMs, pausedDurationMs = s.pausedDurationMs,
         )
         observeGpsSession()
     }
@@ -1382,7 +1459,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _activeWorkout.value = ActiveWorkout(
             startMs = snap.startMs, sport = sport, gpsEnabled = false,
             samples = snap.samples, avgHr = snap.avgHr, peakHr = snap.peakHr, liveStrain = snap.liveStrain,
+            pausedAtMs = snap.pausedAtMs, pausedDurationMs = snap.pausedDurationMs,
         )
+    }
+
+    fun toggleWorkoutPause() {
+        val w = _activeWorkout.value ?: return
+        val now = System.currentTimeMillis()
+        val updated = if (w.pausedAtMs == null) {
+            if (w.gpsEnabled) GpsSession.pause()
+            w.copy(pausedAtMs = now)
+        } else {
+            if (w.gpsEnabled) GpsSession.resume()
+            w.copy(pausedAtMs = null, pausedDurationMs = w.pausedDurationMs + (now - w.pausedAtMs))
+        }
+        _activeWorkout.value = updated
+        persistNonGpsWorkout(updated)
+    }
+
+    /** Abort the active workout and discard all in-flight data. */
+    fun discardWorkout() {
+        val w = _activeWorkout.value ?: return
+        _activeWorkout.value = null
+        gpsJob?.cancel(); gpsJob = null
+        activeWorkoutStore.clear()
+        if (w.gpsEnabled) {
+            GpsSession.stop()
+            if (!NoopPrefs.backgroundConnection(appContext)) WhoopConnectionService.stop(appContext)
+        }
+        _lastWorkout.value = null
     }
 
     /** Finish the active workout: score the captured HR window + finalize the GPS route, save a
@@ -1420,6 +1525,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val endMs = System.currentTimeMillis()
+        val pausedMs = w.pausedDurationMs + (w.pausedAtMs?.let { endMs - it } ?: 0L)
+        val activeDurationMs = (endMs - w.startMs - pausedMs).coerceAtLeast(0L)
         val avg = if (samples.isNotEmpty()) samples.sumOf { it.bpm } / samples.size else null
         val peak = if (samples.isNotEmpty()) samples.maxOf { it.bpm } else null
         // #983: score the SAVED workout with the wearer's measured resting HR, not the hardcoded
@@ -1431,7 +1538,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val restingHR = _today.value?.restingHr?.toDouble() ?: StrainScorer.defaultRestingHR
         val strain = if (samples.size >= 2)
             StrainScorer.strain(samples, maxHR = profileStore.hrMax.toDouble(),
-                restingHR = restingHR, sex = profileStore.sex) else null
+                restingHR = restingHR, method = NoopPrefs.effortMethod(appContext),
+                sex = profileStore.sex) else null
         // Estimate calories from the captured HR window (same Keytel/Harris–Benedict model the
         // auto-detector uses) so a manual session shows energy too, not just duration/strain. (#117)
         val energyKcal = if (samples.size >= 2)
@@ -1444,7 +1552,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         else null
         val row = WorkoutRow(
             deviceId = deviceId, startTs = w.startMs / 1000, endTs = endMs / 1000,
-            sport = w.sport.name, source = "manual", durationS = (endMs - w.startMs) / 1000.0,
+            sport = w.sport.name, source = "manual", durationS = activeDurationMs / 1000.0,
             energyKcal = energyKcal,
             avgHr = avg, maxHr = peak, strain = strain,
             distanceM = distanceM.takeIf { it > 0 },
@@ -1457,7 +1565,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         emitWorkoutsTrace {
             com.noop.analytics.WorkoutsTrace.sessionLine(
                 event = "end", sportKey = WorkoutEditing.traceSportKey(w.sport.name), hrSamples = samples.size,
-                durationSec = ((endMs - w.startMs) / 1000L).toInt(),
+                durationSec = (activeDurationMs / 1000L).toInt(),
                 gpsPoints = if (w.gpsEnabled) track.size else null,
             )
         }
@@ -1488,8 +1596,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // never null. (Fixes the NPE in @maddognik's ADB: captureWorkoutSample -> getValue on null.)
         @Suppress("UNNECESSARY_SAFE_CALL")
         val w = _activeWorkout?.value ?: return
+        if (w.pausedAtMs != null) return
         val s = w.samples + HrSample(deviceId = deviceId, ts = System.currentTimeMillis() / 1000, bpm = bpm)
-        val strain = StrainScorer.strain(s, maxHR = profileStore.hrMax.toDouble(), sex = profileStore.sex) ?: 0.0
+        val strain = StrainScorer.strain(
+            s, maxHR = profileStore.hrMax.toDouble(),
+            method = NoopPrefs.effortMethod(appContext), sex = profileStore.sex) ?: 0.0
         val updated = w.copy(
             samples = s, avgHr = s.sumOf { it.bpm } / s.size, peakHr = s.maxOf { it.bpm }, liveStrain = strain,
         )
@@ -1520,6 +1631,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         rescoreAfterEdit()
     }
 
+    /** Persist a bed/wake edit across a BRIDGED night's fragments (#1492), then re-score as
+     *  [updateSleepSessionTimes] does. The single-row call edits the winning fragment only, which on a
+     *  split night defines neither the displayed bedtime nor the displayed wake. */
+    suspend fun updateSleepGroupTimes(
+        group: List<com.noop.data.SleepSession>, newStartTs: Long, newEndTs: Long,
+    ) {
+        runCatching { repository.updateSleepGroupTimes(group, newStartTs, newEndTs) }
+        rescoreAfterEdit()
+    }
+
     /** Delete one sleep session, then re-score the affected day immediately so the dashboard aggregates
      *  recompute as if the misread night were never recorded — matching Swift SleepView's analyzeRecent()
      *  after deleteSleepSession. Swallows persist failures — the Sleep screen already removed it
@@ -1534,6 +1655,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *  analyzeRecent() after undoDeleteSleepSession. Swallows persist failures. */
     suspend fun undoDeleteSleepSession(session: com.noop.data.SleepSession) {
         runCatching { repository.undoDeleteSleepSession(session) }
+        rescoreAfterEdit()
+    }
+
+    /** Restore EVERY session the undo strip is holding, then re-score ONCE (#1492).
+     *
+     *  A bed/wake correction can retire several fragments of a bridged night, and the single-session call
+     *  above re-scores on each invocation — looping it would run a full analyzeRecent per restored
+     *  fragment, back to back, on the exact pass #1005/#836 found to be the heaviest thing NOOP does in the
+     *  background. The restores are independent; only the scoring needs to see the finished set. */
+    suspend fun undoDeleteSleepSessions(sessions: List<com.noop.data.SleepSession>) {
+        if (sessions.isEmpty()) return
+        sessions.forEach { runCatching { repository.undoDeleteSleepSession(it) } }
         rescoreAfterEdit()
     }
 
@@ -1637,6 +1770,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 useMotionAwareWake = PuffinExperiment.from(appContext).motionAwareWake,
                 // #103: SpO₂ candidate @82 display toggle — same flag the 15-min loop reads.
                 spo2CandidateDisplay = NoopPrefs.spo2CandidateDisplay(appContext),
+                effortMethod = NoopPrefs.effortMethod(appContext),
             )
         }.onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
     }
@@ -1666,10 +1800,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // manual rows already carry their own HR so they pass through unchanged. #961: also backfill a
             // strap-native row's Effort (strain) from the strap trace when it's null, so a live/manual
             // session that ended with sparse HR can't show a blank Effort while the day total counted it.
+            // #1601: pass the ACTIVE strap id. Left to its "my-whoop" default, the fill resolved
+            // `importedSourceIdsFor("my-whoop")` = the canonical id ALONE, while the detail sheet's chart,
+            // zones and HR-recovery all resolve `importedSourceIdsFor(deviceId)` = active ∪ canonical. On
+            // an install whose strap banks under a non-canonical id the chart therefore found HR and this
+            // fill did not, and an imported session rendered "AVG –" beside a populated graph, a full zone
+            // split and a peak — every one of them derived from the samples the average claimed not to
+            // have. The fill's own doc promises "display == graph == zones == effort by construction";
+            // this is the line that has to pass the same id for that to hold.
             val filled = repository.fillWorkoutHrFromStrap(
                 (whoop + apple + detected + activityFiles),
+                strapDeviceId = deviceId,
                 strainMaxHR = profileStore.hrMax.toDouble(),
                 strainSex = profileStore.sex,
+                effortMethod = NoopPrefs.effortMethod(appContext),
             )
             // #687: collapse the SAME activity tracked live under the strap AND imported from Health
             // Connect / Apple Health into one richer entry — they sit under different sources so without
@@ -1774,8 +1918,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val ids = WhoopRepository.workoutHrDeviceIds(source, rowDeviceId, deviceId)
         val samples = runCatching { repository.hrSamplesFor(ids, from, to) }.getOrDefault(emptyList())
         if (samples.isEmpty()) return null
-        val age = profileStore.age.toDouble().takeIf { it > 0 } ?: 30.0
-        val zoneSet = com.noop.analytics.HrZones.zones(age = age)
+        val zoneSet = profileStore.hrZoneSet
         val tiz = com.noop.analytics.HrZones.timeInZone(samples, zoneSet)
         val minutes = tiz.seconds.map { it / 60.0 }
         return if (minutes.any { it > 0.0 }) minutes else null
@@ -2060,6 +2203,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         ble.debugLogcat = enabled
     }
 
+    /** #polar-debug: toggle the Polar strap-identity diagnostic. Read live at connect by the strap source
+     *  (via [SourceCoordinator]); no restart needed. Diagnostic-only — nothing gates behaviour on it. */
+    fun setPolarDebugLogging(enabled: Boolean) {
+        NoopPrefs.setPolarDebugLogging(appContext, enabled)
+    }
+
+    /** #1284 residual 3: toggle EXPERIMENTAL Oura 0x49-onset keying. Read live at persist by the Oura source
+     *  (via [SourceCoordinator]); no restart needed. Off = the shipped end-anchored persist. */
+    fun setOuraOnsetKeying(enabled: Boolean) {
+        NoopPrefs.setOuraOnsetKeying(appContext, enabled)
+    }
+
     /** #1121: toggle the opt-in rolling "detailed capture" strap-log file. Persisted so it survives a
      *  process kill (re-armed in [init] below). */
     fun setDetailedCapture(enabled: Boolean) {
@@ -2332,6 +2487,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         reconcileStrapAlarm()
     }
 
+    /** Set the days the phone alarm fires on. EMPTY = every day (see [SmartAlarmStore.weekdays]).
+     *
+     *  Re-arms while enabled so deselecting today's day moves the alarm to the next selected one
+     *  immediately, rather than at the next fire. Also reconciles the strap: "Buzz WHOOP 4" arms the
+     *  band at THIS alarm's time, so a day switched off here must not leave the strap buzzing on it. */
+    fun setPhoneAlarmWeekdays(days: Set<Int>) {
+        phoneAlarmStore.weekdays = days
+        _phoneAlarmWeekdays.value = phoneAlarmStore.weekdays
+        if (phoneAlarmStore.enabled) SmartAlarmScheduler.arm(appContext, phoneAlarmStore)
+        reconcileStrapAlarm()
+    }
+
     /** Toggle the "Buzz WHOOP 4/5" companion (#536). Routes through the single strap-alarm reconciler so
      *  enabling/disabling it never clobbers a smart wake-alarm sharing the one firmware slot (#5): on the
      *  reconcile re-evaluates BOTH flags and arms the earliest, off it re-evaluates and keeps the slot for
@@ -2372,6 +2539,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _healthAlert.value = if (enabled) IllnessWatch.evaluate(recentDays.value) else null
     }
 
+    /** #hide-cycle: hide/show the cycle-awareness offer. Hiding also stops active tracking, so "hidden"
+     *  means fully gone; showing re-offers it. Reversible. Twin of the iOS Automations master toggle. */
+    fun setCycleAwarenessHidden(hidden: Boolean) {
+        _cycleAwarenessHidden.value = hidden
+        NoopPrefs.setCycleAwarenessHidden(appContext, hidden)
+        if (hidden && _cycleTrackingEnabled.value) setCycleTrackingEnabled(false)
+    }
+
     /** Flip cycle awareness (v5 skin-temp suite). Persists and recomputes the v5 signals immediately so
      *  the Health hub's Cycle card flips between its opt-in card and the live result without a data change. */
     fun setCycleTrackingEnabled(enabled: Boolean) {
@@ -2396,6 +2571,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *  iOS SettingsView `.onChangeCompat` → `analyzeRecent()` pattern. */
     fun setSpo2CandidateDisplay(enabled: Boolean) {
         NoopPrefs.setSpo2CandidateDisplay(appContext, enabled)
+        viewModelScope.launch { rescoreAfterEdit() }
+    }
+
+    /** #1545: the Effort TRIMP recipe changes stored Effort for EVERY day in the window, so re-score on
+     *  the flip rather than leaving the user on the old recipe's numbers until the next analyze tick —
+     *  which the toggle's own copy promises. Twin of the iOS onChange handler. */
+    fun setBanisterEffort(enabled: Boolean) {
+        NoopPrefs.setBanisterEffort(appContext, enabled)
         viewModelScope.launch { rescoreAfterEdit() }
     }
 
@@ -2498,9 +2681,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 dayOverrides = _smartAlarmDayOverrides.value,
             )
         } else null
-        // Buzz-WHOOP-4 companion's requested time: the phone alarm's EARLIEST wake time, next occurrence.
+        // Buzz-WHOOP-4 companion's requested time: the phone alarm's EARLIEST wake time, next occurrence
+        // ON A DAY THAT ALARM ACTUALLY FIRES. This routes through the same weekday-aware resolver the
+        // smart alarm uses (with no per-day overrides — the phone alarm has none) rather than
+        // nextDailyEpochSec, which is unconditionally daily: leaving it daily would buzz the strap on a
+        // morning the phone alarm is switched off, which is precisely the day the user asked to sleep in.
+        // An empty weekday set still means every day, so the default behaviour is unchanged.
         val buzzEpoch = if (_buzzWhoop4Enabled.value) {
-            nextDailyEpochSec(phoneAlarmStore.targetMinutes)
+            nextSmartAlarmEpochSec(phoneAlarmStore.targetMinutes, phoneAlarmStore.weekdays)
         } else null
 
         val epochSec = earliestStrapAlarmEpochSec(smartEpoch, buzzEpoch)
@@ -2637,9 +2825,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (hr < 30) return
         val maxHR = profileStore.hrMax.toDouble()
         if (maxHR <= 0) return
-        // Memoized on maxHR: this runs every ~1 Hz live-HR sample while zone coaching is active, but the
-        // zone set only changes when the user edits their max HR — so don't rebuild it per tick.
-        val zone = zoneSetCache.zones(maxHR).zoneNumber(hr.toDouble())
+        // Memoized on maxHR + personalized bounds: this runs every ~1 Hz live-HR sample while zone
+        // coaching is active, but the zone set only changes when the user edits their max HR or custom
+        // zones — so don't rebuild it per tick.
+        val zone = zoneSetCache.zones(maxHR, profileStore.hrZoneThresholds?.map(Int::toDouble))
+            .zoneNumber(hr.toDouble())
         val previous = lastZone
         lastZone = zone
         val loops = zoneCoachBuzzLoops(previous, zone, _zoneCoachRecovery.value)
@@ -2790,8 +2980,13 @@ internal fun nextSmartAlarmEpochSec(
 
 /**
  * Next strictly-future occurrence of a daily wake time (today, or tomorrow if already passed), as an
- * epoch-second. Used for the "Buzz WHOOP 4/5" companion, which fires every day at the phone alarm's
- * earliest wake time (no weekday selection). Pure + clock-injectable so it can be unit-tested.
+ * epoch-second. Pure + clock-injectable so it can be unit-tested.
+ *
+ * NO PRODUCTION CALLER as of the phone alarm gaining weekday selection: the "Buzz WHOOP 4/5" companion
+ * was its only one, and it now routes through [nextSmartAlarmEpochSec] so a day switched off on the
+ * phone alarm cannot leave the strap buzzing on that morning. Kept because it is the reference for what
+ * "unconditionally daily" means here — [nextSmartAlarmEpochSec] with an empty weekday set must stay
+ * equivalent to it, and its own test is what pins that. Delete it only alongside that equivalence.
  */
 internal fun nextDailyEpochSec(
     minuteOfDay: Int,

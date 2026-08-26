@@ -382,7 +382,24 @@ Three writes to `…0002`, each gated on its ACK; daytime-HR feature id = `0x02`
 - **`bpm = round(60000 / ibi_ms)`** [relue]
 - Example `[08,09] = 01 04` → `ibi = 1025 ms` → ≈ 59 BPM. [relue]
 
-**Disable:** `2f 03 22 02 01` → ACK `2f 03 23 02 00`. Stream stops on ACK. [relue][open_oura-r3]
+**Disable:** `2f 03 22 02 00` → ACK `2f 03 23 02 00`.
+
+> **Correction (2026-08-19):** an earlier draft of this line, and NOOP's own `liveHRDisable()`, wrote
+> mode byte **0x01** here on the strength of [relue][open_oura-r3]'s "stream stops on ACK" report. But
+> §7.2's APK-sourced feature-mode table (the citation this doc itself treats as authoritative over
+> earlier drafts) defines `0x01` as **"automatic"**, not "off" — `0x00` is off. §7.4's own worked
+> example shows mode=1 read back *while daytime-HR is actively streaming*, which is hard to square with
+> "disable." Two consecutive real-hardware NOOP nights (08-17/18, 08-18/19) directly falsified "stream
+> stops on ACK" for the 0x01 write: green `0x28` pushes continued all night at reduced-but-non-zero
+> volume, including resumptions with no reconnect in between — the signature of the ring's own
+> adaptive/motion-triggered "automatic" sampling, not a keep-alive wearing off. Byte corrected to
+> `0x00` here and in `Commands.swift`/`Commands.kt`; unvalidated on hardware as of this edit — see the
+> worklog for the next capture's result. [relue][open_oura-r3]'s original report may reflect a
+> transient quiet window inside the ~20 s auto-revert (§5.7) rather than a genuine off state.
+
+Also send the matching unsubscribe when tearing down a live session: `2f 03 26 02 00` → ACK
+`2f 03 27 02 00`. Step 3 of the enable triplet above leaves the ring subscribed at "latest"
+(byte2 = 2); the mode-disable write alone never turns that subscription back off.
 
 > Behaviour caveat: [open_oura-r3] reports that on its Ring-3 unit, realtime `0x06`-based enabling ACK'd but emitted no stream within 60–90 s, whereas the `0x2F`/feature-`0x02` path above produced ~1 Hz IBI. **NOOP must use the feature-`0x02` (`0x2F`) path, not `0x06`,** and treat absence of `0x28` pushes within ~10 s as "not streaming → retry/reseat."
 
@@ -543,16 +560,108 @@ like its sibling banked streams (`.hrv`/`.temp`/`.spo2`/`.sleepPhase`) — the f
     **zero overlapping days**. The comparison above is therefore distribution-level across
     *non-overlapping* periods (per-sample values vs nightly averages, different nights), which is why it
     can bound the discrepancy but not decompose it.
-  - **Re-pairing to the Oura app afterwards does NOT work — already refuted in practice.** Whichever
+  - **⚠️ CORRECTION 2026-08-19 — "does NOT work" is refuted, not confirmed.** A user re-paired the ring
+    to the Oura app via an OS-level Bluetooth unpair/re-pair (not a ring-side reset — see §5.3's
+    correction for the exact procedure and its caveats) and the app successfully backfilled full sleep
+    summary data, including `0x6F`-relevant SpO2, for two nights NOOP had already drained
+    (2026-08-13/14, 08-18/19). The original claim below is kept for its citation history, but is now
+    known to be wrong for at least this reproduction path — **the same-night comparison this section
+    says is "structurally blocked" is not, for sleep-summary-level data.** A first paired comparison
+    ran on these two nights: Oura app displayed SpO2 98% both nights, which round-matches the
+    offset−0.32/clamp[85,100] correction from §6.5.0.1 (98.11%, 97.39%) and does **not** match the raw
+    wire mean (99.11%, which would round to 99%). n=2 rounded integers, so this corroborates rather than
+    replaces the n=3 WHOOP-referenced MAE analysis in §6.5.0.2 — it does not by itself resolve path (a)
+    below, but it is no longer true that no paired data exists at all.
+    Full writeup: `worklog/analysis/2026-08-19-1730-oura-app-groundtruth-first-paired-comparison.txt`.
+  - **⚠️ UPDATE 2026-08-22 — 3rd full-tier paired night, same read.** Oura app displayed SpO2 **98%**
+    for 08-21/22 (screenshot, not a live-glance). Raw wire mean **99.66%** (rounds to 100% — miss);
+    ceiling@100 **98.48%** (rounds to 98% — hit); offset−0.32+clamp[85,100] **98.31%** (rounds to
+    98% — hit). Running full-tier tally across 3 screenshot-backed nights: raw 1/3, ceiling@100
+    **3/3**, offset+clamp 2/3 — raw is now the transform with the weakest track record of the
+    three; ceiling@100 slightly edges out the offset+clamp fit on this specific (weak,
+    rounded-integer) bar, though §6.5.0.1's own MAE-based fit still argues the opposite ordering.
+    n=3 (4 counting a weaker 08-20/21 live-glance point that missed on all three transforms) does
+    not change the ship decision. Full writeup:
+    `worklog/analysis/2026-08-22-1046-spo2-oura-app-groundtruth-night3.txt`.
+  - ~~**Re-pairing to the Oura app afterwards does NOT work — already refuted in practice.** Whichever
     client drains a window CONSUMES it, so the app finds nothing left for the nights NOOP captured (and
     vice versa). See the warning in §5.3, which records that observation and flags NOOP's unconditional
-    `28 01 00` flush as a candidate cause.
+    `28 01 00` flush as a candidate cause.~~ *(superseded by the correction above, kept struck-through
+    for citation history rather than deleted.)*
   - **Paths that could still settle it**, in increasing cost: (a) **resolve the §5.3 flush question** — if
     suppressing `28 01 00` leaves the history readable by BOTH clients, this comparison becomes possible
     for free. (b) A **reference pulse oximeter worn during sleep** alongside the ring — definitive, but
     `0x6F` only flows at rest so a daytime spot-check produces nothing comparable. (c) A **second ring**,
     one bonded to each client. Until one of these happens the transform stays UNKNOWN and is documented,
     not guessed.
+
+#### 6.5.0.1 The corpus above was itself collision-lossy — re-measured on clean post-#1070 data (2026-08-19)
+
+- **The ~51 %/no-reconciliation numbers above were measured on data where the #1070 primary-key
+  collision (§ this file's issue tracker; `spo2Sample` keyed `(deviceId, ts)` with all 13 samples of a
+  record written at one `ts`) was still dropping 12 of every 13 samples, and the survivor was always the
+  record's FIRST value — a non-random selection, not a random subsample.** That is a real confound on top
+  of the reduced sample count, not just noise.
+- Re-measured on one wearer's own staging capture (`oura-2H3B2405003655`) across three nights that post-date
+  the #1070 fix and hit 95–97 % of theoretical 1 Hz coverage (2026-08-04/05/06, n=93,700 samples, ~1
+  sample/second all night): **mean 98.36 (not 99.98), median 98.0 (not 101), max 106 (not 107), 20.4 %
+  over 100 (not ~51 %)**. Already visibly closer to the Cloud reference (mean 97.59, median 97.68) before
+  any correction.
+- **Re-running the offset fit on this clean data narrows the mean/median disagreement by >4×.** The offset
+  that centers the mean to Cloud truth is −0.77; the offset that centers the median is −0.32 — a **0.45 pt
+  gap**, vs. the original corpus's ~2 pt gap ("−2 matches the mean but not the median; −4 the median but
+  not the mean"). **Offset −0.32 + clamp[85,100] reproduces the Cloud reference almost exactly: mean 97.64
+  (target 97.59), median 97.68 (exact).** This does not hold up the original "no offset+clamp pair
+  reconciles it" framing — that conclusion was drawn from the collision-lossy corpus.
+- **Independent same-wearer cross-check:** the wearer's own WHOOP strap reports a 96 % 30-day SpO2 score
+  (roughly contemporaneous, unlike the Cloud reference's non-overlapping history). Oura raw on the same 3
+  nights: 98.4 %. A **ceiling-only clamp** (`min(x,100)`, no offset) brings it to 97.9 % — still 1.9 pts
+  above WHOOP, because a ceiling only touches the ~20 % of samples that were already over 100 and leaves
+  the rest of the distribution untouched. Consistent with the offset-based fits above needing more than a
+  ceiling; not proof, since WHOOP's own SpO2 is a different sensor/algorithm, not ground truth.
+- **⚠️ Unrelated contamination found in the same table, outside these 3 nights:** ~10 % of this device's
+  all-time `spo2Sample` rows are not plausible percentages — negative down to −1016, positive up to
+  **+11,709,098**, which is exactly the magnitude range this section already names for the `0x77` DC/
+  perfusion channel that the `unit == "raw"` guard (`OuraStreamMapping.swift`) is supposed to exclude.
+  None of it falls inside the three clean nights above (verified: min 84, max 106, zero negative in that
+  window). Not yet root-caused — check whether the affected rows predate the guard, or whether there is a
+  live regression, before treating it as fixed.
+- **This still does not clear the bar to ship a correction.** n = 3 nights from one wearer, the fit is to
+  an *aggregate* nightly-average reference (not paired same-night truth — the one-client-at-a-time bonding
+  limit above still applies), and the known 7.6–52 % night-to-night swing in overshoot rate means a
+  3-night offset may not generalize. **Next step in progress:** pulling the same wearer's WHOOP *per-night*
+  SpO2 for these exact 3 dates (08-04/05/06) — the first comparator close enough in both subject and time
+  to actually attempt decomposing offset from clamp, rather than fitting to an aggregate.
+
+#### 6.5.0.2 First same-night paired comparison (2026-08-19, same wearer's WHOOP export)
+
+- The wearer's WHOOP export (`physiological_cycles.csv`, `Niveau d'oxygène %`) has cycle-start
+  timestamps within ~2 minutes of the three Oura sleep sessions above — the first same-person,
+  same-night SpO2 comparator this project has had (the Cloud reference above has zero overlapping days
+  with any NOOP capture; this one is the same three nights exactly).
+
+  | night | Oura raw mean | Oura ceiling@100 | **WHOOP (truth)** | raw Δ | ceiling Δ |
+  |---|---|---|---|---|---|
+  | 08-04 | 99.12 | 98.18 | **97.14** | +1.98 | +1.04 |
+  | 08-05 | 98.12 | 97.90 | **97.45** | +0.67 | +0.45 |
+  | 08-06 | 97.92 | 97.63 | **96.88** | +1.04 | +0.75 |
+  | MAE | | | | **1.23** | **0.75** |
+
+  (WHOOP's 30-day rolling score reads 96 % — lower than any of these three nights individually; the
+  30-day figure is not a valid stand-in for a same-night comparison, it pulls in other nights.)
+
+- **The offset −0.32 + clamp[85,100] fit above (§6.5.0.1, derived from the unrelated 922-night Cloud
+  aggregate) scores MAE 0.49 against this real paired WHOOP data — matching a same-night best-fit offset
+  (−1.23, fit directly to these 3 WHOOP nights, MAE 0.50).** Two corrections derived from completely
+  non-overlapping references converge on the same accuracy — evidence the §6.5.0.1 fit is in the right
+  neighborhood, not a coincidence of fitting to the wrong reference.
+- **Still not a clean single-number fit.** Even the same-night best-fit offset (exact on the 3-night
+  average, by construction) leaves per-night residuals of −0.6 to +0.75 pts — more than half the size of
+  the correction itself. Consistent with the documented 7.6–52 % overshoot swing: a flat additive offset
+  has a real accuracy floor here, it does not eliminate the error.
+- **n = 3 nights is still the binding limit.** This is the first real paired decomposition NOOP has had
+  for this signal, not a validated calibration. More nights (ideally spanning the known overshoot swing)
+  are needed before any offset is defensible enough to write to `spo2Pct`.
 
 ### 6.5.1 SpO2 ratio-of-ratios - `0x8b` `spo2_r_pi_event` — **NOT OBSERVED in NOOP captures**
 - Carries the raw **ratio-of-ratios `r`** plus a **perfusion index `pi`** (quality parameter). This is the
@@ -612,7 +721,102 @@ like its sibling banked streams (`.hrv`/`.temp`/`.spo2`/`.sleepPhase`) — the f
 
 ### 6.12 Sleep architecture
 - **`0x4B` / `0x4E` / `0x5A` `sleep_phase_details`** (≥19 B): byte6 = header; phase codes are **2-bit**, 4 per byte (bits `[7:6][5:4][3:2][1:0]`); codes **0=deep, 1=light, 2=rem, 3=awake** per open_oura's VALIDATED `decode_sleep_phases` (events.rs `PHASE = ["deep","light","rem","awake"]`). **CORRECTION:** an earlier revision of this line taught `0=awake, 1=light, 2=deep, 3=REM` from [ringverse] (unverified); live captures contradicted it (records decoded at wake carry code 3 = awake under open_oura's mapping), and both platform decoders inherited the bug from this exact text. [open_oura]
-- **`0x6A` `sleep_period_info`** (14 B): bytes6–9 four int8 metrics; bytes10–11 `uint8/8.0`; byte12 motion-seconds uint8; byte13 sleep-state int8; bytes14–15 `uint16 LE / 65536`. [ringverse]
+- **`0x6A` `sleep_period_info`** (14 B declared length ⇒ a fixed **10-byte body**) — **the ring's own
+  average HR and a breath rate.** Body offsets, names and multipliers per [open_ring]
+  (`decode_sleep_period_info_2` / `parse_api_sleep_period_info`; the four `× …` constants are its
+  `.rodata` block):
+
+  | body byte | field | type | scale | note |
+  |---|---|---|---|---|
+  | 0 | `average_hr` | u8 | **× 0.5** | wire 130 = 65 bpm — **not** a bare bpm byte |
+  | 1 | `hr_trend` | **s8** | × 0.0625 | the only SIGNED field in the body |
+  | 2 | `mzci` | u8 | × 0.0625 | meaning undocumented |
+  | 3 | `dzci` | u8 | × 0.0625 | meaning undocumented |
+  | 4 | **`breath`** | u8 | **/ 8.0** | **breaths per minute** |
+  | 5 | `breath_v` | u8 | / 8.0 | breath variability |
+  | 6 | `motion_count` | u8 | — | source's parser THROWS if ≥ 121 |
+  | 7 | `sleep_state` | u8 | — | source's parser THROWS if ∉ {0,1,2} |
+  | 8–9 | `cv` | u16 LE | / 65536 | ⇒ [0,1) |
+
+  **CORRECTION to this line's previous revision**, which read *"bytes6–9 four int8 metrics; bytes10–11
+  `uint8/8.0`; byte12 motion-seconds; byte13 sleep-state int8; bytes14–15 uint16 LE/65536"* [ringverse]:
+  the OFFSETS were right and the `/8.0` was right, but there were **no names** — so the tag looked like
+  four anonymous metrics rather than a heart rate and a respiration channel — and `average_hr` was typed
+  `int8` with **no `× 0.5`**, which reads every value above 63.5 bpm as a negative number. [ringverse]
+  calls bytes 4/5 `field_a` / `field_b`; neither source NOOP already carried named them.
+
+  **NOOP verification, four consecutive real Gen 3 overnights (2026-08-05 → 08-09, 3 493 records):**
+  every body is exactly 10 bytes; **every** record satisfies both declared invariants (`motion_count <
+  121`; `sleep_state ∈ {0,1,2}`, and only 0 and 1 ever occur); **every** `breath` value is an exact
+  multiple of 0.125 across 78–84 distinct values per night, which confirms the `/8.0` fixed point *from
+  the data* rather than assuming it. Per-night medians: `average_hr` **54.0 / 53.0 / 53.5 / 54.0 bpm**,
+  `breath` **14.75 / 14.375 / 14.625 / 15.0 /min** (IQR ≈ 13.1–15.9), `breath_v` ≈ 4.2–5.0.
+  The `× 0.5` scale is settled by its **falsifier**: read as `× 1.0` the same records sit **+56 … +62
+  bpm** above every other HR channel we hold for the same wearer, and the independently-decoded banked
+  IBI (§6.1, WHOOP-validated at RHR 55 in #511) medians 54 bpm — which `× 0.5` reproduces. ~50 % of
+  records carry an ODD wire byte (0.506 / 0.530 / 0.507 / 0.467), so the half-bpm steps are real
+  resolution, not an artifact. Cadence ≈ **296 s**, and the tag is emitted only during sleep periods
+  (the 4 nights' records span far less wall-clock than their ring-time range).
+
+  ⚠️ **`breath` is the RING's own measurement, not a NOOP-derived estimate — Tier B on decode
+  provenance, stored, and on a ring night it IS the scored `dailyMetric.respRateBpm` (see the three
+  constraints below).** The
+  distinction matters: the #194 rule governs signals NOOP *derives* from raw sensor data (PPG→HR
+  autocorrelation, RSA-from-R-R), where the method can manufacture a plausible number. Here the firmware
+  computes it and NOOP only decodes a field, the same standing as the ring's own SleepNet hypnogram —
+  which NOOP already persists and scores from. What must be right is the decode.
+
+  Both decoders **return nil/null when either declared invariant is violated**: the source's own
+  parser throws there, so such a body is not this layout, and "not decoded" is the honest answer. It
+  costs nothing — all 3 493 real records pass. `average_hr` is still **never** folded into a stream: it
+  would join the beat-derived HR series at a different cadence and a different provenance.
+
+  **What the cross-checks say.** The strongest one is not against WHOOP: these records median
+  **14.75/min** against the SAME wearer's **851-night Oura APP export** at median 15.250 (IQR
+  14.875–15.625) — the same quantity in the same band, which is byte 4 checked against Oura's own
+  reported respiratory rate. ⚠️ Distribution, NOT paired: the export ends 2026-07-07 and these records
+  start 2026-08-05, and a paired test is impossible by construction (the ring pairs to ONE app at a
+  time, so while NOOP holds it nothing reaches Oura's cloud). Against a WHOOP worn on the same nights,
+  measured over 18 nights of that wearer's history carrying both vendors, **Oura's own app scores
+  r = +0.680 against WHOOP**, with Oura below
+  WHOOP on 18/18 nights (Δ −1.158, sd 0.359). That is a **ceiling** on any Oura-derived respiratory
+  rate, not a target — and this decode already sits at it: **r = +0.599** over 6 paired nights (**+0.748**
+  over the 4 with good coverage), Δ −1.458 with the sign stable 6/6, of which −1.158 is the measured
+  vendor offset and only **~−0.30** is this decode's own residual. That residual is *implied*, never
+  pairable, because the two references are mutually exclusive per night. The internal falsifier passed:
+  mapping each night to the WRONG date collapses r from +0.591 to **−0.151**, so the agreement is
+  date-aligned rather than coincidental. Within the Oura-app distribution above, our medians sit on the
+  **low side** (~12th pct) — inside the band, not centred in it.
+
+  ⇒ Judging this decode by "does it beat WHOOP" would ask it to beat **Oura's own app** at reproducing
+  WHOOP — the wrong test for a vendor-computed value, and an impossible one. So NOOP maps **`breath`
+  only** onto a `respSample` row under the RING's deviceId (`OuraStreamMapping`, both platforms), in
+  **milli-breaths-per-minute** (`raw == wireByte × 125`, exact for all 256 wire values — the same table
+  otherwise carries a WHOOP's raw respiration ADC waveform, a different quantity, so the row's owner is
+  what distinguishes them, via `OuraRespScale`). It is shown on the day/Deep-Timeline respiration track
+  in breaths/min, and it **becomes the night's `dailyMetric.respRateBpm`** — the scored slot — in place of
+  NOOP's RSA-from-R-R estimate, which on a ring night is built from banked R-R and carries no breathing
+  information at all (shuffling the night returns the same 13.3333 bpm). Three constraints ride with that:
+  1. **Coverage, not trust:** the night's value is the MEDIAN of the rows inside a matched in-bed session,
+     and only when they SPAN ≥ 1 h (`AnalyticsEngine.vendorRespMinSpanS`) and the median lands inside the
+     8–25 bpm band the RSA path is clamped to. A 36-minute tail of a night is not that night's
+     respiration — and the gate is on span, not row count, because the record cadence is not constant
+     (real nights hold both ~30 s and ~296 s spacing).
+  2. **The baseline is scoped to the current device era** (`Baselines.deviceEraEpoch`, #459). A WHOOP
+     export reports its own measured rate (~16.1 on the reference history) and the ring reports ~14.6, so
+     pooling them in one 28-day baseline turns a strap SWITCH into a ~3σ illness-ward step against a
+     ~0.52 bpm spread — a device artifact scored as physiology. A single-brand history is unaffected
+     (the epoch is 0.0, i.e. the fold is byte-identical to before).
+  3. **It never reaches the sleep stager.** `OuraRespScale.forScoring` keeps it out: the stager reads
+     `respSample` as a ~1 Hz raw ADC WAVEFORM and would run a peak detector over a per-window RATE — a
+     shape mismatch, not a trust one, and the same reason 0x47 motion is never folded into
+     `gravitySample` (#804).
+
+  📌 **This does not retract the respiratory-rate gate.** That work proved RSA is unrecoverable *from
+  banked IBI* (shuffling the beats returns the same value; re-timing defeats the gate) and refusing to
+  publish a fabricated number is right regardless. What it corrects is that finding's *second* clause —
+  "the app must use a channel we never receive". We do receive one; we had simply never decoded the tag.
+  0x6A changes what may eventually sit behind the gate, not whether the gate belongs there.
 - **`0x72` `sleep_acm_period`** (16 B): values0–2 = `whole(8)+frac(8)/255`; values3–5 = `whole(4)+frac(12)/4095`. [ringverse]
 - **`0x49` `sleep_summary_1`**: `start_offset_min` / `end_offset_min`, both uint16 LE **minutes
   before the event time** — the ring's tracked sleep window is
@@ -690,6 +894,7 @@ edit of the ring's tag.
 > defeats the step-decoder test in the ⛔ entry further down.
 
 - **`0x47` `motion_events`** (variable): byte6 bits`[7:5]`=field_a, `[4:0]`=field_b; bytes7–9 = three **int8 × 8** axis magnitudes; optional bytes10–11. [ringverse]
+  - **Persisted as an `OURA_MOTION` event (#834), instrumentation only** (never scored / staged): stored in the `event` table `(deviceId, ts, kind='OURA_MOTION', payloadJSON)`, each window anchored to its OWN ring-time. Payload keys are `orientation`, `motion_seconds`, `x`, `y`, `z`, and — **only when the record carried them** — `low_intensity`, `high_intensity`. The key set is therefore **NOT fixed**: a short (4-byte) record omits the two intensity keys rather than faking a `0`, so any reader must treat `low_intensity` / `high_intensity` as **optional**. Collision note: the event PK is `(deviceId, ts, kind)` and the insert is `ON CONFLICT DO NOTHING`, so two windows anchoring to the same UTC second would drop the later one. That spacing is **observed, not protocol-guaranteed** — the ring emits a motion window on a ~30 s base cadence (stretching longer when still, movement-gated). Evidence (one ring, on-device sidecar): across **2917 windows spanning ~49 h over 3 calendar days**, every window anchored to a **distinct** UTC second — **0** same-second pairs, **0** rows dropped; gap min **26 s** / median **30 s** (2296/2871 gaps exactly 30 s), tightest gap ~26× the 1 s a collision would need. Acceptable for instrumentation; if a future cadence spike ever collided, the loss is one diagnostic window.
   - **⛔ `low_intensity` / `motion_seconds` SATURATE — they are occupancy, not cadence (NOOP, 2026-08-02).**
     Both fields cap at **29** within a 30 s record. Across 168 records of continuous 4.6 km·h⁻¹ walking,
     65 % of `low_intensity` and 82 % of `motion_seconds` samples are pinned at ≥ 27, mean 26.4 / 27.0,
@@ -1032,7 +1237,7 @@ Tags that appear in the banked stream but NOOP does not decode. Payloads are the
 | `0x61` | 28760 | 3–14 | `1a18009c3700007c150000cb` | **SOLVED as a channel, see §9.1** — a subtype-multiplexed firmware DIAGNOSTIC stream, not one message and not a physiological signal. **NOT battery** — the `[open_oura-act]`-adjacent "`0x61` battery" label does not match here (non-percent, high-frequency) |
 | `0x4a` | 8416 | 10 | `00000000000000000000` | payload observed all-zero — likely a keepalive / placeholder |
 | `0x72` | 5723 | 12 | `120027000100150018000200` | six int16-LE small values — a vector (motion / accel?) |
-| `0x6a` | 5689 | 10 | `7e00230b90140001f8b0` | mixed; a `0001f8b0` / `0001feb8` trailer recurs |
+| `0x6a` | 5689 | 10 | `7e00230b90140001f8b0` | **SOLVED, see §6.12** — `sleep_period_info`: the example decodes to `average_hr` 63.0 bpm, `breath` 18.0/min, `motion_count` 0, `sleep_state` 1, `cv` 0.691. The "recurring `0001f8b0` / `0001feb8` trailer" noted here was never a trailer: it is `motion_count`=0, `sleep_state`=1 and the 2-byte `cv`, and it recurs because a still sleeper produces those three over and over |
 | `0x6d` | 3042 | 13 | `00c4ffffb5ffffd2ffffeaffff` | **`measurement_quality`** (24-bit signed) per [ring4-ble] — supersedes the earlier gravity/accel guess; our capture reads `00` + int16-LE-looking negatives |
 | `0x6c` | 1750 | 4 | `02020400` | `02 NN 04 00` — small state / counter |
 | `0x5b` | 416 | 10–13 | `030093dd10dbc7c00000` | variable, leading sub-type byte |

@@ -48,15 +48,28 @@ object StrapLogGenerations {
     fun roll(previousTail: List<String>, existing: List<List<String>>, nowMs: Long): List<List<String>> {
         if (previousTail.isEmpty()) return existing
         val iso = Instant.ofEpochMilli(nowMs).truncatedTo(ChronoUnit.SECONDS).toString()
-        val header = "===== previous app session, ${previousTail.size} line(s), rolled at $iso (this launch) ====="
         val clipped = if (previousTail.size > GENERATION_TAIL_LIMIT) {
             previousTail.subList(previousTail.size - GENERATION_TAIL_LIMIT, previousTail.size)
         } else previousTail
+        // Say the KEPT count, and say so when the head was dropped — byte-identical wording to iOS,
+        // because the same log tools parse both platforms' report.txt. The header used to report only
+        // the pre-clip total, so a generation that had lost its first 1,000 lines still announced
+        // "2000 line(s)" and read as a complete session; the missing head then measures as silence.
+        val count = if (clipped.size == previousTail.size) {
+            "${previousTail.size} line(s)"
+        } else "${clipped.size} of ${previousTail.size} line(s), head clipped"
+        val header = "===== previous app session, $count, rolled at $iso (this launch) ====="
         val gens = existing.toMutableList()
         gens.add(listOf(header) + clipped)
         while (gens.size > MAX_GENERATIONS) gens.removeAt(0)
         return gens
     }
+
+    /** The marker separating banked previous sessions from this process's live tail. ONE definition:
+     *  `WhoopBleClient.exportLogLines` emits the same marker when it builds the line form without going
+     *  through [previousSessionsText], and two copies of this literal could drift apart silently — the
+     *  export would still render, just with a boundary the log parsers no longer agree on. */
+    const val CURRENT_SESSION_MARKER = "===== current app session ====="
 
     /**
      * The previous processes' lines, oldest-first, ready to sit AHEAD of the current session in an export.
@@ -67,7 +80,28 @@ object StrapLogGenerations {
      */
     fun previousSessionsText(generations: List<List<String>>): String {
         if (generations.isEmpty()) return ""
-        return generations.joinToString("\n") { it.joinToString("\n") } + "\n" +
-            "===== current app session =====\n"
+        return previousSessionsLines(generations).joinToString("\n") + "\n"
+    }
+
+    /**
+     * The same block as [previousSessionsText], as LINES — for callers that immediately split it again
+     * (`WhoopBleClient.exportLogLines`, feeding readouts that filter by domain tag).
+     *
+     * [previousSessionsText] is DERIVED from this, rather than the two being written separately, so they
+     * cannot drift. An earlier revision built the line form with `flatten()` and that was already wrong:
+     * `joinToString` renders an EMPTY generation as a blank line, while `flatten()` drops it, so a corrupt
+     * or legacy empty block would have shifted every line after it in one form but not the other. Empty
+     * generations are not supposed to be stored — `roll` never pushes one — but `persistedLogGenerations`
+     * decodes an empty block to `emptyList()`, so the case is representable and must be rendered the same
+     * way by both forms.
+     */
+    fun previousSessionsLines(generations: List<List<String>>): List<String> {
+        if (generations.isEmpty()) return emptyList()
+        val out = ArrayList<String>()
+        for (generation in generations) {
+            if (generation.isEmpty()) out.add("") else out.addAll(generation)
+        }
+        out.add(CURRENT_SESSION_MARKER)
+        return out
     }
 }

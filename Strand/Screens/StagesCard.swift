@@ -53,6 +53,9 @@ struct StageDetailView: View {
     @State private var selectedStage: SleepStage? = nil
     /// Per-night sleeping-HR buckets, loaded by `stageCard`'s `.task(id:)` below.
     @State private var nightHR: [HRBucket] = []
+    /// The Sleep-chart shape (Settings → Appearance → Sleep chart), so the Today host card switches with
+    /// the Sleep tab and Android's `StagesHostCard`. Display-only. (#sleep-chart-style)
+    @AppStorage(SleepChartStyle.storageKey) private var sleepChartStyleRaw = SleepChartStyle.classic.rawValue
 
     var body: some View {
         // `stageCard` carries its own `.task(id: night.session.startTs)` HR load; clearing the
@@ -76,13 +79,16 @@ struct StageDetailView: View {
             : String(localized: "\(durationText(night.timeInBed)) in bed · \(efficiencyText(night)) efficiency")
         VStack(alignment: .leading, spacing: NoopMetrics.space2) {
             if intervals.count >= 2 {
-                // WHOOP sleep-details layout (ryanAtriumAi #988): one full-width timeline ROW per
-                // stage — hatched track = the whole night, solid segments = when that stage occurred,
-                // header carries the stage %, duration right-aligned. Tap a row to highlight that
-                // stage; the others grey out. Replaces the 4-level hypnogram, whose staircase turned
-                // fragmented on-device staging into an unreadable comb. No separate footer — the
-                // rows ARE the legend.
-                stageTimelineCard(s, subtitle: subtitle, intervals: intervals, night: night)
+                // #sleep-chart-style: Classic keeps the per-stage timeline ROWS (ryanAtriumAi #988);
+                // Filled/Ribbon draw the WHOOP-style stepped hypnogram with the breakdown rows as the
+                // legend — switching with the Sleep tab and Android's StagesHostCard.
+                let chartStyle = SleepChartStyle.resolve(sleepChartStyleRaw)
+                switch chartStyle {
+                case .classic:
+                    stageTimelineCard(s, subtitle: subtitle, intervals: intervals, night: night)
+                case .filled, .garminFilled, .ribbon:
+                    steppedHypnogramCard(s, subtitle: subtitle, intervals: intervals, style: chartStyle)
+                }
             } else {
                 ChartCard(
                     title: "Stage breakdown",
@@ -149,6 +155,44 @@ struct StageDetailView: View {
                 stageTimeline(stages, intervals: intervals, night: night)
             }
         }
+    }
+
+    /// #sleep-chart-style — the WHOOP-style stepped hypnogram (Filled = each stage banded to the baseline,
+    /// Ribbon = a slim band) for the read-only Today host card, with the per-stage breakdown as the legend.
+    /// Matches Android `StagesHostCard`: no clock axis (this card carries no session window). Only routed
+    /// here when the night has ≥2 real segments; the stages/totals are identical to Classic.
+    @ViewBuilder
+    private func steppedHypnogramCard(_ s: Stages, subtitle: String, intervals: [SleepInterval],
+                                      style: SleepChartStyle) -> some View {
+        ChartCard(
+            title: "Stage breakdown",
+            subtitle: subtitle,
+            trailing: durationText(s.asleep),
+            height: NoopMetrics.chartHeight,
+            tint: StrandPalette.restColor,
+            chart: {
+                Hypnogram(
+                    intervals: intervals,
+                    height: NoopMetrics.chartHeight,
+                    showsStageAxis: false,
+                    showsHover: true,
+                    nightStart: nil,
+                    showsTimeAxis: false,
+                    filled: style.isFilled,
+                    stagePalette: style.stagePalette
+                )
+            },
+            footer: {
+                    // #1536: the stage LEGEND that used to sit here is gone, and the rows below now take
+                    // the chart's ramp. Those two go together. The legend decoded the hypnogram above it,
+                    // which is real work — but it listed the stages in a different order than the rows, and
+                    // the rows drew FIXED palette tokens while the chart drew ramp colours, so on
+                    // Oura/Garmin three things in one card disagreed. Ramp-aware rows name and colour every
+                    // stage correctly, which IS the key; a legend above a correct key is the redundancy
+                    // that was reported.
+                    stageBreakdownRows(s, palette: style.stagePalette)
+            }
+        )
     }
 
     /// #407 — the per-epoch movement/restlessness strip drawn UNDER the hypnogram, on the SAME timeline.
@@ -268,7 +312,7 @@ struct StageDetailView: View {
             .frame(height: 34)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Sleep stage breakdown: deep \(pct(s.deep, s.total)) percent, light \(pct(s.light, s.total)) percent, REM \(pct(s.rem, s.total)) percent, awake \(pct(s.awake, s.total)) percent")
+            .accessibilityLabel("Sleep stage breakdown: deep \(stageSharePercent(.deep, s)) percent, light \(stageSharePercent(.light, s)) percent, REM \(stageSharePercent(.rem, s)) percent, awake \(stageSharePercent(.awake, s)) percent")
             HStack(spacing: 16) {
                 legend(.deep, String(localized: "Deep"))
                 legend(.light, String(localized: "Light"))
@@ -302,23 +346,37 @@ struct StageDetailView: View {
     /// proportional bar in the stage colour over a faint track, and the right-aligned duration. Same data
     /// as the prior footer (`s.rem` / `s.deep` / `s.light` / `s.awake` over `s.total`) — no new numbers.
     @ViewBuilder
-    private func stageBreakdownRows(_ s: Stages) -> some View {
+    private func stageBreakdownRows(_ s: Stages, palette: SleepStagePalette = .noop) -> some View {
         VStack(alignment: .leading, spacing: NoopMetrics.cardInnerSpacing) {
-            stageBreakdownRow(.rem,   minutes: s.rem,   total: s.total)
-            stageBreakdownRow(.deep,  minutes: s.deep,  total: s.total)
-            stageBreakdownRow(.light, minutes: s.light, total: s.total)
-            stageBreakdownRow(.awake, minutes: s.awake, total: s.total)
+            stageBreakdownRow(.rem,   minutes: s.rem,   total: s.total, percent: stageSharePercent(.rem, s), palette: palette)
+            stageBreakdownRow(.deep,  minutes: s.deep,  total: s.total, percent: stageSharePercent(.deep, s), palette: palette)
+            stageBreakdownRow(.light, minutes: s.light, total: s.total, percent: stageSharePercent(.light, s), palette: palette)
+            stageBreakdownRow(.awake, minutes: s.awake, total: s.total, percent: stageSharePercent(.awake, s), palette: palette)
         }
     }
 
-    /// One WHOOP-style stage row. `fraction = minutes / total` sets both the % and the bar fill.
-    /// Tappable (WHOOP, ryanAtriumAi #988): selecting a row highlights that stage and recedes the
-    /// rest; tapping the selected row again clears the highlight.
+    /// The night's four stages as whole percentages that sum to exactly 100 (largest-remainder), so this
+    /// card's breakdown rows, timeline rows and stage-bar read-out print ONE apportionment — and it matches
+    /// the SleepView detail for the same night. Bar fills still track the raw `minutes / total` fraction.
+    /// Falls back to 0 for a night with no minutes. Same helper as SleepView.stageSharePercent. (tanarchytan)
+    private func stageSharePercent(_ stage: SleepStage, _ s: Stages) -> Int {
+        guard let p = StagePercentages.wholePercentages([s.awake, s.light, s.deep, s.rem]) else { return 0 }
+        switch stage {
+        case .awake: return p[0]
+        case .light: return p[1]
+        case .deep:  return p[2]
+        case .rem:   return p[3]
+        }
+    }
+
+    /// One WHOOP-style stage row. `fraction = minutes / total` sets the bar fill; `percent` is the night's
+    /// apportioned share (so the four rows sum to 100). Tappable (WHOOP, ryanAtriumAi #988): selecting a
+    /// row highlights that stage and recedes the rest; tapping the selected row again clears the highlight.
     @ViewBuilder
-    private func stageBreakdownRow(_ stage: SleepStage, minutes: Double, total: Double) -> some View {
-        let color = StrandPalette.sleepStageColor(stage)
+    private func stageBreakdownRow(_ stage: SleepStage, minutes: Double, total: Double, percent: Int,
+                                   palette: SleepStagePalette = .noop) -> some View {
+        let color = StrandPalette.sleepStageColor(stage, palette: palette)
         let fraction = total > 0 ? min(1, max(0, minutes / total)) : 0
-        let percent = Int((fraction * 100).rounded())
         let isSelected = selectedStage == stage
         let othersSelected = selectedStage != nil && !isSelected
         HStack(spacing: 10) {
@@ -388,10 +446,10 @@ struct StageDetailView: View {
                 .frame(height: 124)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 2)
-            stageTimelineRow(.awake, minutes: s.awake, total: s.total, intervals: smoothed, origin: origin, span: span)
-            stageTimelineRow(.light, minutes: s.light, total: s.total, intervals: smoothed, origin: origin, span: span)
-            stageTimelineRow(.deep,  minutes: s.deep,  total: s.total, intervals: smoothed, origin: origin, span: span)
-            stageTimelineRow(.rem,   minutes: s.rem,   total: s.total, intervals: smoothed, origin: origin, span: span)
+            stageTimelineRow(.awake, minutes: s.awake, percent: stageSharePercent(.awake, s), intervals: smoothed, origin: origin, span: span)
+            stageTimelineRow(.light, minutes: s.light, percent: stageSharePercent(.light, s), intervals: smoothed, origin: origin, span: span)
+            stageTimelineRow(.deep,  minutes: s.deep,  percent: stageSharePercent(.deep, s), intervals: smoothed, origin: origin, span: span)
+            stageTimelineRow(.rem,   minutes: s.rem,   percent: stageSharePercent(.rem, s), intervals: smoothed, origin: origin, span: span)
             // onset · midpoint · wake clock labels, aligned with the rows' inner strips.
             HStack {
                 Text(Self.stageAxisFormatter.string(from: night.onsetDate))
@@ -535,12 +593,11 @@ struct StageDetailView: View {
     /// night-long track with solid segments where the stage occurred. Tap toggles the highlight:
     /// the selected row keeps its colour + gains a border while every other row's segments grey out.
     @ViewBuilder
-    private func stageTimelineRow(_ stage: SleepStage, minutes: Double, total: Double,
+    private func stageTimelineRow(_ stage: SleepStage, minutes: Double, percent: Int,
                                   intervals: [SleepInterval], origin: TimeInterval, span: TimeInterval) -> some View {
         let color = StrandPalette.sleepStageColor(stage)
         let isSelected = selectedStage == stage
         let dimmed = selectedStage != nil && !isSelected
-        let percent = total > 0 ? Int((minutes / total * 100).rounded()) : 0
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(stage.label.uppercased())
@@ -726,10 +783,6 @@ struct StageDetailView: View {
                 }
             }
         }
-    }
-
-    private func pct(_ minutes: Double, _ total: Double) -> Int {
-        total > 0 ? Int((minutes / total * 100).rounded()) : 0
     }
 
     private func efficiencyText(_ night: Night) -> String {

@@ -43,6 +43,9 @@ struct SleepView: View {
     /// only when the underlying repo data actually changes — NOT on hover/animation/1Hz HR
     /// ticks that merely re-evaluate `body`. `nil` until first build or when there's no night.
     @State private var model: SleepModel?
+    /// The Sleep tab's stage-chart shape (Settings → Appearance → Sleep chart). Display-only; Filled/Ribbon
+    /// draw the WHOOP-style stepped hypnogram, Classic keeps the per-stage rows. Mirrors Android. (#sleep-chart-style)
+    @AppStorage(SleepChartStyle.storageKey) private var sleepChartStyleRaw = SleepChartStyle.classic.rawValue
     /// The repo signature the cached `model` was built from. Cheap to compute every render;
     /// when it differs from the current inputs we rebuild the model.
     @State private var modelKey: SleepInputKey?
@@ -352,8 +355,26 @@ struct SleepView: View {
     /// ◀/▶-navigated night. Shared by the Rest hero overline and the hypnogram nav header so both
     /// name the SAME night the hero's score is now resolved for.
     private var nightRelativeLabel: LocalizedStringKey {
-        nightOffset == 0 ? "Last night"
-            : (nightOffset == 1 ? "1 night ago" : "\(nightOffset) nights ago")
+        let n = nightsAgo(nightOffset)
+        return n == 0 ? "Last night" : (n == 1 ? "1 night ago" : "\(n) nights ago")
+    }
+
+    /// #1311: how many CALENDAR nights back the carousel night at `offset` is from the newest recorded
+    /// night. The ◀/▶ carousel steps by RECORDED night (`navDays`, newest-first), so a night with no
+    /// data (strap off-body) is a gap the flat index can't see — labelling by index makes two nights
+    /// either side of a skipped night read as consecutive and desyncs the "N nights ago" labels (and the
+    /// Rest value they name). Uses the same local start-of-day `navDays` is grouped by; falls back to the
+    /// raw index if it can't resolve. 0 = last night. Mirrors Android SleepHeroLogic.calendarNightsAgo.
+    private func nightsAgo(_ offset: Int) -> Int {
+        let days = navDays
+        guard offset >= 0, offset < days.count,
+              let newestTs = days.first?.first?.endTs, let shownTs = days[offset].first?.endTs
+        else { return offset }
+        let cal = Calendar.current
+        let shown = cal.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(shownTs)))
+        let newest = cal.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(newestTs)))
+        let d = cal.dateComponents([.day], from: shown, to: newest).day ?? offset
+        return d >= 0 ? d : offset
     }
 
     /// The night the Rest hero reflects: the ◀/▶-navigated night while browsing (falling back to
@@ -729,13 +750,18 @@ struct SleepView: View {
             : String(localized: "\(durationText(night.timeInBed)) in bed · \(efficiencyText(night)) efficiency")
         VStack(alignment: .leading, spacing: NoopMetrics.space2) {
             if intervals.count >= 2 {
-                // WHOOP sleep-details layout (ryanAtriumAi #988): one full-width timeline ROW per
-                // stage — hatched track = the whole night, solid segments = when that stage occurred,
-                // header carries the stage %, duration right-aligned. Tap a row to highlight that
-                // stage; the others grey out. Replaces the 4-level hypnogram, whose staircase turned
-                // fragmented on-device staging into an unreadable comb. No separate footer — the
-                // rows ARE the legend.
-                stageTimelineCard(s, subtitle: subtitle, intervals: intervals, night: night)
+                // #sleep-chart-style (Settings → Appearance): Classic keeps the per-stage timeline ROWS
+                // (ryanAtriumAi #988) — hatched track = the whole night, solid segments = when that stage
+                // occurred, tap a row to highlight it. Filled/Ribbon draw the WHOOP-style single stepped
+                // hypnogram (filled to the baseline, or a slim band) with the breakdown rows as the legend.
+                let chartStyle = SleepChartStyle.resolve(sleepChartStyleRaw)
+                switch chartStyle {
+                case .classic:
+                    stageTimelineCard(s, subtitle: subtitle, intervals: intervals, night: night)
+                case .filled, .garminFilled, .ribbon:
+                    steppedHypnogramCard(s, subtitle: subtitle, intervals: intervals, night: night,
+                                         style: chartStyle)
+                }
             } else {
                 ChartCard(
                     title: "Stage breakdown",
@@ -812,6 +838,46 @@ struct SleepView: View {
                 stageTimeline(stages, intervals: intervals, night: night)
             }
         }
+    }
+
+    /// #sleep-chart-style — the WHOOP-style single stepped hypnogram (Filled = each stage banded down to
+    /// the baseline, Ribbon = a slim band at each stage level), with the per-stage breakdown rows below as
+    /// the legend. Mirrors the Android FilledHypnogram card; only routed here when the night has ≥2 real
+    /// segments (the shared `intervals`). The stages/totals are identical to Classic — this only redraws.
+    @ViewBuilder
+    private func steppedHypnogramCard(_ s: Stages, subtitle: String, intervals: [SleepInterval],
+                                      night: Night, style: SleepChartStyle) -> some View {
+        ChartCard(
+            title: "Stage breakdown",
+            subtitle: subtitle,
+            trailing: durationText(s.asleep),
+            height: NoopMetrics.chartHeight,
+            tint: StrandPalette.restColor,
+            chart: {
+                Hypnogram(
+                    intervals: intervals,
+                    height: NoopMetrics.chartHeight,
+                    showsStageAxis: false,
+                    showsHover: true,
+                    nightStart: night.onsetDate,
+                    showsTimeAxis: true,
+                    filled: style.isFilled,
+                    stagePalette: style.stagePalette
+                )
+            },
+            // A colour-coded key in the chart's ramp so the bands are decodable (esp. the Garmin ramp's two
+            // pinks), then the per-stage breakdown rows below.
+            footer: {
+                    // #1536: the stage LEGEND that used to sit here is gone, and the rows below now take
+                    // the chart's ramp. Those two go together. The legend decoded the hypnogram above it,
+                    // which is real work — but it listed the stages in a different order than the rows, and
+                    // the rows drew FIXED palette tokens while the chart drew ramp colours, so on
+                    // Oura/Garmin three things in one card disagreed. Ramp-aware rows name and colour every
+                    // stage correctly, which IS the key; a legend above a correct key is the redundancy
+                    // that was reported.
+                    stageBreakdownRows(s, palette: style.stagePalette)
+            }
+        )
     }
 
     /// #407 — the per-epoch movement/restlessness strip drawn UNDER the hypnogram, on the SAME timeline.
@@ -1099,7 +1165,7 @@ struct SleepView: View {
             .frame(height: 34)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Sleep stage breakdown: deep \(pct(s.deep, s.total)) percent, light \(pct(s.light, s.total)) percent, REM \(pct(s.rem, s.total)) percent, awake \(pct(s.awake, s.total)) percent")
+            .accessibilityLabel("Sleep stage breakdown: deep \(stageSharePercent(.deep, s)) percent, light \(stageSharePercent(.light, s)) percent, REM \(stageSharePercent(.rem, s)) percent, awake \(stageSharePercent(.awake, s)) percent")
             HStack(spacing: 16) {
                 legend(.deep, String(localized: "Deep"))
                 legend(.light, String(localized: "Light"))
@@ -1135,23 +1201,37 @@ struct SleepView: View {
     /// proportional bar in the stage colour over a faint track, and the right-aligned duration. Same data
     /// as the prior footer (`s.rem` / `s.deep` / `s.light` / `s.awake` over `s.total`) — no new numbers.
     @ViewBuilder
-    private func stageBreakdownRows(_ s: Stages) -> some View {
+    private func stageBreakdownRows(_ s: Stages, palette: SleepStagePalette = .noop) -> some View {
         VStack(alignment: .leading, spacing: NoopMetrics.cardInnerSpacing) {
-            stageBreakdownRow(.rem,   minutes: s.rem,   total: s.total)
-            stageBreakdownRow(.deep,  minutes: s.deep,  total: s.total)
-            stageBreakdownRow(.light, minutes: s.light, total: s.total)
-            stageBreakdownRow(.awake, minutes: s.awake, total: s.total)
+            stageBreakdownRow(.rem,   minutes: s.rem,   total: s.total, percent: stageSharePercent(.rem, s), palette: palette)
+            stageBreakdownRow(.deep,  minutes: s.deep,  total: s.total, percent: stageSharePercent(.deep, s), palette: palette)
+            stageBreakdownRow(.light, minutes: s.light, total: s.total, percent: stageSharePercent(.light, s), palette: palette)
+            stageBreakdownRow(.awake, minutes: s.awake, total: s.total, percent: stageSharePercent(.awake, s), palette: palette)
         }
     }
 
-    /// One WHOOP-style stage row. `fraction = minutes / total` sets both the % and the bar fill.
-    /// Tappable (WHOOP, ryanAtriumAi #988): selecting a row highlights that stage and recedes the
-    /// rest; tapping the selected row again clears the highlight.
+    /// The night's four stages as whole percentages that sum to exactly 100 (largest-remainder), so the
+    /// breakdown rows, the timeline rows and the stage-bar read-out all print ONE apportionment: they agree
+    /// with each other and add up. The bar fills still track the raw `minutes / total` fraction. Falls back
+    /// to 0 for a night with no minutes. Twin of Android `stageSharePercent`. (tanarchytan)
+    private func stageSharePercent(_ stage: SleepStage, _ s: Stages) -> Int {
+        guard let p = StagePercentages.wholePercentages([s.awake, s.light, s.deep, s.rem]) else { return 0 }
+        switch stage {
+        case .awake: return p[0]
+        case .light: return p[1]
+        case .deep:  return p[2]
+        case .rem:   return p[3]
+        }
+    }
+
+    /// One WHOOP-style stage row. `fraction = minutes / total` sets the bar fill; `percent` is the night's
+    /// apportioned share (so the four rows sum to 100). Tappable (WHOOP, ryanAtriumAi #988): selecting a
+    /// row highlights that stage and recedes the rest; tapping the selected row again clears the highlight.
     @ViewBuilder
-    private func stageBreakdownRow(_ stage: SleepStage, minutes: Double, total: Double) -> some View {
-        let color = StrandPalette.sleepStageColor(stage)
+    private func stageBreakdownRow(_ stage: SleepStage, minutes: Double, total: Double, percent: Int,
+                                   palette: SleepStagePalette = .noop) -> some View {
+        let color = StrandPalette.sleepStageColor(stage, palette: palette)
         let fraction = total > 0 ? min(1, max(0, minutes / total)) : 0
-        let percent = Int((fraction * 100).rounded())
         let isSelected = selectedStage == stage
         let othersSelected = selectedStage != nil && !isSelected
         HStack(spacing: 10) {
@@ -1223,10 +1303,10 @@ struct SleepView: View {
                 .frame(height: 124)
                 .padding(.horizontal, 10)
                 .padding(.bottom, 2)
-            stageTimelineRow(.awake, minutes: s.awake, total: s.total, intervals: smoothed, origin: origin, span: span)
-            stageTimelineRow(.light, minutes: s.light, total: s.total, intervals: smoothed, origin: origin, span: span)
-            stageTimelineRow(.deep,  minutes: s.deep,  total: s.total, intervals: smoothed, origin: origin, span: span)
-            stageTimelineRow(.rem,   minutes: s.rem,   total: s.total, intervals: smoothed, origin: origin, span: span)
+            stageTimelineRow(.awake, minutes: s.awake, percent: stageSharePercent(.awake, s), intervals: smoothed, origin: origin, span: span)
+            stageTimelineRow(.light, minutes: s.light, percent: stageSharePercent(.light, s), intervals: smoothed, origin: origin, span: span)
+            stageTimelineRow(.deep,  minutes: s.deep,  percent: stageSharePercent(.deep, s), intervals: smoothed, origin: origin, span: span)
+            stageTimelineRow(.rem,   minutes: s.rem,   percent: stageSharePercent(.rem, s), intervals: smoothed, origin: origin, span: span)
             // onset · midpoint · wake clock labels, aligned with the rows' inner strips.
             HStack {
                 Text(Self.stageAxisFormatter.string(from: night.onsetDate))
@@ -1396,12 +1476,11 @@ struct SleepView: View {
     /// night-long track with solid segments where the stage occurred. Tap toggles the highlight:
     /// the selected row keeps its colour + gains a border while every other row's segments grey out.
     @ViewBuilder
-    private func stageTimelineRow(_ stage: SleepStage, minutes: Double, total: Double,
+    private func stageTimelineRow(_ stage: SleepStage, minutes: Double, percent: Int,
                                   intervals: [SleepInterval], origin: TimeInterval, span: TimeInterval) -> some View {
         let color = StrandPalette.sleepStageColor(stage)
         let isSelected = selectedStage == stage
         let dimmed = selectedStage != nil && !isSelected
-        let percent = total > 0 ? Int((minutes / total * 100).rounded()) : 0
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(stage.label.uppercased())
@@ -1960,10 +2039,6 @@ struct SleepView: View {
 
     // MARK: - Formatting helpers
 
-    private func pct(_ minutes: Double, _ total: Double) -> Int {
-        total > 0 ? Int((minutes / total * 100).rounded()) : 0
-    }
-
     // The metric-grid tile formatters (`pctValue` / `rrValue` / `vsTypical` / `debtCaption` / `debtColor`)
     // moved to `NightDetailCard` with the grid; they had no other caller in SleepView.
 
@@ -2117,7 +2192,18 @@ private struct SleepPerformanceNightScene: View {
         .init(x: 0.70, y: 0.31, size: 0.6, opacity: 0.18)
     ]
 
+    /// #1319: honour the Settings "Day-cycle background" toggle on the Sleep tab too. The bundled
+    /// moonlit-lake scene used to draw unconditionally here, so an iOS user who turned the toggle off
+    /// still saw it on Sleep — while Home/Today (and the Android Sleep screen) already went plain.
+    @AppStorage(SceneBackgroundPrefs.enabledKey) private var showDayCycleBackground = true
+
     var body: some View {
+        if showDayCycleBackground { nightScene } else { StrandPalette.surfaceBase }
+    }
+
+    /// The bundled night scene (moonlit lake + procedural fallback). Shown only when the day-cycle
+    /// background is enabled; off swaps it for the plain surfaceBase canvas, parity with Home/Today.
+    private var nightScene: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height

@@ -107,6 +107,7 @@ class DeviceRegistry(
             dao.reKeyJournal(activeId, serialId); dao.deleteJournalFor(activeId)
             dao.reKeyWorkouts(activeId, serialId); dao.deleteWorkoutsFor(activeId)
             dao.reKeyAppleDaily(activeId, serialId); dao.deleteAppleDailyFor(activeId)
+            dao.reKeyAppleStepHour(activeId, serialId); dao.deleteAppleStepHoursFor(activeId)
             dao.reKeyMetricSeries(activeId, serialId); dao.deleteMetricSeriesFor(activeId)
             dao.reKeyDayOwnership(activeId, serialId); dao.deleteDayOwnershipFor(activeId)
             dao.reKeySleepStates(activeId, serialId); dao.deleteSleepStatesFor(activeId)
@@ -119,6 +120,11 @@ class DeviceRegistry(
             true
         }
     }
+
+    /** Stamp a device as seen right now — a real connect or disconnect, not every inbound packet, which
+     *  would be a write per second for no more truth. Twin of Swift `DeviceRegistry.touchLastSeen`. (#1527) */
+    suspend fun touchLastSeen(id: String, now: Long = System.currentTimeMillis() / 1000) =
+        dao.touchLastSeen(id, now)
 
     /** Archive a device — keeps its row and samples (invariant I4). */
     suspend fun archive(id: String) = dao.archiveDevice(id)
@@ -191,6 +197,7 @@ class DeviceRegistry(
             dao.deleteJournalFor(id)
             dao.deleteWorkoutsFor(id)
             dao.deleteAppleDailyFor(id)
+            dao.deleteAppleStepHoursFor(id)
             dao.deleteMetricSeriesFor(id)
             dao.deleteDayOwnershipFor(id)
             dao.deleteScoreInputProvenanceFor(id)

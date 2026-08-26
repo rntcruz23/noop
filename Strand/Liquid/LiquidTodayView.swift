@@ -51,7 +51,14 @@ struct LiquidTodayView: View {
     @State private var heroProviderByMetric: [String: ScoreInputProvider] = [:]
     @State private var stress: Double?             // StressModel(...).score, 0–3
     @State private var fitnessAge: Double?         // exploreSeries("fitness_age").last
+    @State private var vo2max: Double?             // exploreSeries("vo2max_est").last (#1391)
     @State private var vitality: Double?           // exploreSeries("vitality").last
+    // Queue 11a: day-keyed "spo2_candidate" metricSeries (WHOOP `spo2_candidate_82` or Oura
+    // ceiling@100 `0x6F`, device-conditional — see `IntelligenceEngine`). Empty when the
+    // experimental toggle is OFF (the engine writes nothing) or the owner has no in-band reading.
+    // Read unconditionally like the classic TodayView's `spo2CandidateSpark` — always empty when
+    // the toggle is off, so no separate gate is needed at fetch time.
+    @State private var spo2CandidateByDay: [String: Double] = [:]
     @State private var stepsEst: Double?           // steps_est, day-keyed to the selected day (fallback)
     @State private var importedStepsDay: Int?      // Apple Health steps for the selected day (middle tier)
     @State private var importedActiveKcalDay: Double?  // #616: Apple Health active energy for the day (calorie fallback)
@@ -106,6 +113,7 @@ struct LiquidTodayView: View {
     /// today's row has no vitals yet, so these fall back to the last night that recorded them. Never
     /// resolved in body — body rescans repo.days ~23× per pass, and this cache keeps that read O(1).
     @State private var cachedVitalsDay: DailyMetric?
+    @State private var cachedRespDay: DailyMetric?
     /// The Charge hero's resolved state (#543 carry + the honest label), resolved ONCE in load() alongside
     /// the other caches. It composes `TodayView.lastScoredRecoveryDay`, which is O(days) — exactly the scan
     /// this cache exists to keep out of body. Never resolved in body.
@@ -122,10 +130,14 @@ struct LiquidTodayView: View {
     @State private var pullHaptic = 0
     private let pullThreshold: CGFloat = 80
 
+    /// Measured width of the trailing header-control cluster, feeding the day title's fade mask. Seeded
+    /// with the design-system default so the first frame is not laid out against a reserve of zero.
+    @State private var headerControlsWidth = NoopMetrics.headerControlReserveWidth
+
     /// Mock Vitality purple (#9b7bff) has no exact StrandPalette token in this theme.
     private let liquidPurple = Color(.sRGB, red: 0x9b / 255, green: 0x7b / 255, blue: 0xff / 255, opacity: 1)
-    /// The liquid heart pink (matches LiquidThread's default + the mockup #ff6b81).
-    private let liquidHeart = Color(.sRGB, red: 1, green: 107 / 255, blue: 129 / 255, opacity: 1)
+    /// The liquid heart pink shared with the sync indicator and LiquidThread.
+    private let liquidHeart = StrandPalette.liquidHeart
     /// Hero / session-start chrome uses theme-aware `NoopPanelSurface` (design-system surfaces that
     /// flip with Light/Dark). Upstream #1160/#1161 moved the classic RoundedRectangle hero onto
     /// `StrandPalette.heroFill` / `heroBorder` for the same theme-aware goal; #1068 keeps the panel
@@ -163,6 +175,9 @@ struct LiquidTodayView: View {
     /// The prior-day vitals carry (see `cachedVitalsDay`), read O(1) from the cache. Non-nil only at
     /// offset 0 (today); a navigated past day carries nothing (its own row is the whole story).
     private var vitalsDay: DailyMetric? { cachedVitalsDay }
+    /// The prior-day RESPIRATORY carry (#1331): staleness-bounded, so a recent missed night reads the last
+    /// real value while a weeks-old one honestly shows "No Data". Non-nil only at offset 0.
+    private var respDay: DailyMetric? { cachedRespDay }
     /// The Charge hero's resolved state (see `cachedChargeDisplay`), read O(1) from the cache.
     private var chargeDisplay: ChargeDisplay { cachedChargeDisplay }
 
@@ -328,6 +343,16 @@ struct LiquidTodayView: View {
             #endif
         }
         .coordinateSpace(name: Self.pullSpace)
+        #if os(iOS)
+        // #697 parity: ScreenScaffold already stops a vertical scroll from drifting/bouncing the
+        // screen left-right on every other tab. Liquid Today runs its own ScrollView (not
+        // ScreenScaffold) and never got the fix, so it was the one screen left with the spurious
+        // horizontal rubber-band/swipe. `.basedOnSize` only permits horizontal bounce when content
+        // genuinely overflows the width (it does not here, the column is width-capped), so this
+        // brings Today's scroll behaviour in line with the rest of the app without touching the
+        // vertical pull-to-refresh gesture above.
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        #endif
         .onPreferenceChange(PullOffsetKey.self) { handlePull($0) }
         // The sky is a FIXED full-bleed backdrop drawn behind the scroll content, edge-to-edge under the
         // status bar. A ScrollView background does not scroll with the content, so pulling down never
@@ -453,7 +478,7 @@ struct LiquidTodayView: View {
 
     private var scene: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
+            ZStack(alignment: .topTrailing) {
                 Button { showDayPicker = true } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(dayTitle)
@@ -466,6 +491,7 @@ struct LiquidTodayView: View {
                             .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
                     }
                     .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(dayTitle). Tap to pick a day, swipe to change day.")
@@ -478,11 +504,20 @@ struct LiquidTodayView: View {
                         .frame(minWidth: 320, minHeight: 360)
                         .liquidPopoverAdaptation()
                 }
-                Spacer(minLength: 8)
-                HStack(spacing: 8) {
+                // Long names fade beneath the trailing controls while an expanded transient control
+                // participates in layout and pushes its preceding siblings left. The reserve is the
+                // cluster's MEASURED width, not a constant: a constant is only ever right for the exact
+                // set of controls it was written against, and this row has already gained one (Customize,
+                // #1207) since. Measuring also means the fade tracks the sync capsule as it expands,
+                // which is the push-left behaviour rather than a separate approximation of it.
+                .headerTrailingControlFadeMask(reserving: headerControlsWidth)
+                HStack(spacing: headerClusterSpacing) {
                     // Profile pic (the one set in Settings) → opens Settings, matching the classic Today.
                     Button { showSettings = true } label: {
-                        Color.clear.frame(width: headerClusterControl, height: headerClusterControl)
+                        Color.clear.frame(
+                            width: NoopMetrics.compactControlSize,
+                            height: NoopMetrics.compactControlSize
+                        )
                     }
                     .nativeLiquidGlassHeaderButton()
                     .overlay {
@@ -503,11 +538,28 @@ struct LiquidTodayView: View {
                         Image(systemName: "slider.horizontal.3")
                             .font(.system(size: 14, weight: .bold))
                             .foregroundStyle(StrandPalette.textPrimary)
-                            .frame(width: headerClusterControl, height: headerClusterControl)
+                            .frame(
+                                width: NoopMetrics.compactControlSize,
+                                height: NoopMetrics.compactControlSize
+                            )
                     }
                     .nativeLiquidGlassHeaderButton()
                     .accessibilityLabel("Customize Today")
                 }
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: HeaderControlsWidthKey.self,
+                            value: proxy.size.width
+                        )
+                    }
+                )
+                .zIndex(1)
+            }
+            .onPreferenceChange(HeaderControlsWidthKey.self) { measured in
+                // Ignore sub-point churn so a rounding wobble cannot re-render the mask every frame.
+                guard measured > 0, abs(measured - headerControlsWidth) > 0.5 else { return }
+                headerControlsWidth = measured
             }
             // Subtle NOOP wordmark in the sky between header and hero. Perfectly centred (a letter row has
             // no trailing tracking gap the way `Text(...).tracking()` does), with a tap easter egg.
@@ -804,6 +856,9 @@ struct LiquidTodayView: View {
         case .fitnessAge:
             cardLink(.metric("fitness_age"), title: card.title, sub: card.subtitle,
                      value: unitText(fitnessAge, card.unit), tint: StrandPalette.chargeColor, frac: 0.5)
+        case .vo2max:
+            cardLink(.metric("vo2max_est"), title: card.title, sub: card.subtitle,
+                     value: unitText(vo2max, card.unit), tint: StrandPalette.chargeColor, frac: 0.5)
         case .vitality:
             cardLink(.metric("vitality"), title: card.title, sub: card.subtitle,
                      value: intText(vitality), tint: liquidPurple, frac: frac(vitality))
@@ -932,7 +987,10 @@ struct LiquidTodayView: View {
                             Text("SYNTHESIS").font(StrandFont.overline).tracking(1.6)
                                 .foregroundStyle(StrandPalette.textSecondary)
                             Spacer()
-                            Text(synthesisExpanded ? "hide" : "show").font(StrandFont.caption)
+                            Text(synthesisExpanded
+                                 ? String(localized: "hide")
+                                 : String(localized: "show"))
+                                .font(StrandFont.caption)
                                 .foregroundStyle(StrandPalette.textTertiary)
                         }
                         // While the baseline calibrates, the honest "N of 4 nights" progress replaces the
@@ -1094,11 +1152,23 @@ struct LiquidTodayView: View {
         case .restingHr:
             ktile(String(localized: "Rest HR"), icon: keyMetricIcon(metric), intText(rhr), "bpm", StrandPalette.metricRose, fracOver(rhr, 100), key: "rhr")
         case .bloodOxygen:
-            let spo2 = displayDay?.spo2Pct ?? vitalsDay?.spo2Pct
-            ktile(String(localized: "Blood Oxygen"), icon: keyMetricIcon(metric), intText(spo2), "%", StrandPalette.metricCyan, fracOver(spo2, 100), key: "spo2")
+            // Queue 11a: the Liquid tile used to read `spo2Pct` only, with no candidate fallback at all
+            // (unlike the classic `TodayView`/`VitalSignsSummary`), so an Oura-only or BLE-only WHOOP
+            // 5/MG install with the experimental toggle ON still saw a bare "—" here. Falls back to the
+            // device-conditional "spo2_candidate" mean (WHOOP: `spo2_candidate_82`; Oura: ceiling@100
+            // `0x6F`, see `AnalyticsEngine.nightlySpo2CeilingMean`) only when `spo2Pct` is nil AND the
+            // toggle is ON — same gating as the classic tile, never as the default.
+            let spo2Real = displayDay?.spo2Pct ?? vitalsDay?.spo2Pct
+            let spo2CandidateOn = PuffinExperiment.spo2CandidateDisplayEnabled
+            let spo2CandidateValue = spo2Real == nil && spo2CandidateOn
+                ? spo2CandidateByDay[cachedDisplayDay?.day ?? selectedDayKey]
+                : nil
+            let spo2 = spo2Real ?? spo2CandidateValue
+            ktile(String(localized: "Blood Oxygen"), icon: keyMetricIcon(metric), intText(spo2), "%", StrandPalette.metricCyan, fracOver(spo2, 100), key: spo2CandidateValue != nil ? "spo2_candidate" : "spo2",
+                  caption: spo2CandidateValue != nil ? String(localized: "strap estimate (unverified)") : nil)
         case .respiratory:
-            let resp = displayDay?.respRateBpm ?? vitalsDay?.respRateBpm
-            ktile(String(localized: "Respiratory"), icon: keyMetricIcon(metric), resp.map { String(format: "%.1f", $0) } ?? "—", "rpm", StrandPalette.accent, fracOver(resp, 24), key: "resp_rate")
+            let resp = displayDay?.respRateBpm ?? vitalsDay?.respRateBpm ?? respDay?.respRateBpm
+            ktile(String(localized: "Respiratory"), icon: keyMetricIcon(metric), resp.map { String(format: "%.1f", locale: AppLanguage.activeLocale, $0) } ?? "—", "rpm", StrandPalette.accent, fracOver(resp, 24), key: "resp_rate")
         case .steps:
             ktile(String(localized: "Steps"), icon: keyMetricIcon(metric), stepsText, "", StrandPalette.chargeColor,
                   fracOver(stepCount, 10000), key: stepsDetailKey, detailMetric: stepsDetailMetric)
@@ -1128,7 +1198,8 @@ struct LiquidTodayView: View {
     }
 
     private func ktile(_ label: String, icon: String, _ value: String, _ unit: String, _ tint: Color, _ frac: Double?,
-                       key: String? = nil, detailMetric: MetricDescriptor? = nil) -> some View {
+                       key: String? = nil, detailMetric: MetricDescriptor? = nil, caption: String? = nil) -> some View {
+        let displayValue = unit.isEmpty ? value : (unit == "%" ? value + unit : value + " " + unit)
         let tile = VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
@@ -1142,12 +1213,21 @@ struct LiquidTodayView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
             }
-            (Text(value).font(StrandFont.number(24))
-                + Text(unit.isEmpty ? "" : (unit == "%" ? unit : " \(unit)"))
-                    .font(StrandFont.number(24)))
+            Text(verbatim: displayValue)
+                .font(StrandFont.number(24))
                 .foregroundStyle(StrandPalette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
+            // Optional sub-value caveat (queue 11a): only ever set for an unvalidated candidate fallback
+            // (e.g. the SpO₂ strap estimate), so every other `ktile` call site — no `caption` argument —
+            // renders byte-identical to before this parameter existed.
+            if let caption {
+                Text(caption)
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
             LiquidTube(frac: frac ?? 0, tint: tint, height: 9, animated: false,
                        showsHighlight: false, usesCleanFill: true)
             // #430 parity: DETAILED tiles grow the trend graph under the bar, tinted to the metric and
@@ -1290,6 +1370,7 @@ struct LiquidTodayView: View {
         // echo today's still-forming row; only on today (a past day's own row is the whole story).
         let tkey = cachedDisplayDay?.day ?? selectedDayKey
         cachedVitalsDay = (selectedDayOffset == 0) ? Repository.lastVitalsDay(days: repo.days, todayKey: tkey) : nil
+        cachedRespDay = (selectedDayOffset == 0) ? Repository.lastRespDay(days: repo.days, todayKey: tkey) : nil
         // Charge carry (#543) + the honest label, resolved here for the same reason as the two above: the
         // selector below scans repo.days. Calibration nights come from the SAME `RecoveryScorer` helper the
         // classic Today reads, so the two screens agree on when a wearer is genuinely mid-calibration
@@ -1322,8 +1403,11 @@ struct LiquidTodayView: View {
         async let restA = repo.exploreSeries(key: "sleep_performance", source: "my-whoop")
         async let stressA = repo.series(key: "stress", source: "my-whoop")
         async let fitA = repo.exploreSeries(key: "fitness_age", source: "my-whoop")
+        async let vo2A = repo.exploreSeries(key: "vo2max_est", source: "my-whoop")
         async let vitA = repo.exploreSeries(key: "vitality", source: "my-whoop")
         async let stepsA = repo.exploreSeries(key: "steps_est", source: "my-whoop")
+        // Queue 11a: SpO₂ candidate fallback (see `spo2CandidateByDay`'s declaration).
+        async let spo2CandA = repo.exploreSeries(key: "spo2_candidate", source: "my-whoop")
         async let appleA = repo.appleDailyRows()
         async let hrA = repo.hrBuckets(from: from, to: to, bucketSeconds: 300)
         async let wkA = repo.workoutRows()
@@ -1369,6 +1453,10 @@ struct LiquidTodayView: View {
         // matching the imported-first VALUE. Union of imported days + strap-row days. Mirrors Android's
         // caloriesSpark (windowed caloriesByDay).
         let appleRowsForSpark = await appleA
+        // Queue 11a: SpO₂ candidate fallback — day-keyed for the tile's value lookup, windowed for its
+        // detailed-mode sparkline below (same shape as `restByDay`/`kSparks["spo2"]` above).
+        let spo2CandSeries = await spo2CandA
+        spo2CandidateByDay = Dictionary(spo2CandSeries.map { ($0.day, $0.value) }, uniquingKeysWith: { _, last in last })
         var winImportedKcal: [String: Double] = [:]
         for r in appleRowsForSpark where r.day >= sparkCutoff && r.day <= selectedDayKey {
             if let k = r.activeKcal { winImportedKcal[r.day] = max(winImportedKcal[r.day] ?? 0, k) }
@@ -1383,6 +1471,7 @@ struct LiquidTodayView: View {
             "hrv": sparkRows.compactMap { r in r.avgHrv.map { (r.day, $0) } },
             "rhr": sparkRows.compactMap { r in r.restingHr.map { (r.day, Double($0)) } },
             "spo2": sparkRows.compactMap { r in r.spo2Pct.map { (r.day, $0) } },
+            "spo2_candidate": spo2CandSeries.filter { $0.day >= sparkCutoff && $0.day <= selectedDayKey },
             "resp_rate": sparkRows.compactMap { r in r.respRateBpm.map { (r.day, $0) } },
             "steps": sparkRows.compactMap { r in r.steps.map { (r.day, Double($0)) } },
             // #616: the Calories tile drew no trend line — this dict had no matching entry, so windowedSpark
@@ -1398,6 +1487,7 @@ struct LiquidTodayView: View {
             StressModel(days: daysSnapshot, stored: storedStress)?.score
         }.value
         fitnessAge = (await fitA).last?.value   // history-wide latest banked (not day-scoped)
+        vo2max = (await vo2A).last?.value        // #1391: latest banked VO₂max estimate
         vitality = (await vitA).last?.value
         // Steps is a DAILY metric, so key it to the SELECTED day (like restScore above), not the history-wide
         // latest. Without this, swiping to a past day with no strap step count showed today's estimate (the
@@ -1572,11 +1662,11 @@ struct LiquidTodayView: View {
 
     private func unitText(_ v: Double?, _ unit: String, decimals: Int = 0) -> String {
         guard let v else { return "–" }
-        let n = decimals > 0 ? String(format: "%.\(decimals)f", v) : String(Int(v.rounded()))
+        let n = decimals > 0 ? String(format: "%.\(decimals)f", locale: AppLanguage.activeLocale, v) : String(Int(v.rounded()))
         return unit.isEmpty ? n : "\(n) \(unit)"
     }
 
-    private var stressText: String { stress.map { String(Int($0.rounded())) } ?? "Calibrating" }
+    private var stressText: String { stress.map { String(Int($0.rounded())) } ?? String(localized: "Calibrating") }
 
     private var sleepText: String {
         guard let m = displayDay?.totalSleepMin else { return "–" }
@@ -1606,7 +1696,7 @@ struct LiquidTodayView: View {
         var parts: [String] = []
         let secs = w.durationS ?? Double(max(w.endTs - w.startTs, 0))
         parts.append("\(Int(secs / 60)) min")
-        if let dm = w.distanceM, dm > 0 { parts.append(String(format: "%.1f km", dm / 1000)) }
+        if let dm = w.distanceM, dm > 0 { parts.append(String(format: "%.1f km", locale: AppLanguage.activeLocale, dm / 1000)) }
         if let k = w.energyKcal { parts.append("\(Int(k.rounded())) kcal") }
         return parts.joined(separator: " · ")
     }
@@ -1745,7 +1835,7 @@ private struct HeroScoreCell: View {
                 .foregroundStyle(StrandPalette.textSecondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(Text("\(label), \(score.map { decimals > 0 ? String(format: "%.\(decimals)f", $0) : String(Int($0.rounded())) } ?? String(localized: "no data yet")). See how it is scored."))
+            .accessibilityLabel(Text("\(label), \(score.map { decimals > 0 ? String(format: "%.\(decimals)f", locale: AppLanguage.activeLocale, $0) : String(Int($0.rounded())) } ?? String(localized: "no data yet")). See how it is scored."))
         }
         .frame(maxWidth: .infinity)
     }
@@ -1754,42 +1844,30 @@ private struct HeroScoreCell: View {
 
 // MARK: - Scene controls (LiveState-isolated leaves)
 
-/// The liquid pull-to-refresh vessel + a "Syncing…" label. Owns LiveState (isolated leaf, per the file's
-/// convention — see `LiquidLiveHR`) so a live-HR notify doesn't re-render the whole Today, but the vessel
-/// still knows about an ONGOING strap backfill.
+/// The liquid pull-to-refresh vessel + a "Syncing…" label. A pure gesture affordance: it answers "did my
+/// pull do anything", and nothing else.
 ///
-/// Visibility used to be driven only by the local `refreshing` flag, which flips false ~350ms after the
-/// pull releases (once the local repo reload + a short "let the fill read as done" delay complete) — but
-/// `ble.syncNow()` kicks off a real BLE history offload that can run far longer than that. The vessel was
-/// disappearing while the strap was still mid-sync, with no feedback beyond the easy-to-miss header
-/// `SyncStatusChip`. `syncing` now also holds it (and the label) up while `live.backfilling` is true, so
-/// releasing the pull and watching it go away actually means the sync finished.
+/// It used to ALSO hold itself up for the whole of `live.backfilling`, because `ble.syncNow()` kicks off a
+/// BLE history offload that far outlives the local `refreshing` flag (which flips false ~350ms after the
+/// pull releases), and at the time the only other feedback was the easy-to-miss header `SyncStatusChip`.
+/// `LiquidBatteryButton` is now that feedback — an ambient, always-on-screen signal that carries a live
+/// chunk count — so the long tail belongs there and the vessel hands off to it instead of shadowing it.
+/// Two surfaces reporting one signal is what this replaces: a 64pt banner AND a morphing header, both
+/// running their own 60Hz clock (`LiquidVessel` has one too) for the same multi-hour offload.
+///
+/// No longer reads LiveState at all, so it is no longer an isolated leaf — there is nothing left to
+/// isolate it from.
 private struct LiquidRefreshIndicator: View {
     let pullY: CGFloat
     let pullThreshold: CGFloat
     let refreshing: Bool
     let liquidHeart: Color
 
-    @EnvironmentObject private var live: LiveState
-
     private var progress: CGFloat { min(1, max(0, pullY / pullThreshold)) }
-
-    /// The RAW "a sync is happening" signal. `live.backfilling` toggles false→true between EVERY offload
-    /// chunk (`exitBackfilling` at each HISTORY_END → auto-continue re-kick → `beginBackfill`), with a real
-    /// BLE round-trip gap in between. A deep backlog is now up to ~24 chunks in ONE connection (#594 raised
-    /// the auto-continue cap 6→24), so binding the vessel straight to this strobes it in/out on every chunk
-    /// boundary. The MenuBar header pins a constant height for exactly this reason (see MenuBarContent).
-    private var syncingRaw: Bool { refreshing || live.backfilling }
-
-    /// Debounced visibility that drives the body: goes true INSTANTLY, but only goes false after riding out
-    /// [hideDelay] with no new chunk — so a brief per-chunk `backfilling` gap can't flicker the vessel.
-    @State private var syncing = false
-    @State private var hideTask: Task<Void, Never>?
-    private static let hideDelaySeconds: UInt64 = 3   // comfortably longer than an inter-chunk gap
 
     var body: some View {
         ZStack {
-            if syncing {
+            if refreshing {
                 VStack(spacing: 6) {
                     LiquidVessel(value: 0.6, tint: liquidHeart, animated: true)
                         .frame(width: 34, height: 34)
@@ -1805,28 +1883,77 @@ private struct LiquidRefreshIndicator: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: syncing ? 64 : min(pullY, pullThreshold * 1.15))
-        .animation(.easeOut(duration: 0.22), value: syncing)
-        .onAppear { syncing = syncingRaw }
-        .onChangeCompat(of: syncingRaw) { raw in
-            hideTask?.cancel()
-            if raw {
-                syncing = true                       // a sync (or pull) is active — show at once
-            } else {
-                // Might just be the gap between two chunks — wait it out; a new chunk cancels this.
-                hideTask = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: Self.hideDelaySeconds * 1_000_000_000)
-                    if !Task.isCancelled { syncing = false }
-                }
-            }
+        .frame(height: refreshing ? 64 : min(pullY, pullThreshold * 1.15))
+        .animation(.easeOut(duration: 0.22), value: refreshing)
+    }
+}
+
+/// The ONE debounce for the raw "a sync is happening" signal, for any surface that reflects it.
+///
+/// `live.backfilling` toggles false→true between EVERY offload chunk (`exitBackfilling` at each
+/// HISTORY_END → auto-continue re-kick → `beginBackfill`), with a real BLE round-trip gap in between, and
+/// a deep backlog is up to ~24 chunks in ONE connection (#594 raised the auto-continue cap 6→24). Bound
+/// straight to that signal, an indicator strobes in and out on every chunk boundary. (The MenuBar header
+/// pins a constant height for the same reason — see MenuBarContent.)
+///
+/// Rises INSTANTLY, and falls only after riding out `syncIndicatorSignalDebounceNanoseconds` with no new
+/// chunk. Written once on purpose: this existed as two hand-rolled copies with the delay spelled two
+/// different ways, and the failure mode of letting them drift — an indicator that flickers only against a
+/// strap carrying hours of history — is not reproducible at a desk.
+private struct DebouncedSyncSignal: ViewModifier {
+    let raw: Bool
+    @Binding var debounced: Bool
+    @State private var hideTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { apply(raw) }
+            .onChangeCompat(of: raw) { apply($0) }
+            .onDisappear { hideTask?.cancel() }
+    }
+
+    private func apply(_ raw: Bool) {
+        hideTask?.cancel()
+        guard !raw else {
+            debounced = true                        // a sync is active — show at once
+            return
+        }
+        guard debounced else { return }
+        // Might just be the gap between two chunks — wait it out; a new chunk cancels this.
+        hideTask = Task { @MainActor in
+            try? await Task.sleep(
+                nanoseconds: StrandMotion.syncIndicatorSignalDebounceNanoseconds
+            )
+            guard !Task.isCancelled else { return }
+            debounced = false
         }
     }
 }
 
-/// The uniform diameter of the round Today-header controls — profile avatar, quick-add (+), strap battery
-/// ring and Customize — so they sit level in the liquid cluster. Single source of truth (mirrors the
-/// Android `HeaderClusterControl`); the syncing vessel is a separate affordance and keeps its own size.
-private let headerClusterControl: CGFloat = 36
+private extension View {
+    /// Drive `debounced` from the raw sync signal through the shared debounce above.
+    func debouncedSyncSignal(_ raw: Bool, into debounced: Binding<Bool>) -> some View {
+        modifier(DebouncedSyncSignal(raw: raw, debounced: debounced))
+    }
+}
+
+/// Carries the trailing header cluster's measured width out to the day title's fade mask, so the reserve
+/// is whatever the controls actually occupy — including the sync capsule mid-expansion.
+private struct HeaderControlsWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Gap between the round Today-header controls. iOS tightens it so the sync capsule has room to expand
+/// on a phone-width header without crowding the day title; macOS has the window width to spare, so it
+/// opens the cluster up instead of paying for space it does not need.
+#if os(iOS)
+private let headerClusterSpacing = NoopMetrics.space1
+#else
+private let headerClusterSpacing = NoopMetrics.space3
+#endif
 
 private struct LiquidAddButton: View {
     @EnvironmentObject var router: NavRouter
@@ -1835,7 +1962,10 @@ private struct LiquidAddButton: View {
             Image(systemName: "plus")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(StrandPalette.textPrimary)
-                .frame(width: headerClusterControl, height: headerClusterControl)
+                .frame(
+                    width: NoopMetrics.compactControlSize,
+                    height: NoopMetrics.compactControlSize
+                )
         }
         .nativeLiquidGlassHeaderButton()
         .accessibilityLabel("Quick actions")
@@ -1952,7 +2082,9 @@ private struct LiquidLiveHR: View {
                     stat(String(localized: "Max"), series.max())
                 }
             } else {
-                Text(live.connected ? "Waiting for a live heartbeat…" : "Connect your strap to see live heart rate")
+                Text(live.connected
+                     ? String(localized: "Waiting for a live heartbeat…")
+                     : String(localized: "Connect your strap to see live heart rate"))
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2125,69 +2257,148 @@ extension LiquidTodayView {
     }
 }
 
-/// Strap-battery ring. Owns LiveState. Tap → Devices.
+/// Strap-battery ring. At sync start it briefly expands within the trailing control row, then settles into
+/// an in-place spinner; the layered header keeps either state from moving the Today content. Tap → Devices.
 private struct LiquidBatteryButton: View {
     @EnvironmentObject var live: LiveState
     @EnvironmentObject var router: NavRouter
-    private var display: LiquidTodayView.StrapBatteryDisplay {
-        .resolve(connected: live.connected, batteryPct: live.batteryPct, charging: live.charging)
+
+    /// Debounced by `debouncedSyncSignal` below, so a per-chunk `backfilling` gap cannot flash the
+    /// indicator back to the battery reading in the middle of one logical sync.
+    @State private var syncing = false
+    #if DEBUG
+    /// Driven only by the `--demo-sync` harness; ignored entirely when that flag is absent.
+    @State private var demoSyncing = false
+    /// Synthetic chunk tally for the harness, so the expanded read-out is exercised without a strap.
+    /// Kept local rather than written into LiveState — a demo aid must not touch real collector state.
+    @State private var demoChunks = 0
+    #endif
+
+    /// The raw, confirmed "strap history is syncing" signal.
+    ///
+    /// Pull-to-refresh is not evidence of an offload: `syncNow()` can still decline after its
+    /// connected/bonded gate when the connection handshake or backing store is not ready. A successful
+    /// `beginBackfill()` publishes `live.backfilling` synchronously, so that state is both prompt and the
+    /// only honest source for the header and its VoiceOver label.
+    private var syncingRaw: Bool {
+        #if DEBUG
+        if DemoSyncHarness.active { return demoSyncing }
+        #endif
+        return live.backfilling
     }
+
+    private var batteryDisplay: LiquidTodayView.StrapBatteryDisplay {
+        #if DEBUG
+        if DemoSyncHarness.active {
+            return .resolve(
+                connected: true,
+                batteryPct: DemoSyncHarness.batteryPercent,
+                charging: DemoSyncHarness.charging
+            )
+        }
+        #endif
+        return .resolve(
+            connected: live.connected,
+            batteryPct: live.batteryPct,
+            charging: live.charging
+        )
+    }
+
+    private var indicatorState: ChargeSyncIndicator.BatteryState {
+        switch batteryDisplay {
+        case .offline:
+            return .offline
+        case .pending(let charging):
+            return .pending(charging: charging)
+        case .charge(let percent, let charging):
+            return .charge(percent: percent, charging: charging)
+        }
+    }
+
     var body: some View {
         Button { router.openDevices() } label: {
-            ZStack {
-                switch display {
-                case .charge(let pct, let charging):
-                    Circle()
-                        .trim(from: 0, to: max(0.02, min(1, pct / 100)))
-                        .stroke(ringColor(pct), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .padding(2.5)
-                    Text("\(Int(pct.rounded()))")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(StrandPalette.textPrimary)
-                    if charging {
-                        // #972: the default Today never surfaced charging state — only the % ring. A small
-                        // bolt over the ring gives the same signal as the "· Charging" text on Mac/Android.
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(StrandPalette.chargeColor)
-                            .offset(y: -10)
-                    }
-                case .pending(let charging):
-                    // Connected, no % yet. If the BATTERY_LEVEL event has told us we're charging, SAY so —
-                    // that is the one thing we actually know, and it is the wearer's live question.
-                    Image(systemName: charging ? "bolt.fill" : "ellipsis")
-                        .font(.system(size: charging ? 11 : 9, weight: .bold))
-                        .foregroundStyle(charging ? StrandPalette.chargeColor : StrandPalette.textTertiary)
-                case .offline:
-                    Image(systemName: "bolt.slash")
-                        .font(.system(size: 11))
-                        .foregroundStyle(StrandPalette.textTertiary)
-                }
-            }
-            .frame(width: headerClusterControl, height: headerClusterControl)
+            ChargeSyncIndicator(
+                batteryState: indicatorState,
+                syncing: syncing,
+                chunks: syncChunks
+            )
         }
-        .nativeLiquidGlassHeaderButton()
+        .nativeLiquidGlassSyncButton()
         .accessibilityLabel(batteryAccessibility)
+        .debouncedSyncSignal(syncingRaw, into: $syncing)
+        // DEBUG-gated at the CALL SITE too, not just in the body: in Release the harness must cost
+        // literally nothing, rather than an async task created and immediately returned per appearance.
+        #if DEBUG
+        .task { await runDemoSyncCycleIfNeeded() }
+        #endif
     }
+
+    /// DEBUG `--demo-sync` only: loop the syncing signal so the charge→sync morph plays in both
+    /// directions without a strap. Returns immediately in Release and whenever the flag is absent, and
+    /// `.task` cancels it on disappear.
+    private func runDemoSyncCycleIfNeeded() async {
+        #if DEBUG
+        guard DemoSyncHarness.active else { return }
+        while !Task.isCancelled {
+            try? await Task.sleep(
+                nanoseconds: UInt64(DemoSyncHarness.idleSeconds * 1_000_000_000)
+            )
+            guard !Task.isCancelled else { return }
+            demoChunks = 0
+            demoSyncing = true
+            // Tick the tally the way an offload does, so the expanded label is watched changing rather
+            // than appearing once and holding.
+            for tick in 1...DemoSyncHarness.chunkTicks {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(DemoSyncHarness.chunkIntervalSeconds * 1_000_000_000)
+                )
+                guard !Task.isCancelled else { return }
+                demoChunks = tick
+            }
+            demoSyncing = false
+        }
+        #endif
+    }
+
+    /// Chunks acked this session, shown inside the spinner where the battery percentage sits. The
+    /// expanded label stays "Syncing" — this is the numeric read-out, not the caption.
+    private var syncChunks: Int {
+        #if DEBUG
+        if DemoSyncHarness.active { return demoChunks }
+        #endif
+        return live.syncChunksThisSession
+    }
+
     /// Never "Strap battery" alone for a no-reading state — that was indistinguishable from a real one.
     private var batteryAccessibility: String {
-        switch display {
+        if syncing {
+            // `syncChunks` is a COUNT, not an index, so it reads "3 chunks" — the phrasing the Android
+            // twin and `SyncStatusChip` already use. Reusing that exact key also means this read-out
+            // inherits its existing translations rather than adding an untranslated variant.
+            //
+            // The SAME accessor the ring draws from, not `live.syncChunksThisSession` directly: in
+            // Release the two are identical, but under `--demo-sync` reading LiveState here would have
+            // VoiceOver announcing a real count while the ring showed the synthetic one — i.e. the
+            // harness could not be used to check the read-out it exists to exercise.
+            let n = syncChunks
+            return n > 0
+                ? String(localized: "Syncing strap history, \(n) chunks")
+                : String(localized: "Syncing strap history")
+        }
+
+        switch batteryDisplay {
         case .offline:
             return String(localized: "Strap battery, strap not connected")
         case .pending(let charging):
             return charging
                 ? String(localized: "Strap battery charging, no reading yet")
                 : String(localized: "Strap battery, no reading yet")
-        case .charge(let pct, let charging):
-            let n = Int(pct.rounded())
+        case .charge(let percent, let charging):
+            let n = Int(percent.rounded())
             return charging
                 ? String(localized: "Strap battery \(n) percent, charging")
                 : String(localized: "Strap battery \(n) percent")
         }
-    }
-    private func ringColor(_ p: Double) -> Color {
-        p < 15 ? StrandPalette.statusCritical : p < 35 ? StrandPalette.statusWarning : StrandPalette.chargeColor
     }
 }
 
@@ -2212,6 +2423,36 @@ private extension View {
                 .overlay(Circle().strokeBorder(.white.opacity(0.16), lineWidth: 0.8))
         }
     }
+
+    /// Exact-bounds glass for the charge-to-sync morph. The same Capsule stretches only while its label
+    /// expands. Not `nativeLiquidGlassButtonChrome(capsule:)`: `.buttonBorderShape(.capsule)` applies the
+    /// system's capsule metrics, which pad wider than tall and render the compact 36-point state as a
+    /// pill — hence the manual, equal padding here, which keeps it circular.
+    ///
+    /// iOS 26 matches the sibling `.glass` circles, whose own `.small` chrome insets the label by the
+    /// same amount. The fallbacks add no padding: their siblings draw the material straight onto a
+    /// 36-point label, so a Capsule over the identical 36×36 frame is already that circle.
+    @ViewBuilder
+    func nativeLiquidGlassSyncButton() -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            self
+                .buttonStyle(.plain)
+                .padding(NoopMetrics.syncIndicatorGlassPadding)
+                .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            self
+                .buttonStyle(LiquidPressStyle())
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.8))
+        }
+        #else
+        self
+            .buttonStyle(LiquidPressStyle())
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.8))
+        #endif
+    }
 }
 
 /// Strap-history sync state inside the Data Sources card. Owns LiveState; display-only.
@@ -2227,7 +2468,7 @@ private extension View {
 /// it has pulled, and when one last completed. It does NOT yet say "~15h behind" — that needs the
 /// persisted data frontier (max HR ts) compared against `strapRange.newestUnix`, and the frontier is a
 /// Repository read that LiveState does not carry. That remains open in B1. Kept here in the Data Sources
-/// card as the detailed view; the Devices screen now owns the larger at-a-glance sync card.
+/// card as the detailed view; `LiquidBatteryButton` above is the header's ambient at-a-glance signal.
 private struct LiquidSyncStatusRow: View {
     @EnvironmentObject var live: LiveState
     var body: some View {
@@ -2235,7 +2476,7 @@ private struct LiquidSyncStatusRow: View {
             row(String(localized: "Strap history"), value: chunks, tone: StrandPalette.accent)
         } else if let ts = live.lastSyncedAt {
             row(String(localized: "Strap history"),
-                value: String(localized: "Synced \(relativeAgo(ts)) ago"), tone: StrandPalette.textPrimary)
+                value: String(localized: "Synced \(relativeAgo(ts))"), tone: StrandPalette.textPrimary)
         }
     }
 
@@ -2277,7 +2518,7 @@ private struct LiquidStrapBatteryRow: View {
     /// Mac / Android pill and the classic Today badge.
     private func batteryText(pct: Double) -> String {
         let base = "\(Int(pct.rounded()))%"
-        if live.charging == true { return "\(base) · Charging" }
+        if live.charging == true { return "\(base) · \(String(localized: "Charging"))" }
         if let est = estimateText { return "\(base) · \(est)" }
         return base
     }

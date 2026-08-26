@@ -5,6 +5,9 @@ import androidx.room.withTransaction
 import com.noop.protocol.DroppedRtcEvent
 import com.noop.protocol.RrSourceChannel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlin.math.roundToInt
 
@@ -299,7 +302,7 @@ data class PpgHrRow(val ts: Long, val bpm: Int, val conf: Double)
  * unix second, [samples] the raw i16 ADC counts (usually 24, fewer on a truncated frame). deviceId is
  * attached on insert; the samples are packed to a little-endian i16 BLOB by [StreamPersistence.packPpgSamples].
  */
-data class PpgWaveformRow(val ts: Long, val samples: List<Int>)
+data class PpgWaveformRow(val ts: Long, val samples: List<Int>, val burstIndex: Int? = null)
 
 /** Count of rows ACTUALLY inserted per stream (mirrors WhoopStore.insert return tuple). */
 data class InsertCounts(
@@ -312,6 +315,21 @@ data class InsertCounts(
     val steps: Int = 0,
     val resp: Int = 0,
     val gravity: Int = 0,
+)
+
+/** Monotonic event revisions for Test Centre repository-backed readouts. Counts move only after Room
+ * reports at least one newly inserted relevant row; duplicate/no-op inserts leave them unchanged. */
+internal data class ReadoutDataRevisions(
+    val sleepSamples: Long = 0,
+    val battery: Long = 0,
+)
+
+internal fun advanceReadoutDataRevisions(
+    current: ReadoutDataRevisions,
+    inserted: InsertCounts,
+): ReadoutDataRevisions = current.copy(
+    sleepSamples = current.sleepSamples + if (inserted.hr > 0 || inserted.gravity > 0) 1 else 0,
+    battery = current.battery + if (inserted.battery > 0) 1 else 0,
 )
 
 /**
@@ -384,6 +402,13 @@ class WhoopRepository(
      *  path banks v18 rows, so a plain map is enough. Swift twin: `WhoopStore.v18AuxRowsSincePrune`. */
     private val v18AuxRowsSincePrune = mutableMapOf<String, Int>()
 
+    private val _sleepSampleRevision = MutableStateFlow(0L)
+    val sleepSampleRevision: StateFlow<Long> = _sleepSampleRevision.asStateFlow()
+    private val _batteryRevision = MutableStateFlow(0L)
+    val batteryRevision: StateFlow<Long> = _batteryRevision.asStateFlow()
+    private val readoutRevisionLock = Any()
+    private var readoutRevisions = ReadoutDataRevisions()
+
     constructor(db: WhoopDatabase) : this(
         dao = db.whoopDao(),
         transactor = object : Transactor {
@@ -414,6 +439,14 @@ class WhoopRepository(
     /** #716: read all paired devices (thin pass-through for the BLE scan fix). */
     suspend fun pairedDevices(): List<PairedDeviceRow> = dao.pairedDevices()
 
+    /** Raw biometric sample counts per device id in a window - see [WhoopDao.rawSampleCountsByDevice]. */
+    suspend fun rawSampleCountsByDevice(from: Long, to: Long): List<Pair<String, Int>> =
+        dao.rawSampleCountsByDevice(from, to).map { it.deviceId to it.total }
+            // isNotEmpty, NOT isNotBlank: the Swift twin filters on `!isEmpty`, so a whitespace-only id
+            // would be dropped here and kept there. Neither can occur today - the point is that the two
+            // predicates stay the same one.
+            .filter { it.first.isNotEmpty() && it.second > 0 }
+
     // MARK: - Insert decoded streams (idempotent by natural key)
 
     /**
@@ -434,13 +467,24 @@ class WhoopRepository(
     ): InsertCounts {
         if (streams.isEmpty) return InsertCounts()
 
-        return transactor.run {
+        val counts = transactor.run {
             insertWithinTransaction(
                 streams = streams,
                 deviceId = deviceId,
                 v18AuxRetentionRows = v18AuxRetentionRows,
                 v18AuxPruneEveryRows = v18AuxPruneEveryRows,
             )
+        }
+        publishReadoutRevisions(counts)
+        return counts
+    }
+
+    private fun publishReadoutRevisions(inserted: InsertCounts) {
+        synchronized(readoutRevisionLock) {
+            val next = advanceReadoutDataRevisions(readoutRevisions, inserted)
+            readoutRevisions = next
+            if (_sleepSampleRevision.value != next.sleepSamples) _sleepSampleRevision.value = next.sleepSamples
+            if (_batteryRevision.value != next.battery) _batteryRevision.value = next.battery
         }
     }
 
@@ -500,7 +544,8 @@ class WhoopRepository(
         if (streams.ppgWaveform.isNotEmpty()) {
             dao.insertPpgWaveform(
                 streams.ppgWaveform.map {
-                    PpgWaveformSampleEntity(deviceId, it.ts, StreamPersistence.packPpgSamples(it.samples))
+                    PpgWaveformSampleEntity(deviceId, it.ts, StreamPersistence.packPpgSamples(it.samples),
+                        it.burstIndex)
                 },
             )
         }
@@ -558,6 +603,12 @@ class WhoopRepository(
      *  moves it (count or maxTs), so a real change always rescores; mirrors Swift WhoopStore.hrFingerprint. */
     suspend fun hrFingerprint(): String = "${dao.countHr()}:${dao.maxHrTs()}"
 
+    /** #1005 — per-day (device + window) HR fingerprint as (count, newestTs) for analyzeRecent's per-day
+     *  reuse cache. Cheap COUNT/MAX aggregate, never a row fetch; mirrors Swift
+     *  WhoopStore.hrFingerprint(deviceId:from:to:). */
+    suspend fun hrFingerprintWindow(deviceId: String, from: Long, to: Long): Pair<Int, Long> =
+        Pair(dao.countHrInWindow(deviceId, from, to), dao.maxHrTsInWindow(deviceId, from, to))
+
     // MARK: - Server-derived caches (latest value wins on conflict)
 
     suspend fun upsertDailyMetrics(days: List<DailyMetric>) = dao.upsertDailyMetrics(days)
@@ -582,6 +633,11 @@ class WhoopRepository(
 
     suspend fun scoreInputSource(deviceId: String, day: String, key: String): String? =
         dao.scoreInputSource(deviceId, day, key)
+
+    suspend fun upsertMetricSeriesWithProvenance(
+        rows: List<MetricSeriesRow>,
+        provenance: List<ScoreInputProvenanceRow>,
+    ) = dao.upsertMetricSeriesWithProvenance(rows, provenance)
 
     /** Hand-correct the bed (onset) / wake (end) time of an existing sleep session, DURABLY , port
      *  of iOS PR #395 (Repository.editSleepTimes + MetricsCache.applySleepEdit).
@@ -617,6 +673,31 @@ class WhoopRepository(
                 stagesJSON = reclipped ?: session.stagesJSON,
             )),
         )
+    }
+
+    /** Apply a hand-corrected bed/wake window across a BRIDGED night — every fragment, not just one.
+     *
+     *  A split night displays as one group whose bedtime is the FIRST fragment's onset and whose wake is
+     *  the group's LATEST end, while [updateSleepSessionTimes] edits the single winning fragment. On a
+     *  fragmented night that fragment is usually neither end, so correcting a night "detected too long"
+     *  narrowed an interior block and left both displayed bounds untouched: the save worked and nothing
+     *  the user could see changed. (#1492)
+     *
+     *  Fragments overlapping the new window are clipped to it and marked `userEdited`; fragments left
+     *  entirely outside are retired through [deleteSleepSession], so a DETECTED one is tombstoned and the
+     *  next analyzeRecent cannot re-detect it straight back into the night — without that, a shortened
+     *  night simply grows again on the next pass.
+     *
+     *  A one-fragment group reproduces [updateSleepSessionTimes] exactly (the lone fragment takes both
+     *  drawn bounds), so an unfragmented night keeps its previous behaviour through the same code. */
+    suspend fun updateSleepGroupTimes(group: List<SleepSession>, newStartTs: Long, newEndTs: Long) {
+        val (safeStartTs, safeEndTs) = com.noop.analytics.SleepEditGuard.clampedEditWindow(
+            newStartTs, newEndTs, System.currentTimeMillis() / 1000L,
+        ) ?: return
+        val plan = com.noop.analytics.SleepGroupEdit.plan(group, safeStartTs, safeEndTs)
+        if (plan.clipped.isEmpty()) return
+        dao.upsertSleepSessions(plan.clipped)
+        plan.dropped.forEach { deleteSleepSession(it) }
     }
 
     /** Remove a sleep session entirely , the delete half of [updateSleepSessionTimes] with no
@@ -842,7 +923,17 @@ class WhoopRepository(
 
     // MARK: - Live Sessions (silent guardian, v22). The runner banks the row at start (endTs null) and
     // again at end (totals); the summary reads the recent rows for its guarded-count / streak line.
-    suspend fun upsertLiveSession(row: LiveSessionRow) = dao.upsertLiveSession(row)
+    suspend fun upsertLiveSession(row: LiveSessionRow) = dao.upsertLiveSession(
+        deviceId = row.deviceId, startTs = row.startTs, endTs = row.endTs,
+        chargeAtStart = row.chargeAtStart, floorBpm = row.floorBpm, ceilingBpm = row.ceilingBpm,
+        inBandSec = row.inBandSec, belowSec = row.belowSec, aboveSec = row.aboveSec,
+        pushCount = row.pushCount, easeCount = row.easeCount, hrSource = row.hrSource,
+    )
+
+    /** #1410: append one app-level event (e.g. APP_VERSION_CHANGED) onto the event table. */
+    suspend fun recordEvent(deviceId: String, ts: Long, kind: String, payloadJSON: String) {
+        dao.insertEvents(listOf(EventRow(deviceId, ts, kind, payloadJSON)))
+    }
     suspend fun recentLiveSessions(deviceId: String, limit: Int): List<LiveSessionRow> =
         dao.recentLiveSessions(deviceId, limit)
 
@@ -922,7 +1013,9 @@ class WhoopRepository(
         dao.pruneRawImu(deviceId, RAW_IMU_RETENTION_ROWS)
     }
 
-    /** #423: raw 5/MG IMU buffers in [from, to] as the decoded i16 columns [ax…az,gx…gz] (100/axis). */
+    /** #423: raw 5/MG IMU buffers in [from, to] as the decoded i16 columns [ax…az,gx…gz] (100/axis).
+     *  Intentionally dormant — zero callers, retained for the eventual cross-check (see [RawImuSampleEntity]
+     *  CONSUMER STATUS, #978). Not dead code; do not delete. */
     suspend fun rawImuSamples(deviceId: String, from: Long, to: Long, limit: Int = DEFAULT_LIMIT):
         List<Pair<Long, ShortArray>> =
         dao.rawImuSamples(deviceId, from, to, limit)
@@ -976,10 +1069,27 @@ class WhoopRepository(
         rows: List<WorkoutRow>,
         // HR read key for IMPORTED rows ONLY (Apple/HC/CSV/activity file): they carry no strap HR of their
         // own, so #77 derives it from the worn strap. STRAP-NATIVE rows ignore this and key on their OWN
-        // recording strap (see [workoutHrDeviceIds]). The canonical "my-whoop" default is the worn strap on a
-        // single-WHOOP install (and every current caller uses it); which strap was worn during an imported
-        // session on a MULTI-strap install is undetermined, so that case is left as-is (not the active strap).
-        strapDeviceId: String = "my-whoop",
+        // recording strap (see [workoutHrDeviceIds]).
+        //
+        // #1601: both UI callers now pass the ACTIVE strap id. This used to be left at the canonical
+        // default on the reasoning that which strap was worn during an imported session is undetermined on
+        // a MULTI-strap install — true, but it made the common SINGLE-strap case wrong, because an install
+        // whose one strap banks under a non-canonical id (a re-add, or a 5/MG's transient CB-UUID pairing,
+        // #1193) resolved `importedSourceIdsFor("my-whoop")` to the canonical id ALONE while the detail
+        // sheet's chart, zones and HR-recovery resolved active ∪ canonical. The graph found HR and this
+        // fill did not, so the session showed "AVG –" against a populated curve — the state this function's
+        // own promise of "display == graph == zones == effort by construction" exists to prevent.
+        //
+        // The multi-strap ambiguity is not resolved by this, and is not made worse by it either: the union
+        // and its first-wins merge are exactly what the chart already applies to the same window, so the two
+        // now agree rather than disagreeing.
+        //
+        // REQUIRED, no default. The canonical default is what caused this — #857 unified the RESOLVER
+        // ("one HR device-id rule for the chart, zones, Avg HR and HRR") but this parameter, inherited from
+        // #77, kept feeding it a different active id, so the one rule ran on two inputs and Avg HR was the
+        // surface that missed out. Nothing depended on the default once both call sites were corrected, and
+        // a caller that cannot name the strap it means should not be silently given the canonical one.
+        strapDeviceId: String,
         minSamples: Long = 60,
         cap: Int = 300,
         // #961: the user's HRmax + sex. When supplied, a strap-native row whose Effort (strain) is null gets
@@ -989,6 +1099,10 @@ class WhoopRepository(
         // as stored. Display-only; the durable value is written by IntelligenceEngine.rescoreManualWorkouts.
         strainMaxHR: Double? = null,
         strainSex: String = "male",
+        // #1545: the TRIMP recipe for that display-only refill. A parameter rather than a NoopPrefs read
+        // because this class holds no Context; the two UI callers pass the user's choice. EDWARDS by
+        // default so a caller that does not care stays byte-identical.
+        effortMethod: com.noop.analytics.StrainScorer.Method = com.noop.analytics.StrainScorer.Method.EDWARDS,
     ): List<WorkoutRow> {
         var budget = cap
         return rows.map { row ->
@@ -1018,7 +1132,8 @@ class WhoopRepository(
             // let StrainScorer return null on a still-too-thin window (never a fabricated number).
             val filledStrain = if (needsStrainFill && strainMaxHR != null) {
                 val samples = dao.hrSamples(hrIds[0], row.startTs, row.endTs, 8000)
-                com.noop.analytics.StrainScorer.strain(samples, maxHR = strainMaxHR, sex = strainSex)
+                com.noop.analytics.StrainScorer.strain(
+                    samples, maxHR = strainMaxHR, method = effortMethod, sex = strainSex)
             } else null
             if (strapNative) {
                 // True mean / peak of the very samples the graph + zones + effort use; FILL a null Effort
@@ -1113,14 +1228,19 @@ class WhoopRepository(
      * edit started from:
      *  - editing a DETECTED bout replaces it with this manual row , the detected original is dismissed
      *    durably so the re-detector doesn't bring it back (else both would show);
-     *  - editing a MANUAL row whose natural key (startTs/sport) changed deletes the stale row first
-     *    (the (deviceId, startTs, sport) PK upsert would otherwise orphan it);
+     *  - editing a MANUAL row whose PRIMARY KEY moved deletes the stale row first (the
+     *    (deviceId, startTs, sport) PK upsert would otherwise orphan it). deviceId is part of that key,
+     *    so a row stored under a re-paired strap's active id counts as moved even when startTs and sport
+     *    are untouched: the edit lands on the "my-whoop" seed while the original stays put, and
+     *    `workoutsUnion` reads [activeDeviceId, "my-whoop"] keeping the FIRST row per (startTs, sport),
+     *    so the stale copy would shadow the edit forever. Comparing only startTs/sport missed exactly
+     *    that case and made a save look successful while changing nothing (#1488);
      *  - an IMPORTED row is never passed here as `replacing` (duplicating one is a pure add).
      */
     suspend fun saveManualWorkout(row: WorkoutRow, replacing: WorkoutRow? = null) {
         if (replacing != null && replacing.source.lowercase().endsWith("-noop")) {
             dismissDetected(replacing)
-        } else if (replacing != null && (replacing.startTs != row.startTs || replacing.sport != row.sport)) {
+        } else if (replacing != null && supersedesStoredRow(replacing, row)) {
             dao.deleteWorkoutByKey(replacing.deviceId, replacing.startTs, replacing.sport)
         }
         dao.upsertWorkouts(listOf(row))
@@ -1216,7 +1336,7 @@ class WhoopRepository(
     /**
      * The user's learned habitual midsleep (local time-of-day seconds) for [deviceId], or null under
      * [com.noop.analytics.SleepStageTotals.HABITUAL_MIN_DAYS] of history (cold-start). Computed EXACTLY as
-     * `IntelligenceEngine.computeHabitualMidsleep` does , the SAME raw imported + computed ("-noop")
+     * `IntelligenceEngine.computeHabitualSleep` does , the SAME raw imported + computed ("-noop")
      * sleep-session union, one HistoryBlock per session (effective bounds, dayKey = the LOCAL calendar day
      * of the midpoint), deferring to the SAME shared [com.noop.analytics.SleepStageTotals.habitualMidsleepSec]
      * pure function , so the Sleep tab's main-night pick aligns to the same value the analytics rollup used.
@@ -1335,6 +1455,12 @@ class WhoopRepository(
     /** Scalar COUNT twin of [days] for count badges. */
     suspend fun daysCount(deviceId: String): Int = dao.daysCount(deviceId)
 
+    /** #1304/#512: the newest HR-sample ts across the active-strap union, or null — the union twin of
+     *  [latestHrSampleTs] for the Data Sources "has HR" badge (a 2nd strap banks HR under its own id, so a
+     *  raw "my-whoop" read reported no HR). Collapses to a single id for an import-only install. */
+    suspend fun latestHrSampleTsUnion(activeStrapId: String): Long? =
+        importedSourceIds(activeStrapId).mapNotNull { dao.latestHrSampleTs(it) }.maxOrNull()
+
     /** Every distinct source id with at least one cached daily row. Feeds the Health Connect
      *  backfill's strap-coverage gate (see HealthConnectImporter.isStrapNativeSourceId). */
     suspend fun dailyMetricDeviceIds(): List<String> = dao.dailyMetricDeviceIds()
@@ -1442,6 +1568,12 @@ class WhoopRepository(
             "battery" to dao.countBattery(), "spo2" to dao.countSpo2(),
             "skinTemp" to dao.countSkinTemp(), "steps" to dao.countSteps(),
             "resp" to dao.countResp(), "gravity" to dao.countGravity(),
+            // The rest of the accumulating decoded raw streams, so the Test-Centre footprint counts ALL of
+            // them (keep in sync with Swift storageStats / TimestampHeal's raw-table list). ppgHr/ppgWaveform
+            // /rawImu can each be large.
+            "ppgHr" to dao.countPpgHr(), "sleepState" to dao.countSleepState(),
+            "ppgWaveform" to dao.countPpgWaveform(), "rawImu" to dao.countRawImu(),
+            "v18Aux" to dao.countV18Aux(),
         )
     }.getOrDefault(emptyMap())
 
@@ -1772,7 +1904,11 @@ class WhoopRepository(
     /** Persist HR samples directly (e.g. a live-tracked workout's 1 Hz series). Dedup-safe:
      *  `insertHr` IGNOREs on the (deviceId, ts) primary key, so re-inserts / a later offload sync
      *  covering the same seconds are no-ops. (#528) */
-    suspend fun insertHr(rows: List<HrSample>) = dao.insertHr(rows)
+    suspend fun insertHr(rows: List<HrSample>): List<Long> {
+        val ids = dao.insertHr(rows)
+        publishReadoutRevisions(InsertCounts(hr = ids.countInserted()))
+        return ids
+    }
 
     suspend fun latestHrSampleTs(deviceId: String): Long? = dao.latestHrSampleTs(deviceId)
     suspend fun latestHr(deviceId: String): HrSample? = dao.latestHr(deviceId)
@@ -1920,6 +2056,16 @@ class WhoopRepository(
             val seen = HashSet<Pair<Long, Long>>()
             return sessions.filter { seen.add(it.startTs to it.endTs) }
         }
+
+        /** True when [replacing] is stored under a DIFFERENT primary key than the row about to be written,
+         *  so the upsert would leave it orphaned beside the new one instead of overwriting it. The key is
+         *  (deviceId, startTs, sport) — all three, which is the point: an edit whose startTs and sport are
+         *  untouched still moves when the original sits under a re-paired strap's active id and the edit is
+         *  built on the "my-whoop" seed. [dedupWorkoutsByKey] then hides the newer row behind the stale one,
+         *  so the save silently does nothing. (#1488) */
+        internal fun supersedesStoredRow(replacing: WorkoutRow, row: WorkoutRow): Boolean =
+            replacing.deviceId != row.deviceId || replacing.startTs != row.startTs ||
+                replacing.sport != row.sport
 
         /** Drop exact-duplicate workouts sharing an identical (startTs, sport) natural key — the same
          *  session read under two #814 union ids — keeping the FIRST seen (callers pass active-strap-first
@@ -2165,6 +2311,7 @@ class WhoopRepository(
                 // Independent columns: each stands alone, so a plain per-column fill is safe.
                 restingHr = winner.restingHr ?: filler.restingHr,
                 avgHrv = winner.avgHrv ?: filler.avgHrv,
+                avgSdnn = winner.avgSdnn ?: filler.avgSdnn,
                 recovery = winner.recovery ?: filler.recovery,
                 strain = winner.strain ?: filler.strain,
                 exerciseCount = winner.exerciseCount ?: filler.exerciseCount,
@@ -2266,6 +2413,7 @@ class WhoopRepository(
                     disturbances = d.disturbances ?: c.disturbances,
                     restingHr = d.restingHr ?: c.restingHr,
                     avgHrv = d.avgHrv ?: c.avgHrv,
+                    avgSdnn = d.avgSdnn ?: c.avgSdnn,
                     recovery = d.recovery ?: c.recovery,
                     strain = d.strain ?: c.strain,
                     exerciseCount = d.exerciseCount ?: c.exerciseCount,

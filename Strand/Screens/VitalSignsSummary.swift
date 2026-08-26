@@ -23,6 +23,10 @@ struct BodyVitalReading: Identifiable {
     /// the resolved value, banding and source are unchanged — this is just the trend for the trail.
     /// Defaulted so existing call sites (previews/tests) keep compiling unchanged.
     var sparkline: [Double]? = nil
+    /// #1118: an "unverified" caveat appended to the caption when the resolved value is present but the
+    /// strap's own capture is known-unreliable for it (e.g. a WHOOP 4.0 R-R over-count contaminating HRV).
+    /// nil = no caveat. Defaulted so existing call sites keep compiling unchanged.
+    var caveat: String? = nil
 
     var id: String { key }
 
@@ -49,6 +53,7 @@ struct BodyVitalReading: Identifiable {
             parts.append(sourceText)
         }
         parts.append(stateText)
+        if let caveat { parts.append(caveat) }   // #1118: e.g. "unverified · over-reports R-R"
         return parts.joined(separator: " · ")
     }
 
@@ -117,7 +122,8 @@ enum BodyVitalSigns {
     static func readings(sourceRows: [SourcedDailyMetric],
                          temperatureUnit: TemperatureUnit,
                          now: Date = Date(),
-                         spo2CandidateByDay: [String: Double] = [:]) -> [BodyVitalReading] {
+                         spo2CandidateByDay: [String: Double] = [:],
+                         hrvOverCountByDay: [String: Double] = [:]) -> [BodyVitalReading] {
         let logicalDay = logicalDayKey(now)
 
         // Resolve one metric to a per-day series, taking the FIRST source (by precedence) that carries
@@ -135,9 +141,15 @@ enum BodyVitalSigns {
         }
 
         // Prefer the logical day's value; otherwise the most recent day that has one — so a vital still
-        // shows after a day with no wear instead of blanking to "—".
+        // shows after a day with no wear instead of blanking to "—". That carry is STALENESS-BOUNDED
+        // (`Baselines.vitalCarryDays`): it exists to survive a missed night, not to keep a months-old
+        // reading under a section headed "Latest". Unbounded, `pts.last` reached back arbitrarily far —
+        // a WHOOP CSV import that ended 30 Jul kept this tile reading "15.6 rpm" a fortnight later. The
+        // "· 30 Jul ·" in `stateCaption` was not enough: the eye takes the headline number for today's.
         func latest(_ pts: [VitalPoint]) -> VitalPoint? {
-            pts.last(where: { $0.day == logicalDay }) ?? pts.last
+            if let today = pts.last(where: { $0.day == logicalDay }) { return today }
+            return Baselines.freshestCarried(pts.map { (day: $0.day, value: $0) },
+                                             todayKey: logicalDay)?.value
         }
 
         func history(before day: String?, _ pts: [VitalPoint]) -> [Double?] {
@@ -149,10 +161,13 @@ enum BodyVitalSigns {
 
         let respPoints = points(key: "resp", \.respRateBpm)
         let spo2Points = points(key: "spo2", \.spo2Pct)
-        // #103: SpO₂ candidate @82 (WHOOP 5/MG only). When no calibrated spo2Pct exists AND the toggle is
-        // ON, the candidate mean is passed in from metricSeries as a fallback. It has split cross-device
-        // evidence and ships behind a default-off toggle, never as `spo2Pct` (CLAUDE.md derived-biosignal
-        // rule). Built into VitalPoints so the tile + sparkline + `latest()` resolve it the same way.
+        // #103/queue-11a: SpO₂ candidate — WHOOP `spo2_candidate_82`, or an Oura owner's ceiling@100
+        // `0x6F` mean (device-conditional, computed in IntelligenceEngine; this view just reads whatever
+        // landed in metricSeries). When no calibrated spo2Pct exists AND the toggle is ON, the candidate
+        // mean is passed in from metricSeries as a fallback. Neither candidate is a validated calibration
+        // and both ship behind this one default-off toggle, never as `spo2Pct` (CLAUDE.md derived-
+        // biosignal rule). Built into VitalPoints so the tile + sparkline + `latest()` resolve it the
+        // same way.
         let spo2CandidateOn = PuffinExperiment.spo2CandidateDisplayEnabled && !spo2CandidateByDay.isEmpty
         let spo2CandidatePoints: [VitalPoint] = spo2CandidateOn
             ? spo2CandidateByDay.map { (day, value) in
@@ -170,15 +185,24 @@ enum BodyVitalSigns {
         let skinPoints = points(key: "skin", \.skinTempDevC)
 
         let respRow = latest(respPoints)
-        // #103: fall back to the spo2_candidate @82 mean when no calibrated spo2Pct exists. The candidate
-        // is labelled "strap estimate (unverified)" in the tile caption so it is never read as a calibrated
-        // blood-oxygen percentage.
+        // #103/queue-11a: fall back to the spo2_candidate mean when no calibrated spo2Pct exists. The
+        // candidate is labelled "strap estimate (unverified)" in the tile caption so it is never read as
+        // a calibrated blood-oxygen percentage.
         let spo2Row = latest(spo2Points) ?? latest(spo2CandidatePoints)
         let spo2IsCandidate = spo2Row != nil && latest(spo2Points) == nil
         let spo2rawRow = latest(spo2rawPoints)
         let rhrRow = latest(rhrPoints)
         let hrvRow = latest(hrvPoints)
         let skinRow = latest(skinPoints)
+        // #1118: mark HRV "unverified" when this night's in-sleep R-R was over-counted — the WHOOP 4.0
+        // two-optical-channel artifact that inflates R-R and contaminates RMSSD, so NOOP's HRV won't match
+        // WHOOP until the de-dup fix lands. The flag is written only for NOOP's OWN measured capture (an
+        // imported WHOOP-app night never sets it), so a pure-import night is never caveated. Gated on the
+        // flag ALONE — no source check — to stay behaviourally identical to Android, whose DailyMetric
+        // carries no per-row source (feature-level parity). (#1118)
+        let hrvCaveat: String? = (hrvRow.map { (hrvOverCountByDay[$0.day] ?? 0) >= 0.5 } ?? false)
+            ? String(localized: "unverified · over-reports R-R")
+            : nil
 
         // Trailing values (oldest → newest) feeding each tile's sparkline trail. A 2+ point series
         // draws; the tile hides the trail otherwise. Presentation-only — built from the same resolved
@@ -267,7 +291,7 @@ enum BodyVitalSigns {
                 missingCaption: spo2IsCandidate
                     ? String(localized: "strap estimate (unverified)")
                     : (PuffinExperiment.spo2CandidateDisplayEnabled && spo2Row == nil
-                       ? String(localized: "toggle ON · no @82 data")
+                       ? String(localized: "toggle ON · no estimate yet")
                        : (spo2rawRow != nil
                           ? String(localized: "Raw counts only — needs an import")
                           : String(localized: "No SpO₂ import or Health value"))),
@@ -329,7 +353,8 @@ enum BodyVitalSigns {
                 day: hrvRow?.day,
                 source: hrvRow?.source,
                 missingCaption: String(localized: "No HRV value"),
-                sparkline: trail(hrvPoints)
+                sparkline: trail(hrvPoints),
+                caveat: hrvCaveat   // #1118
             ),
             BodyVitalReading(
                 key: "skin",

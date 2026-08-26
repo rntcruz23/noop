@@ -1,6 +1,8 @@
 package com.noop.ui
 
 import com.noop.analytics.AnalyticsEngine
+import com.noop.analytics.Baselines
+import com.noop.analytics.RestScorer
 import com.noop.analytics.SleepDebt
 import com.noop.analytics.SleepStageTotals
 import com.noop.data.DailyMetric
@@ -126,6 +128,9 @@ internal fun buildSleepModel(
     // #sleep-consistency-parity: the full session list (onset times), used by the consistency FALLBACK
     // (bedtime-onset spread). Defaults empty for callers/tests that only exercise the imported path.
     sessions: List<SleepSession> = emptyList(),
+    // Today's logical-day key, the anchor for each tile's staleness bound (see [metric]). Injectable so
+    // tests can pin the clock instead of depending on the day they happen to run.
+    todayKey: String = logicalDayKeyNow(),
 ): SleepModel? {
     val effectiveDay = selectedDay ?: days.lastOrNull()?.day ?: return null
     // The HERO night = the selected day's stage-bearing row. The TILE / debt / need / trend
@@ -178,12 +183,20 @@ internal fun buildSleepModel(
 
     // Personal sleep need (minutes): mean asleep, floored at 7.5h (450 min).
     val needMin = max(450.0, typicalTotalMin ?: 450.0)
+    // #242: NORMATIVE need (min) the DEBT surfaces measure against — population-anchored, age-floored,
+    // upper-quartile personalizedNeedHours (the SAME estimator Rest/Intelligence score against), NOT the
+    // descriptive `needMin` mean which drifts toward a chronic under-sleeper's own deficit and quietly
+    // erases their debt. Age isn't plumbed here (null → adult target). One need across the debt tile +
+    // ledger + trend, agreeing with the engine. Need-unification from #464 by @vishk23; the descriptive
+    // `needMin` still drives the "hours vs needed" performance tile.
+    val debtNeedMin = RestScorer.personalizedNeedHours(
+        days.mapNotNull { it.totalSleepMin?.let { m -> m / 60.0 } }, null) * 60.0
 
     // Per-tile metrics — each a full pass over the FULL day history (asleep totals, no in-bed
     // substitution), latest = the most-recent day. Mirrors iOS SleepView, where every tile series
     // is `metric { … }` over repo.days. Where the WHOOP export carried the figure verbatim
     // (metricSeries), it wins per day; the on-device recomputation fills the rest.
-    val performance = metric(days) { d ->
+    val performance = metric(days, todayKey) { d ->
         imported.performance[d.day]                       // WHOOP's own 0–100 figure wins per day
             // else the REAL Rest composite (RestScorer.restFromDaily) — the SAME single source of
             // truth the Today Rest score, the metric-detail overlay (below) and iOS SleepView
@@ -191,7 +204,7 @@ internal fun buildSleepModel(
             // live 5.0 nights at 100% here while every other surface showed the ~85% composite (#298).
             ?: com.noop.analytics.RestScorer.restFromDaily(d)
     }
-    val efficiency = metric(days) { d ->
+    val efficiency = metric(days, todayKey) { d ->
         d.efficiency?.let { if (it <= 1.0) it * 100.0 else it }
     }
     val consistency = run {
@@ -205,21 +218,21 @@ internal fun buildSleepModel(
             consistencySeries(sessions)
         }
     }
-    val hoursVsNeeded = metric(days) { d ->
+    val hoursVsNeeded = metric(days, todayKey) { d ->
         val need = imported.needMin[d.day] ?: needMin   // imported need wins per day
         d.totalSleepMin?.takeIf { it > 0.0 && need > 0.0 }?.let { it / need * 100.0 }
     }
-    val restorative = metric(days) { d ->
+    val restorative = metric(days, todayKey) { d ->
         val dp = d.deepMin; val rm = d.remMin; val sl = d.totalSleepMin
         if (dp != null && rm != null && sl != null && sl > 0.0) (dp + rm) / sl * 100.0 else null
     }
-    val respiratory = metric(days) { it.respRateBpm }
+    val respiratory = metric(days, todayKey) { it.respRateBpm }
     val sleepDebt = run {
         val series = days.mapNotNull { d ->
             imported.debtMin[d.day]   // minutes, export-verbatim
                 ?: SleepDebt.creditedSleepMin(d.totalSleepMin, napSleepMinByDay[d.day] ?: 0.0)
-                    ?.takeIf { needMin > 0.0 }
-                    ?.let { max(0.0, needMin - it) }   // APPROXIMATE fallback
+                    ?.takeIf { debtNeedMin > 0.0 }
+                    ?.let { max(0.0, debtNeedMin - it) }   // #242: normative need, not the self-referential mean
         }
         Metric(series.lastOrNull(), mean(series), series)
     }
@@ -228,10 +241,10 @@ internal fun buildSleepModel(
     // not the browsed night). Mirrors iOS's trailing trend over repo.days.
     val trendRows = days.filter { (it.totalSleepMin ?: 0.0) > 0.0 }.takeLast(14)
     val trendHours = trendRows.mapNotNull { it.totalSleepMin?.let { minutes -> minutes / 60.0 } }
-    val trendNeedHours = trendRows.map { row -> ((imported.needMin[row.day] ?: needMin) / 60.0) }
+    val trendNeedHours = trendRows.map { row -> ((imported.needMin[row.day] ?: debtNeedMin) / 60.0) }
     val trendDebtHours = trendRows.map { row ->
         val sleptMin = SleepDebt.creditedSleepMin(row.totalSleepMin, napSleepMinByDay[row.day] ?: 0.0) ?: 0.0
-        val neededMin = imported.needMin[row.day] ?: needMin
+        val neededMin = imported.needMin[row.day] ?: debtNeedMin   // #242: normative need, not the mean
         ((imported.debtMin[row.day] ?: max(0.0, neededMin - sleptMin)) / 60.0)
     }
     val trendDates = trendRows.map { it.day }
@@ -252,16 +265,16 @@ internal fun buildSleepModel(
     val realSegments = hypnogramSegments?.map { seg -> seg.stage to ((seg.end - seg.start) / 60f) }
 
     // Rolling 14-night sleep-debt ledger over the FULL day history (the analytics caps to the
-    // most-recent 14 counted nights and skips no-data nights), using the SAME personal need the
-    // tiles use (`needMin`, ≥ 7.5 h — the per-user override over the 8 h default). Full history,
-    // not the browsed-night window: the ledger is a "Last 14 nights" at-a-glance summary that
-    // matches the debt TILE (both read main-night totals plus separately decoded nap credit),
-    // and mirrors iOS's debtLedger over repo.days. (#242, #5)
+    // most-recent 14 counted nights and skips no-data nights), using the normative `debtNeedMin`
+    // (the engine's personalizedNeedHours) — the SAME need the debt TILE + trend use, so all debt
+    // surfaces agree. Full history, not the browsed-night window: the ledger is a "Last 14 nights"
+    // at-a-glance summary that matches the debt TILE (both read main-night totals plus separately
+    // decoded nap credit), and mirrors iOS's debtLedger over repo.days. (#242, #5)
     val sleepDebtLedger = SleepDebt.ledger(
         series = days.map { d ->
             d.day to SleepDebt.creditedSleepMin(d.totalSleepMin, napSleepMinByDay[d.day] ?: 0.0)
         },
-        needHours = needMin / 60.0,
+        needHours = debtNeedMin / 60.0,
     )
 
     return SleepModel(
@@ -302,12 +315,13 @@ internal fun fallbackSleepModel(
     imported: ImportedSleepSeries = ImportedSleepSeries(),
     napSleepMinByDay: Map<String, Double> = emptyMap(),
     sessions: List<SleepSession> = emptyList(),
+    todayKey: String = logicalDayKeyNow(),
 ): SleepModel? {
     val anchorDay = days.lastOrNull {
         (it.deepMin ?: 0.0) + (it.remMin ?: 0.0) + (it.lightMin ?: 0.0) > 0.0
     }?.day ?: return null
     return buildSleepModel(days, null, imported, selectedDay = anchorDay,
-        napSleepMinByDay = napSleepMinByDay, sessions = sessions)
+        napSleepMinByDay = napSleepMinByDay, sessions = sessions, todayKey = todayKey)
 }
 
 /**
@@ -359,10 +373,27 @@ internal suspend fun buildHostedSleepModel(
     return fallbackSleepModel(days, imported, napSleepMinByDay, sessions = sleeps)
 }
 
-/** Build a metric from a per-day transform, keeping only finite values. */
-private fun metric(days: List<DailyMetric>, transform: (DailyMetric) -> Double?): Metric {
-    val series = days.mapNotNull(transform).filter { it.isFinite() }
-    return Metric(series.lastOrNull(), mean(series), series)
+/**
+ * Build a metric from a per-day transform, keeping only finite values.
+ *
+ * `latest` is STALENESS-BOUNDED ([Baselines.vitalCarryDays]): it is the newest value only while that
+ * value's own day is recent enough to still be presented as this night's reading, and null otherwise.
+ * Unbounded, `series.lastOrNull()` reached back arbitrarily far — a respiratory rate last written by a
+ * WHOOP CSV import on 30 Jul kept rendering as "Respiratory 15.6" in the Night detail card a fortnight
+ * later, with no date anywhere beside it. `typical` and `series` stay UNBOUNDED on purpose: they are
+ * explicitly historical (the trend line and the "vs typical" mean span the whole history); only the
+ * headline number claims to be current. Byte-twin of the Swift `SleepModel.metric`.
+ */
+private fun metric(
+    days: List<DailyMetric>,
+    todayKey: String = logicalDayKeyNow(),
+    transform: (DailyMetric) -> Double?,
+): Metric {
+    val points = days.mapNotNull { d ->
+        transform(d)?.takeIf { it.isFinite() }?.let { d.day to it }
+    }
+    val series = points.map { it.second }
+    return Metric(Baselines.freshestCarried(points, todayKey)?.second, mean(series), series)
 }
 
 /**

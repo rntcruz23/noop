@@ -7,7 +7,7 @@ enum AppChangelog {
 
     /// Bump this when you add a release below. The "What's New" sheet shows automatically when the
     /// stored last-seen version is behind this. (Decoupled from the bundle version on purpose.)
-    static let currentVersion = "9.3.1"
+    static let currentVersion = "10.6.0"
 
     struct Release: Identifiable {
         let version: String
@@ -19,6 +19,55 @@ enum AppChangelog {
 
     /// Newest first.
     static let releases: [Release] = [
+        Release(
+            version: "10.6.0",
+            title: "An Effort scale you choose, a ring that gets to sleep, and far fewer wasted re-scores",
+            date: "August 2026",
+            items: [
+                "**Pick how Effort is scored (#1562, #1563).** Banister TRIMP is now wired end to end and selectable, so Effort can follow the method you trust rather than the one that happened to ship. A workout is also scored against the same HRmax as the day containing it (#1565).",
+                "**The phone stops re-scoring all night (#1557, #1559).** A background re-score that could not finish used to restart from the beginning, forever. It now runs where it can complete, and the diagnostics say which pass ran and why — so days that quietly refused to compute now compute.",
+                "**The Oura ring is allowed to sleep (#1526, #1550, thanks @pipiche38).** Live-HR daytime mode was being held open whenever nobody was looking at the app, blocking the ring's own overnight sleep suite. NOOP now hands the ring back out of daytime mode, on suspend and on teardown.",
+                "**Sleep reads straighter (#1551, #1552, thanks @bartmuskala).** The Classic view draws the night's heart-rate line, and the stage breakdown is ramp-aware with the redundant legend gone.",
+                "**Pause or discard a live workout, and SDNN on Android (#1533, #1535, thanks @bhelm).** Live workouts gain pause and discard controls, and the SDNN index that was iOS-only is now on both platforms.",
+                "**Your strap's device key stays out of the strap log (#1610).** A WHOOP 4.0 identity response carries the strap serial and its device key side by side; the log now reports the structure and withholds the key, so a log attached to an issue no longer publishes it.",
+            ]
+        ),
+        Release(
+            version: "10.5.0",
+            title: "Training load, a VO₂max without a tape measure, and far less battery spent re-scoring",
+            date: "August 2026",
+            items: [
+                "**Training load — CTL, ATL and form (#1423, #1425).** A Trends card tracks fitness, fatigue and the balance between them, so a hard block and the recovery it needs are both visible.",
+                "**A VO₂max without measuring your waist (#1391).** If NOOP knows your resting heart rate it can estimate VO₂max from age and sex alone, and it says which method it used rather than presenting one number as if there were only one way to get it.",
+                "**Much less battery spent re-scoring (#1005, thanks @bartmuskala).** A per-day cache stops NOOP recomputing days whose data hasn't changed — the single biggest background drain on Android — and \"Low refresh\" now offers hourly syncing at any charge.",
+                "**Apple Health write-back and hourly steps (#1432, thanks @MikaSchultes; #1429).** Workouts can flow back into Apple Health automatically, and iPhone steps import hour by hour with a 90-day backfill.",
+                "**More of the Oura ring read honestly (thanks @pipiche38).** The ring's own breath rate is shown as instrumentation (#1384, #1450), its skin-temp gate now fits a ring's independently-clocked sensors (#1467), and Rhythm says \"no data\" outright on hardware that cannot produce the reading (#1360).",
+            ]
+        ),
+        Release(
+            version: "10.1.0",
+            title: "Personalized heart-rate zones, compare and switch between straps, and more honest HRV, sleep and Oura reads",
+            date: "August 2026",
+            items: [
+                "**Personalized heart-rate zones (#531).** Set your own BPM thresholds in a Settings editor; every zone read-out, and your .noopbak backup, uses them.",
+                "**Compare and switch between straps (#1300).** A two-strap comparison card correlates two straps you own, and a switcher flips which one is active — without ever mixing their data.",
+                "**More honest HRV and sleep.** An over-counted night's HRV reading is now captioned \"unverified\" (#1118); sleep debt is measured against your personalized need (#1348); and duplicate/​phantom Oura sleep nights are collapsed (#1284).",
+                "**More of your Oura ring decoded (#1384, #1359, thanks @pipiche38).** The ring's own breath rate and step features are decoded and shown as instrumentation — read off the ring, never scored.",
+                "**Polish language, and a truthful empty state.** NOOP now speaks Polish (#1250), and the experimental Rhythm view says \"no data\" honestly when a device can't support the reading (#1360).",
+            ]
+        ),
+        Release(
+            version: "10.0.0",
+            title: "Make NOOP yours — theme colours and custom backgrounds, forty more sports with GPS routes, and a calorie heatmap",
+            date: "August 2026",
+            items: [
+                "**Make NOOP yours (#1171, #1172, #1177, #1234).** Pick a chrome accent — Mint, WHOOP Blue, or a custom colour from a full HSV picker — save a named theme preset that coordinates the accent, charts, backdrop and cards together, and set your own photo as the background behind every tab.",
+                "**Forty-plus more sports, with distance and GPS routes (#1273, #1274, #1202, #1238).** The workout picker gains dozens of sports; a manual workout takes a distance; a GPS workout records live distance and pace; and a finished route exports to GPX or FIT.",
+                "**A 13-week active-calorie heatmap (#1240).** A calendar of your recent effort on the Workouts screen, on both platforms.",
+                "**Choose how the sleep chart looks (#1129, #1283, #1291).** Classic, Fill, Garmin Fill, or Ribbon, each with a colour-coded stage legend, on iPhone, Android and Mac.",
+                "**Pick the app's language (#1181).** A language setting independent of the phone, so NOOP can speak a different language than the rest of your device.",
+            ]
+        ),
         Release(
             version: "9.3.1",
             title: "Widgets stop inventing numbers, naps count toward sleep debt, and the Android status chips speak your language",

@@ -14,7 +14,21 @@ public final class FrameRouter {
     /// use the CRC16/offset-8 envelope; the biometric field decode for puffin is still a stub, so
     /// WHOOP 5 custom frames currently surface only their envelope (live HR/battery come from the
     /// standard 0x2A37/0x2A19 profiles instead).
-    var family: DeviceFamily = .whoop4
+    var family: DeviceFamily = .whoop4 {
+        // #900: a fresh connection is a fresh capture session — re-arm the per-command raw-frame dump so
+        // each connect can re-capture the disputed COMMAND_RESPONSE prefix once. `family` is set fresh per
+        // connection by BLEManager (connectCore), so this is the per-session reset hook.
+        didSet { rawDumpedRespCmds.removeAll(); loggedFirmwareGate = nil }
+    }
+
+    /// #900: resp command names (e.g. "GET_BATTERY_LEVEL(26)") whose raw COMMAND_RESPONSE frame has already
+    /// been dumped this connection. The provenance dump fires once per command per session so a 4.0's
+    /// per-poll battery reads don't flood the strap log. Reset when `family` is set at connect.
+    /// #1634: last firmware-gate line logged, so a stable per-connection value is not repeated on every
+    /// hello. Cleared alongside the other per-connection routing state.
+    private var loggedFirmwareGate: String?
+
+    private var rawDumpedRespCmds: Set<String> = []
 
     public init(state: LiveState) {
         self.state = state
@@ -102,6 +116,14 @@ public final class FrameRouter {
                 // Persist so the debug export can name the firmware offline (state clears on disconnect).
                 UserDefaults.standard.set(fw, forKey: "noop.lastFirmware")
             }
+
+            // #1634: the 5/MG hello decoded no firmware. The guards fail closed by design, so this is the
+            // only place that can say WHY - a different generation byte vs a MOVED offset. Logged once per
+            // connection (the value is stable), so a capture from an undecoded strap carries the evidence.
+            if let gate = parsed.parsed["fw_gate"]?.stringValue, loggedFirmwareGate != gate {
+                loggedFirmwareGate = gate
+                state.append(log: gate, domain: .connection)
+            }
             // Advertising-name replies (WHOOP 4.0 / Harvard). GET (cmd 76) carries the current name in
             // its payload; SET (cmd 77) carries only a result byte. The schema has no field decode for
             // either, so pull them straight from the frame bytes. The COMMAND_RESPONSE inner is
@@ -116,9 +138,15 @@ public final class FrameRouter {
             // POWER_CYCLE_STRAP is matched too: it's the 4.0 reboot probe's candidate B (#235), and its
             // result byte is exactly what tells "opcode rejected (recognized, wrong args)" from "ignored".
             if let cmd = parsed.cmdName, cmd.hasPrefix("REBOOT_STRAP") || cmd.hasPrefix("POWER_CYCLE_STRAP") {
-                let r = Self.commandResultByte(in: frame)
+                // bhelm/noop#4: read the result at the FAMILY's offset (4.0 @8, 5/MG @12) and judge it with
+                // the family's own polarity. 5/MG's CommandResult table is 1=SUCCESS / 0=FAILURE (BodyLocation
+                // Probe, MG vectors), so a raw byte at the fixed 4.0 offset read the inner *type* byte on 5/MG
+                // and printed REJECTED on a successful reboot — the Kotlin twin already judged the decoded
+                // result name and was correct. 4.0's result-code meaning stays the probe's (unverified) 0=accepted.
+                let r = Self.commandResultByte(in: frame, family: family)
                 let rhex = r.map { String(format: "0x%02x", UInt8(truncatingIfNeeded: $0)) } ?? "none"
-                let verdict = r == nil ? "no result byte" : (r == 0 ? "accepted" : "REJECTED")
+                let accepted = (family == .whoop5) ? (r == 1) : (r == 0)
+                let verdict = r == nil ? "no result byte" : (accepted ? "accepted" : "REJECTED")
                 state.append(log: "reboot: strap acked result=\(rhex) (\(verdict))")
             }
             if family == .whoop4, let cmd = parsed.cmdName {
@@ -181,6 +209,83 @@ public final class FrameRouter {
                     let r = Self.commandResultByte(in: frame)
                     let rhex = r.map { String(format: "0x%02x", UInt8(truncatingIfNeeded: $0)) } ?? "none"
                     state.append(log: "Alarm: strap answered the arm (SET_ALARM_TIME) with result=\(rhex) — log-only, 4.0 result-code meaning unverified")
+                } else if cmd.hasPrefix("GET_HELLO_HARVARD"), TestCentre.active(.connection) {
+                    // #1303: capture aid for WHOOP-4.0 stable-serial identity. The strap serial lives in this
+                    // GET_HELLO_HARVARD (cmd 35) response. This used to dump the payload RAW, which answered
+                    // the question — the serial is the 9-char alnum run at offset 14 — but a captured 4.0
+                    // response is 131 bytes carrying TWO alnum runs, and the second (offset 24, 54 chars) is
+                    // the device key. Reporters attach strap logs to public issues, and Test Centre is
+                    // normally enabled BECAUSE they were asked for one, so the gate below selects for the
+                    // logs most likely to be shared rather than the least.
+                    //
+                    // The structural probe answers the same question without that: it reports every printable
+                    // run by offset and length, and quotes only alnum runs 6...20 chars. The serial (9) is
+                    // still shown; the key (54) falls outside and is withheld by the probe rather than by
+                    // this caller, so the rule cannot be got wrong here. `knownNameOffset: -1` because 16 is
+                    // the 5/MG device-name offset and means nothing in a cmd-35 payload — passing it would
+                    // mislabel whatever run happened to start there. Log-only; decodes/persists nothing.
+                    let helloPay = Self.commandResponsePayload(in: frame) ?? []
+                    state.append(log: HelloIdentityProbe.report(payload: helloPay,
+                                                                block: "HELLO_HARVARD(35)",
+                                                                knownNameOffset: -1)
+                                 + " — locate the strap serial offset (#1303)")
+                }
+            }
+            // #1303: the 5/MG half of the same hunt. The 4.0 aid above is 4.0-only — correctly, since a
+            // 5/MG never answers cmd 35 — so this family had no capture at all, and it needs one just as
+            // much: a stable per-strap id is what multi-strap identity waits on, and the pack serial from
+            // cmd 151 identifies a REMOVABLE PART rather than the strap wearing it.
+            //
+            // No new traffic is sent. GET_HELLO already arrives on every connect and is already decoded —
+            // for the device name and the firmware version — and the rest of the block is discarded. If
+            // the serial is in there, it has been arriving all along.
+            //
+            // Reports STRUCTURE, not the block: the same response carries a session token the decoder
+            // deliberately never reads, so `HelloIdentityProbe` prints only serial-shaped runs and
+            // withholds the rest. Test Centre → Connection gated on top of that, so nothing here reaches a
+            // default (shareable) strap log. Log-only; decodes and persists nothing.
+            if family == .whoop5, let cmd = parsed.cmdName,
+               cmd.hasPrefix("GET_HELLO("),          // not GET_HELLO_HARVARD — Schema appends "(145)"
+               TestCentre.active(.connection),
+               let pay = Self.commandResponsePayload(in: frame, family: family) {
+                state.append(log: HelloIdentityProbe.report(payload: pay) + " — locate the strap serial (#1303)")
+            }
+            // #900: surface a non-SUCCESS COMMAND_RESPONSE on BOTH families (a result=UNSUPPORTED here is how
+            // the MG haptics rejection #48 would show), and — the key part — annotate a reply that DELIVERED
+            // ITS VALUE rather than reporting a bare failure. The 4.0 GET_BATTERY_LEVEL replies on record carry
+            // a zeroed [seq][result] prefix, so a battery read that returned a good percentage logs as
+            // "FAILURE(0)"; a failure line next to a gauge reading 42% is the artefact that gets quoted as a
+            // fault that isn't there — that is how #900 started. The line still prints (hiding it would hide the
+            // anomaly), it just no longer reads as a failure. Twin of the Kotlin WhoopBleClient annotation (#923).
+            if let result = parsed.parsed["result"]?.stringValue, !result.hasPrefix("SUCCESS") {
+                let cmdName = parsed.cmdName ?? "?"
+                let note: String
+                if let pct = parsed.parsed["battery_pct"]?.doubleValue {
+                    note = " (the reply still carried a value: battery \(String(format: "%.1f", pct))%"
+                         + " — the result byte on this reply is not established, see #900)"
+                } else {
+                    note = ""
+                }
+                state.append(log: "Command response: \(cmdName) → \(result)\(note)")
+                // #900: dump the FULL raw frame once per command per connection, so a normal (shareable)
+                // strap-log export carries the disputed [seq][result] prefix bytes with known provenance — the
+                // one capture the issue is blocked on. Full frame (not the post-prefix payload, which hides
+                // those very bytes); matches the GET_DATA_RANGE raw-frame line (#451) and the format #900's
+                // fixtures are quoted in. Rate-limited: a 4.0 hits this branch on every battery poll.
+                // …with ONE command held back, DEFENSIVELY. A WHOOP 4.0 `GET_HELLO_HARVARD(35)` response is
+                // 131 bytes whose body carries the strap's DEVICE KEY (the 54-char alnum run at offset 24,
+                // beside the serial at 14), and this dump is ungated — "normal (shareable)" is the point of
+                // it. On the captures on record cmd 35 answers SUCCESS, so it does not reach this branch at
+                // all today; the skip is not fixing an observed leak. It exists because the branch's own
+                // premise is that a 4.0 misreports its result: the documented zeroed-[seq][result] artefact
+                // is exactly why GET_BATTERY_LEVEL lands here while carrying a good value, and nothing makes
+                // cmd 35 immune to the same artefact on another firmware. One command whose body is a secret
+                // is the one #900 can spare — it needs the PREFIX provenance, which every other command
+                // reaching here supplies. Cmd 35's content stays covered, structurally and with the key
+                // withheld, by the HelloIdentityProbe line above. Twin of the Android skip.
+                if !rawDumpedRespCmds.contains(cmdName), !cmdName.hasPrefix("GET_HELLO_HARVARD") {
+                    rawDumpedRespCmds.insert(cmdName)
+                    state.append(log: "  raw frame (#900 — [seq][result] provenance): \(Self.fullFrameHex(frame))")
                 }
             }
 
@@ -277,21 +382,33 @@ public final class FrameRouter {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// The result byte of a COMMAND_RESPONSE: inner offset + 4 ([type,seq,cmd,origin_seq] then result).
-    static func commandResultByte(in frame: [UInt8]) -> Int? {
-        let idx = whoop4InnerOffset + 4
+    /// The result byte of a COMMAND_RESPONSE: the family's inner offset + 4 ([type,seq,cmd,origin_seq]
+    /// then result). WHOOP 4.0's inner starts at offset 4 (result @8); WHOOP 5/MG's starts at 8 (result
+    /// @12 — the "+4 shift", Framing/Interpreter). Defaults to `.whoop4` so the WHOOP-4-only callers
+    /// (rename, alarm-SET ack) stay untouched; only the both-families reboot ack passes the live family
+    /// (bhelm/noop#4 — reading @8 on a 5/MG frame hit the inner type byte, not the result).
+    static func commandResultByte(in frame: [UInt8], family: DeviceFamily = .whoop4) -> Int? {
+        let inner = (family == .whoop5) ? 8 : whoop4InnerOffset
+        let idx = inner + 4
         return idx < frame.count ? Int(frame[idx]) : nil
     }
 
     // MARK: - Alarm-readback decode (WHOOP 4.0, GET_ALARM_TIME cmd 67 - #401 close-out)
 
-    /// The payload of a WHOOP 4.0 COMMAND_RESPONSE: the bytes after [type,seq,cmd,origin_seq,result]
-    /// (payload starts at inner+5) up to the crc32 trailer at `length`. Same envelope walk as
+    /// The payload of a COMMAND_RESPONSE: the bytes after [type,seq,cmd,origin_seq,result] (payload
+    /// starts at inner+5) up to the crc32 trailer at `length`. Same envelope walk as
     /// `advertisingName(in:)`. nil when the frame is too short to carry any payload.
-    nonisolated static func commandResponsePayload(in frame: [UInt8]) -> [UInt8]? {
+    ///
+    /// `family` defaults to `.whoop4` so every existing caller (alarm readback, advertising name, the
+    /// cmd-35 dump) is untouched, exactly as `commandResultByte` does — and for the same reason it had
+    /// to: the inner starts at 4 on a WHOOP 4.0 and at 8 on a 5/MG, so reading a 5/MG frame at the 4.0
+    /// offset returns four bytes of envelope dressed as payload rather than failing visibly.
+    nonisolated static func commandResponsePayload(in frame: [UInt8],
+                                                   family: DeviceFamily = .whoop4) -> [UInt8]? {
         guard frame.count > 2 else { return nil }
         let length = Int(frame[1]) | (Int(frame[2]) << 8)        // crc32 starts here
-        let start = whoop4InnerOffset + 5                        // skip type,seq,cmd,origin_seq,result
+        let inner = (family == .whoop5) ? 8 : whoop4InnerOffset
+        let start = inner + 5                                    // skip type,seq,cmd,origin_seq,result
         guard length <= frame.count, start < length else { return nil }
         return Array(frame[start..<length])
     }
@@ -301,6 +418,14 @@ public final class FrameRouter {
     nonisolated static func commandResponsePayloadHex(in frame: [UInt8]) -> String? {
         guard let payload = commandResponsePayload(in: frame), !payload.isEmpty else { return nil }
         return payload.map { String(format: "%02x", $0) }.joined(separator: " ")
+    }
+
+    /// #900: the entire frame (0xAA SOF through the crc32 trailer) as contiguous lowercase hex — the
+    /// provenance format #900's fixtures are quoted in (e.g. "aa0f00c324141a0000…"). Unlike
+    /// `commandResponsePayloadHex`, this keeps the [type,seq,cmd,origin_seq,result] prefix, which is the
+    /// exact region #900 needs to inspect. Mirrors the Android `frame.joinToString("") { "%02x" }` dump.
+    nonisolated static func fullFrameHex(_ frame: [UInt8]) -> String {
+        frame.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Plausibility gate for a readback epoch: a real armed alarm is near-now, so anything outside

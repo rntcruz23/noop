@@ -36,6 +36,11 @@ internal data class Vital(
      *  Drives the "Estimate (unverified)" caption so the user knows this is an unverified value.
      *  Defaulted false so every other vital is unaffected. */
     val isEstimate: Boolean = false,
+    /** #1118: an "unverified" caveat appended to the caption when the value is present but the strap's own
+     *  capture is known-unreliable for it (a WHOOP 4.0 R-R over-count contaminating HRV). null = none.
+     *  Kotlin twin of `BodyVitalReading.caveat` (VitalSignsSummary.swift). Defaulted so other vitals are
+     *  unaffected. */
+    val caveat: String? = null,
 ) {
     /** Value with its unit appended, or null when no data. */
     val formattedValue: String? = value?.let { "${format(it)} $unit" }
@@ -50,7 +55,7 @@ internal data class Vital(
 
     /** The in-range caption that stands in for a StatePill inside the fixed-height tile.
      *  The wording says which yardstick judged it: your baseline vs typical ranges. */
-    val stateCaption: String = when {
+    private val baseCaption: String = when {
         // #103: when the Blood O₂ tile is showing the spo2_candidate_82 strap estimate (not a
         // calibrated spo2Pct), label it "estimate" so the user knows this is an unverified value.
         isEstimate && banding.band != VitalBands.Band.NO_DATA -> "Estimate (unverified)"
@@ -67,6 +72,12 @@ internal data class Vital(
         else ->
             if (banding.band == VitalBands.Band.IN_RANGE) "In typical range" else "Outside typical range"
     }
+
+    /** #1118: the base caption plus any "unverified" caveat (an over-counted HRV night), so the caveat
+     *  rides the same line the user already reads. Never on an empty tile. Twin of Swift's stateCaption
+     *  append in VitalSignsSummary.swift. */
+    val stateCaption: String =
+        if (caveat != null && banding.band != VitalBands.Band.NO_DATA) "$baseCaption · $caveat" else baseCaption
 
     val accessibilityText: String =
         formattedValue?.let {
@@ -100,11 +111,13 @@ internal enum class VitalCaptionMode {
 /** Build the vitals, banded against the user's OWN trailing baseline once 14 trusted
  *  nights exist (population ranges before that — VitalBands does the deciding).
  *
- * #103: [spo2CandidateByDay] carries the nightly `spo2_candidate_82` mean (70–100) per day, loaded
- * from the "spo2_candidate" metricSeries key when the experimental display toggle is ON. When the
- * selected day has no calibrated `spo2Pct` but DOES have a candidate, the Blood O₂ tile falls back to
- * the candidate with an "estimate" caption. [spo2ToggleOn] distinguishes "toggle ON, no @82 data"
- * from "toggle OFF" so the missingCaption can tell the user which — a silent blank reads as broken.
+ * #103/queue-11a: [spo2CandidateByDay] carries the nightly SpO₂ candidate mean per day — WHOOP's
+ * `spo2_candidate_82` (70–100), or an Oura owner's ceiling@100 `0x6F` mean (device-conditional, see
+ * IntelligenceEngine) — loaded from the "spo2_candidate" metricSeries key when the experimental
+ * display toggle is ON. When the selected day has no calibrated `spo2Pct` but DOES have a candidate,
+ * the Blood O₂ tile falls back to the candidate with an "estimate" caption. [spo2ToggleOn]
+ * distinguishes "toggle ON, no estimate yet" from "toggle OFF" so the missingCaption can tell the
+ * user which — a silent blank reads as broken.
  * Empty map = toggle off or no candidate data → the tile behaves exactly as before. Mirrors the iOS
  * `BodyVitalSigns.readings` candidate fallback. */
 internal fun vitalsFor(
@@ -113,6 +126,7 @@ internal fun vitalsFor(
     tempUnit: TemperatureUnit = TemperatureUnit.CELSIUS,
     spo2CandidateByDay: Map<String, Double> = emptyMap(),
     spo2ToggleOn: Boolean = false,
+    hrvOverCountByDay: Map<String, Double> = emptyMap(),   // #1118
 ): List<Vital> {
     val todayKey = d?.day
     // History strictly before the displayed day, oldest→newest (recentDays is already
@@ -282,6 +296,11 @@ internal fun vitalsFor(
             banding = VitalBands.band(d?.avgHrv, series { it.avgHrv }, 40.0..120.0, Baselines.hrvCfg),
             metricColor = Palette.metricPurple,
             sparkline = trail(d?.avgHrv) { it.avgHrv },
+            // #1118: mark HRV "unverified" on an over-counted night — the WHOOP 4.0 two-optical-channel
+            // artifact inflates R-R and contaminates RMSSD, so NOOP's HRV won't match WHOOP until the
+            // de-dup fix lands. The flag is written only for NOOP's own measured capture, so an imported
+            // night never sets it. Gated on the flag alone (no source check) — twin of the Swift caveat.
+            caveat = if ((d?.day?.let { hrvOverCountByDay[it] } ?: 0.0) >= 0.5) "unverified · over-reports R-R" else null,
         ),
         Vital(
             key = "skin", label = skinTitle, unit = skinUnitLabel,
@@ -312,8 +331,9 @@ internal fun latestVitals(
     tempUnit: TemperatureUnit,
     spo2CandidateByDay: Map<String, Double> = emptyMap(),
     spo2ToggleOn: Boolean = false,
+    hrvOverCountByDay: Map<String, Double> = emptyMap(),   // #1118
 ): List<Vital> {
-    val emptyByKey = vitalsFor(null, days, tempUnit, spo2CandidateByDay, spo2ToggleOn).associateBy { it.key }
+    val emptyByKey = vitalsFor(null, days, tempUnit, spo2CandidateByDay, spo2ToggleOn, hrvOverCountByDay).associateBy { it.key }
     return listOf(
         latestVital("resp", days, tempUnit, emptyByKey, spo2CandidateByDay, spo2ToggleOn) { it.respRateBpm != null },
         latestVital("spo2", days, tempUnit, emptyByKey, spo2CandidateByDay, spo2ToggleOn) {
@@ -321,11 +341,19 @@ internal fun latestVitals(
         },
         latestVital("spo2raw", days, tempUnit, emptyByKey, spo2CandidateByDay, spo2ToggleOn) { it.spo2Red != null && it.spo2Ir != null },
         latestVital("rhr", days, tempUnit, emptyByKey, spo2CandidateByDay, spo2ToggleOn) { it.restingHr != null },
-        latestVital("hrv", days, tempUnit, emptyByKey) { it.avgHrv != null },
+        latestVital("hrv", days, tempUnit, emptyByKey, hrvOverCountByDay = hrvOverCountByDay) { it.avgHrv != null },
         latestVital("skin", days, tempUnit, emptyByKey) { it.skinTempDevC != null },
     )
 }
 
+/**
+ * The newest row carrying this vital, STALENESS-BOUNDED by [Baselines.vitalCarryDays]: the carry
+ * exists so a missed night doesn't blank a tile, not so a months-old reading sits under a section
+ * headed "Latest". Unbounded, this reached back arbitrarily far — a WHOOP CSV import that ended
+ * 30 Jul kept the Resp Rate tile reading "15.6 rpm" a fortnight later. The `asOfLabel` ("as of
+ * 30 Jul") was not enough on its own: the eye takes the headline number for today's. Byte-twin of
+ * the Swift `BodyVitalSigns.latest`.
+ */
 private fun latestVital(
     key: String,
     days: List<DailyMetric>,
@@ -333,11 +361,16 @@ private fun latestVital(
     emptyByKey: Map<String, Vital>,
     spo2CandidateByDay: Map<String, Double> = emptyMap(),
     spo2ToggleOn: Boolean = false,
+    hrvOverCountByDay: Map<String, Double> = emptyMap(),   // #1118
+    todayKey: String = logicalDayKeyNow(),
     hasValue: (DailyMetric) -> Boolean,
 ): Vital {
-    val row = days.asReversed().firstOrNull(hasValue)
+    val row = Baselines.freshestCarried(
+        days.filter(hasValue).map { it.day to it },
+        todayKey,
+    )?.second
     return row
-        ?.let { latestRow -> vitalsFor(latestRow, days, tempUnit, spo2CandidateByDay, spo2ToggleOn).firstOrNull { it.key == key } }
+        ?.let { latestRow -> vitalsFor(latestRow, days, tempUnit, spo2CandidateByDay, spo2ToggleOn, hrvOverCountByDay).firstOrNull { it.key == key } }
         ?.copy(asOfLabel = asOfLabel(row.day))
         ?: emptyByKey.getValue(key)
 }

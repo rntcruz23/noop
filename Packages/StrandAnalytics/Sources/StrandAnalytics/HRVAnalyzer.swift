@@ -294,6 +294,29 @@ public enum HRVAnalyzer {
                          nInput: nInput, nClean: clean.count)
     }
 
+    /// SDNN index (Task Force 1996): the MEAN of SDNN computed over consecutive fixed-length segments
+    /// (default 5 min) of the R-R series, each segment cleaned with the SAME range + Malik ectopic
+    /// rejection the nightly path uses. Unlike whole-night SDNN — which is dominated by the slow HR drift
+    /// ACROSS sleep stages and can read 2-3× higher — the index reflects SHORT-TERM variability, so it is
+    /// window-comparable to a wearable's short SDNN reading (e.g. Apple Watch's ~1-min
+    /// `heartRateVariabilitySDNN` samples) and is the value that can be honestly cross-checked against one.
+    /// Segments with fewer than `minBeats` clean intervals are skipped; nil when no segment qualifies.
+    /// Pure, deterministic. Kotlin twin: `HrvAnalyzer.sdnnIndex`.
+    public static func sdnnIndex(_ rr: [RRInterval], segmentSec: Int = 300) -> Double? {
+        guard segmentSec > 0, let first = rr.map(\.ts).min(), let last = rr.map(\.ts).max(),
+              last >= first else { return nil }
+        var segStart = first
+        var segmentSDNNs: [Double] = []
+        while segStart <= last {
+            if let sd = analyze(rr, windowStart: segStart, windowEnd: segStart + segmentSec - 1).sdnn {
+                segmentSDNNs.append(sd)
+            }
+            segStart += segmentSec
+        }
+        guard !segmentSDNNs.isEmpty else { return nil }
+        return segmentSDNNs.reduce(0, +) / Double(segmentSDNNs.count)
+    }
+
     // MARK: - Rolling / windowed rMSSD timeline (#803)
 
     /// One windowed rMSSD point: the rMSSD (ms) over the trailing `windowSec` of R-R intervals ending at
@@ -308,12 +331,11 @@ public enum HRVAnalyzer {
         public init(ts: Int, rmssd: Double) { self.ts = ts; self.rmssd = rmssd }
     }
 
-    /// Pure rolling/windowed rMSSD over an R-R series (#803). For each input interval, the window is the
-    /// trailing `windowSec` seconds ending at that interval's `ts`; the window's R-R values are cleaned with
-    /// the SAME range filter + Malik ectopic rejection the nightly path uses (`cleanRR`), and a point is
-    /// emitted only when at least `minBeatsPerWindow` clean intervals survive (so a sparse / artifact-heavy
-    /// window emits nothing rather than a noisy spike). The result is one `(ts, rMSSD)` per qualifying
-    /// window, in input order.
+    /// Pure rolling/windowed rMSSD over an R-R series (#803). For each input interval at `ts`, the window is
+    /// `(ts - windowSec, ts]`; that window's raw R-R values are cleaned locally with the SAME range filter +
+    /// Malik ectopic rejection the nightly path uses (`cleanRR`). A point is emitted only when at least
+    /// `minBeatsPerWindow` clean intervals survive (so a sparse / artifact-heavy window emits nothing rather
+    /// than a noisy spike). The result is one `(ts, rMSSD)` per qualifying window, in timestamp order.
     ///
     /// - Parameters:
     ///   - rr: the R-R intervals (each carries its own wall-clock `ts` and `rrMs`). Need not be pre-sorted;
@@ -335,15 +357,24 @@ public enum HRVAnalyzer {
         var left = 0   // index of the oldest interval still inside the trailing window
         for right in 0..<sorted.count {
             let edgeTs = sorted[right].ts
-            // Advance the left edge so [left, right] spans only the trailing `windowSec` ending at edgeTs.
-            while left < right && edgeTs - sorted[left].ts > windowSec { left += 1 }
+            // Advance the left edge so [left, right] contains exactly (edgeTs - windowSec, edgeTs].
+            while left < right && edgeTs - sorted[left].ts >= windowSec { left += 1 }
             // Thinning stride: skip emitting until at least `stepSec` has passed since the last emitted point.
             if stepSec > 0, let last = lastEmitTs, edgeTs - last < stepSec { continue }
             // Clean the window's raw R-R values with the shared range + Malik ectopic pipeline, then
             // require enough survivors before trusting a windowed rMSSD.
+            //
+            // #1448: GAP-AWARE, exactly as the nightly `analyze` above already is. Dropping a beat joins
+            // two intervals that were never adjacent, and their difference is a splice rather than a
+            // physiological delta — the spurious large delta this analyzer's gap-aware pair (#204/#195)
+            // exists to exclude. `cleaned.nn` is byte-identical to `cleanRR` over the same input, so the
+            // survivor gate is unchanged, and `rmssdGapAware` equals `rmssdRaw` on a window with no gaps:
+            // only windows that actually lost a beat move. A window whose survivors share NO adjacent
+            // pair now emits nothing rather than a number built entirely from splices.
             let windowRaw = sorted[left...right].map { Double($0.rrMs) }
-            let clean = cleanRR(windowRaw)
-            guard clean.count >= minBeatsPerWindow, let r = rmssdRaw(clean) else { continue }
+            let cleaned = cleanRRGapAware(windowRaw)
+            guard cleaned.nn.count >= minBeatsPerWindow,
+                  let r = rmssdGapAware(cleaned.nn, cleaned.contiguous) else { continue }
             out.append(RollingRmssdPoint(ts: edgeTs, rmssd: r))
             lastEmitTs = edgeTs
         }
@@ -404,6 +435,14 @@ public enum HRVAnalyzer {
         case .plausible, .underCovered, .unmeasurable:
             return true
         }
+    }
+
+    /// Whether a live spot capture collected more beat time than the wall clock allows (no per-beat
+    /// timestamps for `rrCoverage`, but the capture knows how long it ran). Only over-count rejects;
+    /// sparse windows stay with the `minBeats` gate. Pure. Byte-parity twin of Kotlin
+    /// `spotCaptureOverCounted`.
+    public static func spotCaptureOverCounted(beatTimeMs: Double, captureMs: Double) -> Bool {
+        captureMs > 0 && beatTimeMs > captureMs * coveragePlausibleCeiling
     }
 
     /// How closely a beat's own wall-clock gap matches its own R-R value: the fraction of consecutive
@@ -538,6 +577,46 @@ public enum HRVAnalyzer {
     /// deliberately same-second-ONLY: R-R ts are stored at second resolution, and at rest genuine
     /// consecutive beats are ~1 s apart, so collapsing ACROSS a second would drop real beats. Deterministic
     /// (ts, rr, index) ordering. Byte-parity twin of Kotlin `HrvAnalyzer.collapsedCoverage`.
+    /// #1008/#1118/#1331 SHADOW de-dup: collapse the WHOOP 4.0 R-R over-count. A same-second beat whose
+    /// value is within `rrTolMs` of one already kept in that second (the exact duplicates AND the
+    /// two-optical-channel ~34 ms pairs — hence a wider default tol than `collapsedCoverage`'s 30 ms) is
+    /// dropped, keeping one representative. Returns the deduped `(tsSec, rrMs)` in ts-ASC order.
+    ///
+    /// INSTRUMENTATION ONLY — the shipped HRV/resp path is unchanged; the always-on `hrv diag` line logs
+    /// RMSSD / coverage / beat-accuracy of BOTH the raw and the deduped stream so the de-dup can be
+    /// validated against WHOOP's own numbers and @artemc's Polar H10 (#1118) BEFORE it ever becomes the
+    /// read path (the "validate against the artifact, not one match" rule). Pure. Mirrors Kotlin
+    /// `HrvAnalyzer.collapseOverCount`.
+    /// `windowSec` widens the de-dup horizon: `0` (the default) compares only beats in the SAME second (the
+    /// original behaviour, byte-identical for every existing caller); `> 0` also collapses a near-identical
+    /// interval that recurs within `windowSec` seconds — the CROSS-second twins the `crossSecondOverCount`
+    /// verdict flags and a same-second collapse structurally cannot reach. INSTRUMENTATION ONLY, and a
+    /// cross-second window is an AGGRESSIVE UPPER BOUND: a steady real HR has near-identical intervals one
+    /// second apart, so `windowSec > 0` WILL over-merge real neighbours — it exists to size how much of a
+    /// night's over-count is cross-second (does coverage fall to ~1.0, does beat-accuracy clear #1127's
+    /// gate?), NOT as a shippable de-dup. The real fix is density/timeline-based and must be validated
+    /// against ground truth (@artemc's H10) before it becomes the read path. (#1118/#1331)
+    public static func collapseOverCount(tsSec: [Int], rrMs: [Double], rrTolMs: Double = 40, windowSec: Int = 0)
+        -> (tsSec: [Int], rrMs: [Double]) {
+        let n = min(tsSec.count, rrMs.count)
+        guard n >= 2 else { return (tsSec, rrMs) }
+        let order = (0..<n).sorted { a, b in (tsSec[a], rrMs[a], a) < (tsSec[b], rrMs[b], b) }
+        var keptTs: [Int] = []
+        var keptRr: [Double] = []
+        for idx in order {
+            let t = tsSec[idx]
+            let r = rrMs[idx]
+            var dup = false
+            var j = keptTs.count - 1
+            while j >= 0 && t - keptTs[j] <= windowSec {   // beats kept within `windowSec` (0 ⇒ same second)
+                if abs(keptRr[j] - r) <= rrTolMs { dup = true; break }
+                j -= 1
+            }
+            if !dup { keptTs.append(t); keptRr.append(r) }
+        }
+        return (keptTs, keptRr)
+    }
+
     public static func collapsedCoverage(tsSec: [Int], rrMs: [Double], rrTolMs: Double = 30) -> Double {
         let n = min(tsSec.count, rrMs.count)
         guard n >= 2 else { return 0 }
@@ -558,6 +637,179 @@ public enum HRVAnalyzer {
             if !dup { keptTs.append(t); keptRr.append(r) }
         }
         return rrCoverage(tsSec: keptTs, rrMs: keptRr)
+    }
+
+    /// One second's tallies for `deliveryHistogram` — kept in a single dictionary so each row costs one
+    /// hash lookup rather than one per metric.
+    ///
+    /// A CLASS, not a struct, deliberately: a struct is a value type, so accumulating into it would mean
+    /// read-modify-write-back — two lookups per row, which is half the saving thrown away. Mutating through
+    /// a reference keeps it at one, and matches the Kotlin twin's shape exactly.
+    final class SecondTally {
+        var knownRows = 0
+        var ms = 0.0
+        var deliveries = 0
+    }
+
+    /// #1331/#1008: how many separate DELIVERIES wrote each stored second, across a whole night.
+    ///
+    /// `ord` restarts at 0 on every delivery, so two rows on one second both carrying `ord == 0` came from
+    /// two different offloads writing the same wall second. `densestSecondWindowSample` already shows that
+    /// — but only for the 5-8 seconds around the densest one, which is a sample, not a measurement. This
+    /// aggregates it over the night, because the fix turns on a question a sample cannot answer: is the
+    /// over-count mostly seconds touched by SEVERAL deliveries, or genuinely too many beats inside one?
+    ///
+    /// `multiMs` is the share of attributable BEAT-TIME on those seconds, and it is the number the fix is
+    /// sized against: coverage is Σ(rrMs) over wall span, so beat-time is what inflates it. A high
+    /// `multiRows` with a low `multiMs` would mean the extra rows are short and barely move coverage —
+    /// a different problem from the one this is chasing.
+    ///
+    /// `multiRows` is a share of ATTRIBUTABLE rows (those carrying an `ord`), not of every row — dividing
+    /// by the total would let a night that half-predates `ord` read artificially benign, which is precisely
+    /// the conclusion this exists to prevent.
+    ///
+    /// Rows whose `ord` is nil are counted in `ordUnknown` and excluded from the histogram rather than
+    /// assumed to be first-of-delivery: `ord` was added later, so a night that predates it would otherwise
+    /// read as "every second written once" and quietly argue against the mechanism it cannot see.
+    ///
+    /// Percentages are integer half-up on both platforms — no float formatting, so the two logs cannot
+    /// disagree on a tie (the #1473 lesson). Byte-parity twin of Kotlin `HrvAnalyzer.deliveryHistogram`.
+    public static func deliveryHistogram(tsSec: [Int], rrMs: [Double], ords: [Int?]) -> String {
+        let n = min(tsSec.count, rrMs.count)
+        guard n > 0 else { return "" }
+        // ONE dictionary keyed by the second, not four. An earlier revision kept `secsSeen`,
+        // `knownRowsPerSec`, `knownMsPerSec` and `deliveriesPerSec` in parallel — 3-4 hash lookups per row,
+        // on a path that runs once per over-counted night and so ~21 times per `analyzeRecent` cycle, every
+        // 15 minutes. At ~70k rows a night that is several million redundant lookups for a diagnostic.
+        var bySec: [Int: SecondTally] = [:]
+        var unknown = 0
+        var known = 0
+        var knownMs = 0.0
+        for i in 0 ..< n {
+            let tally: SecondTally
+            if let existing = bySec[tsSec[i]] {
+                tally = existing
+            } else {
+                tally = SecondTally()
+                bySec[tsSec[i]] = tally
+            }
+            if i < ords.count, let o = ords[i] {
+                known += 1
+                knownMs += rrMs[i]
+                tally.knownRows += 1
+                tally.ms += rrMs[i]
+                if o == 0 { tally.deliveries += 1 }
+            } else {
+                unknown += 1
+            }
+        }
+        var hist = [0, 0, 0, 0]      // 1, 2, 3, 4+
+        var multiSecs = 0
+        var multiRows = 0
+        var multiMs = 0.0
+        var maxDeliv = 0
+        var secs = 0
+        for (_, tally) in bySec where tally.deliveries > 0 {
+            secs += 1
+            hist[min(tally.deliveries, 4) - 1] += 1
+            if tally.deliveries > maxDeliv { maxDeliv = tally.deliveries }
+            if tally.deliveries >= 2 {
+                multiSecs += 1
+                multiRows += tally.knownRows
+                multiMs += tally.ms
+            }
+        }
+        // Seconds carrying rows but NO ord==0 row at all. Reachable: the primary key absorbs a cross-batch
+        // exact duplicate, and the row it drops can be the delivery's first on that second. Reported rather
+        // than folded into the histogram, so `secs` staying below the night's real second count is visible
+        // instead of quietly shrinking the denominator underneath `multiSec`.
+        let secsNoStart = bySec.count - secs
+        return "rr deliveries secs[1/2/3/4+]=\(hist[0])/\(hist[1])/\(hist[2])/\(hist[3])"
+            + " multiSec=\(pct(multiSecs, secs))% multiRows=\(pct(multiRows, known))%"
+            + " multiMs=\(pct(msToInt(multiMs), msToInt(knownMs)))%"
+            + " maxDeliv=\(maxDeliv) secsNoStart=\(secsNoStart) ordUnknown=\(unknown)"
+    }
+
+    /// Beat-time milliseconds to a whole number, half-up, WITHOUT `rounded()` or `round()`.
+    ///
+    /// Swift's `.rounded()` is half-away-from-zero and Kotlin's `kotlin.math.round` is half-toward-positive
+    /// -infinity. They agree here only because these sums are positive — the same "agrees until it doesn't"
+    /// shape as the `%.1f` divergence in #1473, where one platform's formatter rounded a tie the other way.
+    /// `x + 0.5` truncated is half-up on both, with no stdlib rounding involved, so the agreement is by
+    /// construction rather than by luck. Byte-parity twin of Kotlin `HrvAnalyzer.msToInt`.
+    /// One second's worth of duplicate-pair bookkeeping: how many rows landed on it, the first two
+    /// intervals, and whether every row claimed `ord == 0`. Only a second with EXACTLY two rows, both
+    /// `ord 0`, is an unambiguous two-delivery pair — see `duplicatePairRatios`.
+    final class PairTally {
+        var count = 0
+        var first = 0
+        var second = 0
+        var allOrdZero = true
+        var qualifies: Bool { count == 2 && allOrdZero }
+        func add(ms: Int, ord: Int) {
+            count += 1
+            if count == 1 { first = ms } else if count == 2 { second = ms }
+            if ord != 0 { allOrdZero = false }
+        }
+    }
+
+    /// #1505: when two deliveries wrote the same second, how do their two intervals COMPARE?
+    ///
+    /// `deliveryHistogram` counts how many deliveries wrote each second; it never looks at what they wrote.
+    /// That is the measurement the R-R unit question turns on. A WHOOP 5 emits the beat train live over
+    /// `0x2A37` (spec-fixed 1/1024-second units, converted on the way in) and again inside its v18
+    /// historical record (stored as read). If those are the same beat in two units, a duplicated second
+    /// holds two values 1024/1000 apart. If they are genuinely different beats, the ratios scatter.
+    ///
+    /// Restricted to the unambiguous case: seconds carrying EXACTLY two rows, both `ord == 0`. `ord`
+    /// restarts per delivery, so that is two deliveries each contributing their first beat — not two
+    /// consecutive beats from one record's array, which would read `0` then `1`.
+    ///
+    /// A single such pair proves nothing: 872 vs 893 ms is both the 1024/1000 ratio and an utterly ordinary
+    /// beat-to-beat difference. A POPULATION of them separates the two — a tight cluster at 1.024 is a unit
+    /// mismatch, a broad spread is normal variability. This reports the distribution and takes no view.
+    ///
+    /// Parts-per-thousand in integer arithmetic so Swift and Kotlin cannot round a tie differently.
+    public static func duplicatePairRatios(tsSec: [Int], rrMs: [Double], ords: [Int?]) -> String {
+        let n = min(tsSec.count, rrMs.count, ords.count)
+        guard n > 0 else { return "" }
+        // A tally per second rather than an array per second, matching `SecondTally` above: this runs over
+        // a whole night's beats on the same path, and the histogram beside it was deliberately reduced to
+        // one dictionary and no per-second allocation for exactly that reason.
+        var bySec: [Int: PairTally] = [:]
+        for i in 0 ..< n {
+            guard let o = ords[i] else { continue }
+            let ms = msToInt(rrMs[i])
+            guard ms > 0 else { continue }
+            let tally: PairTally
+            if let t = bySec[tsSec[i]] { tally = t } else { tally = PairTally(); bySec[tsSec[i]] = tally }
+            tally.add(ms: ms, ord: o)
+        }
+        var ppts: [Int] = []
+        for (_, t) in bySec where t.qualifies {
+            let lo = min(t.first, t.second), hi = max(t.first, t.second)
+            guard lo > 0 else { continue }
+            // Int64 so the multiply cannot overflow on a corrupt row — Kotlin's Int is 32-bit and would
+            // wrap where Swift's would not, and a diagnostic that disagrees across platforms is worthless.
+            ppts.append(Int((Int64(hi) * 1_000 + Int64(lo) / 2) / Int64(lo)))   // half-up, parts per thousand
+        }
+        guard !ppts.isEmpty else { return "rr dupPairs n=0" }
+        ppts.sort()
+        // Identical (both deliveries stored the same number), the 1024/1000 signature, or neither.
+        let same = ppts.filter { $0 <= 1_005 }.count
+        let tick = ppts.filter { $0 >= 1_019 && $0 <= 1_029 }.count
+        let med = ppts.count % 2 == 1
+            ? ppts[ppts.count / 2]
+            : (ppts[ppts.count / 2 - 1] + ppts[ppts.count / 2]) / 2
+        return "rr dupPairs n=\(ppts.count) same=\(same) tick=\(tick)"
+            + " other=\(ppts.count - same - tick) medPPT=\(med) spread=\(ppts[0])-\(ppts[ppts.count - 1])"
+    }
+
+    static func msToInt(_ ms: Double) -> Int { ms > 0 ? Int(ms + 0.5) : 0 }
+
+    /// Whole-percent, integer half-up, so both platforms round a tie the same way. 0 when `total` is 0.
+    static func pct(_ part: Int, _ total: Int) -> Int {
+        total > 0 ? (part * 200 + total) / (total * 2) : 0
     }
 
     /// #1008: a compact, deterministic RAW-ROW sample of the beats around the DENSEST second, for the
@@ -588,6 +840,7 @@ public enum HRVAnalyzer {
         tsSec: [Int],
         rrMs: [Double],
         srcCodes: [Int?],
+        ords: [Int?] = [],
         halfWindowSec: Int = 3,
         maxRowsPerSecond: Int = 24
     ) -> String {
@@ -628,6 +881,12 @@ public enum HRVAnalyzer {
                 let idx = rows[k]
                 out += "\(Int(rrMs[idx] + 0.5))"
                 if idx < srcCodes.count, let c = srcCodes[idx] { out += "@\(c)" }
+                // #1008: `ord` is the per-TIMESTAMP occurrence counter the store assigned when the row
+                // was written, so it restarts at 0 for every delivery. A second delivered ONCE therefore
+                // reads 0,1,2,…; a second built across two offloads reads 0,1,2,0,1 — the repeat is the
+                // tell. This is the only field that can answer it for a strap: WHOOP's wire format has
+                // no channel marker, so `srcChannel` is always nil on a WHOOP row.
+                if idx < ords.count, let o = ords[idx] { out += "#\(o)" }
             }
             if rows.count > shown { out += ",+\(rows.count - shown)" }
             out += "]"

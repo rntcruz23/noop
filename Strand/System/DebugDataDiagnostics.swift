@@ -27,13 +27,22 @@ enum DebugDataDiagnostics {
         lines.append(String(repeating: "─", count: 40))
         lines.append("Strap & data")
         let d = UserDefaults.standard
-        let model: String
-        switch d.string(forKey: "selectedWhoopModel") {
-        case "whoop5": model = "WHOOP 5.0 / MG"
-        case "whoop4": model = "WHOOP 4.0"
-        default:       model = "unknown (never paired)"
-        }
+        // Parse through the enum, never against string literals. `selectedWhoopModel` stores
+        // `WhoopModel.rawValue` ("WHOOP 4.0" / "WHOOP 5.0 / MG") — both writers use `.rawValue` — but this
+        // switch tested for "whoop5"/"whoop4", which are the CASE names, not the raw values. Neither ever
+        // matched, so this header reported "unknown (never paired)" for every strap, forever, including one
+        // actively syncing. The sibling block ~270 lines below already compares `.rawValue` and carries a
+        // comment warning about this exact trap; this site never got the same treatment. Going through
+        // `WhoopModel(rawValue:)` makes the enum the single parser, so a future rename cannot re-open it.
+        let model = WhoopModel(rawValue: d.string(forKey: "selectedWhoopModel") ?? "")?.displayName
+            ?? "unknown (never paired)"
         lines.append("Model:       \(model)")
+        // NOTE: still the legacy GLOBAL key, and therefore the last strap to connect rather than this
+        // device's own firmware. strapStateLines is sync and prefs-only by contract (the scheduled export
+        // calls it with no store), and the per-device rule needs a registry read for pairedCount. The
+        // Devices block further down IS resolved per device, so a multi-strap export carries the correct
+        // per-device value there; this line is superseded by it and wants the same follow-up as the Apple
+        // write site, which has no peripheral identity to key on today.
         lines.append("Firmware:    \(d.string(forKey: "noop.lastFirmware") ?? "unknown (connect to record)")")
         let syncSec = d.double(forKey: "lastSyncedAt")
         lines.append("Last sync:   \(syncSec > 0 ? relTime(Date().timeIntervalSince1970 - syncSec) : "never")")
@@ -96,6 +105,41 @@ enum DebugDataDiagnostics {
         if let r = days.last(where: { $0.recovery != nil }) {
             lines.append("Last recov.: \(r.day) · \(Int(r.recovery ?? 0))%")
         } else { lines.append("Last recov.: none") }
+        // #1300 follow-up: the header above describes ONE device because it reads the last-connected
+        // prefs, not the registry — so a two-strap install produced a log that never mentioned the
+        // second strap, leaving `dayOwner readId=` and the funnel's orphan check with nothing to be
+        // checked against. Name the whole set instead.
+        // `store` is fetched further down for the funnels; take a handle here rather than moving this
+        // block below the funnel header, so the inventory prints beside the strap identity it qualifies —
+        // the same position it holds on Android.
+        if let invStore = await repo.storeHandle() {
+            let invRegistry = DeviceRegistryStore(dbQueue: invStore.registryWriter)
+            // Bound before the map so the rule below has a count to test. Reading `.all()` inline left
+            // nothing to reference, which app-build caught and no local check could — this file needs
+            // macOS to compile.
+            let invDevices = (try? invRegistry.all()) ?? []
+            let invRows = invDevices.map {
+                // Firmware resolved by the same rule as the Devices card: this device's own persisted
+                // value when there is one, and the LEGACY global key only when a single device is paired
+                // (it cannot have come from anything else). Apple does not yet write the per-device key —
+                // the write site has no peripheral identity to key on — so today this yields the global
+                // value for a single-strap install and "unknown" for a multi-strap one, which is honest
+                // rather than another strap's number.
+                InventoryRow(id: $0.id, brand: $0.brand, model: $0.model,
+                             status: $0.status.rawValue, lastSeenAt: $0.lastSeenAt,
+                             firmware: FirmwareAttribution.resolve(
+                                 live: nil,
+                                 perDevice: FirmwareAttribution.prefKey(peripheralId: $0.peripheralId)
+                                     .flatMap { UserDefaults.standard.string(forKey: $0) },
+                                 legacyGlobal: UserDefaults.standard.string(forKey: "noop.lastFirmware"),
+                                 pairedCount: invDevices.count))
+            }
+            let invActive = (try? invRegistry.activeDeviceId()) ?? nil
+            lines.append(contentsOf: deviceInventoryLines(rows: invRows,
+                                                          activeId: invActive,
+                                                          nowSec: Int(Date().timeIntervalSince1970),
+                                                          relTime: { relTime($0) }))
+        }
 
         // Workout & imported-activity source breakdown (#28/#29 "counted but not shown" class). Runs BEFORE
         // the funnels since those can early-return, so this always lands in the export.
@@ -145,7 +189,17 @@ enum DebugDataDiagnostics {
         let resp = (try? await store.respSamples(deviceId: did, from: cs.startTs, to: cs.endTs, limit: 200_000)) ?? []
         lines.append("Night \(dayStamp(cs.startTs)): grav=\(grav.count) hr=\(hr.count) rr=\(rr.count) resp=\(resp.count) skin=\(skin.count)")
         if grav.isEmpty && hr.isEmpty {
-            lines.append("(no raw biometric samples under '\(did)' for this night — expected on a freshly re-added strap; reconnect + let a history sync run, then re-export)")
+            // #1617 follow-up: do NOT assert "freshly re-added" without testing the other explanation.
+            // Several ids can hold one physical strap's data (#1193/#740), and when the history spine and
+            // the raw stream split, the samples exist - just under a different id. The old line printed the
+            // innocent cause for that case, which stops the investigation at exactly the point it should
+            // start. Ask the SAMPLE TABLES, not the registry: `my-whoop` is a source label rather than a
+            // `pairedDevice` row, and forgetting a device drops its row while leaving its samples - so the
+            // registry is blind to exactly the ids worth naming here. Only runs when the active id came
+            // back empty, so a healthy install pays nothing.
+            let elsewhere = ((try? await store.rawSampleCountsByDevice(from: cs.startTs, to: cs.endTs)) ?? [])
+                .filter { $0.0 != did }
+            lines.append(orphanedSamplesLine(activeId: did, othersWithSamples: elsewhere))
             return lines
         }
         if let rem = SleepStager.remFunnelDiagnostic(start: cs.startTs, end: cs.endTs, grav: grav, hr: hr, rr: rr, resp: resp) {
@@ -155,7 +209,15 @@ enum DebugDataDiagnostics {
         }
         let det = SleepSession(start: cs.startTs, end: cs.endTs, efficiency: cs.efficiency ?? 0,
                                stages: [], restingHR: cs.restingHr, avgHRV: cs.avgHrv)
-        let family: DeviceFamily = (UserDefaults.standard.string(forKey: "selectedWhoopModel") == "whoop5") ? .whoop5 : .whoop4
+        // Third instance of the same literal bug in this file: "whoop5" is the enum CASE name, while the
+        // pref stores `WhoopModel.rawValue` ("WHOOP 5.0 / MG"). It never matched, so this resolved to
+        // `.whoop4` for EVERY strap — and unlike the two header sites, that is not a label. It picks the
+        // WHOOP-4 device anchor and runs `skinTempFunnel` under the wrong family, so the skin-temp funnel
+        // diagnostic has been reporting 4.0 numbers for every 5/MG on Apple. Parse through the enum.
+        // Unknown still resolves to `.whoop4`: this chooses an analysis default, matching the Kotlin twin.
+        let family: DeviceFamily =
+            WhoopModel(rawValue: UserDefaults.standard.string(forKey: "selectedWhoopModel") ?? "") == .whoop5mg
+            ? .whoop5 : .whoop4
         // Mirror the real per-device anchor (#404): learn it from the WHOLE recent window's raws — not just
         // this night — so a single sparse night (<100 in-band) can't misreport under the global fallback when
         // the window as a whole has enough in-band samples for analyzeDay to learn a device anchor.
@@ -242,11 +304,15 @@ enum DebugDataDiagnostics {
         var parts: [String] = []
         var spine: [DailyMetric] = []
         var activeRows: [DailyMetric] = []
+        var computedActive: [DailyMetric] = []
+        var computedSpine: [DailyMetric] = []
         for id in ids {
             let rows = (try? await store.dailyMetrics(deviceId: id, from: "0000-01-01", to: "9999-12-31")) ?? []
             parts.append("\(id)=\(rows.count)")
             if id == "my-whoop" { spine = rows }
             if id == did { activeRows = rows }
+            if id == "\(did)-noop" { computedActive = rows }
+            if id == "my-whoop-noop" { computedSpine = rows }
         }
         lines.append("Days: " + parts.joined(separator: "  "))
         // #731: this line used to read ONLY "my-whoop" and label it "Recent 7d". For a live-BLE user whose
@@ -269,6 +335,11 @@ enum DebugDataDiagnostics {
         var emitted = false
         if let l = recentLine(activeRows, id: did) { lines.append(l); emitted = true }
         if did != "my-whoop", let l = recentLine(spine, id: "my-whoop") { lines.append(l); emitted = true }
+        // The COMPUTED "-noop" spine, where steps/activeKcalEst are actually written — compare with the raw
+        // lines above: kcal/steps populated here but 0 there ⇒ the raw merge/view drops them (cosmetic); 0 on
+        // BOTH ⇒ genuinely not computed (a real gap). Mirrors the Android twin.
+        if let l = recentLine(computedActive, id: "\(did)-noop") { lines.append(l); emitted = true }
+        if did != "my-whoop", let l = recentLine(computedSpine, id: "my-whoop-noop") { lines.append(l); emitted = true }
         if !emitted {
             lines.append("Recent: no day rows")
         }
@@ -291,11 +362,17 @@ enum DebugDataDiagnostics {
         lines.append("Enabled: \(on ? "yes" : "no") · set \(String(format: "%02d:%02d", mins / 60, mins % 60))")
         // #3: model + the 5/MG experimental gate — a 5/MG firmware alarm is NOT armed unless Experimental is on.
         // (selectedWhoopModel stores the WhoopModel rawValue — "WHOOP 5.0 / MG" / "WHOOP 4.0" — not "whoop5".)
-        let model = d.string(forKey: "selectedWhoopModel") ?? WhoopModel.whoop4.rawValue
-        if model == WhoopModel.whoop5mg.rawValue {
-            lines.append("Model: \(model) · experimental: \(PuffinExperiment.isEnabled ? "on" : "off → firmware alarm NOT armed")")
-        } else {
-            lines.append("Model: \(model)")
+        // Same rule as the header above: parse through the enum, and ABSTAIN when nothing is known. This
+        // defaulted to `whoop4.rawValue`, so an unknown family was reported as a WHOOP 4.0 — the very
+        // fabrication this change removes on Android, and it would have left the two platforms disagreeing
+        // about the one case that matters. Three arms, mirroring the Kotlin `when`.
+        switch WhoopModel(rawValue: d.string(forKey: "selectedWhoopModel") ?? "") {
+        case .whoop5mg:
+            lines.append("Model: \(WhoopModel.whoop5mg.displayName) · experimental: \(PuffinExperiment.isEnabled ? "on" : "off → firmware alarm NOT armed")")
+        case .whoop4:
+            lines.append("Model: \(WhoopModel.whoop4.displayName)")
+        case nil:
+            lines.append("Model: unknown (family not yet detected)")
         }
         // #4 / #67: strap clock health — a reset/stale OR future-dated clock (the #34 / #928 causes) breaks
         // the alarm even when armed, AND misdates offloaded sleep: the strap banks last night with its wrong
@@ -383,5 +460,37 @@ enum DebugDataDiagnostics {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: Date(timeIntervalSince1970: TimeInterval(epochSec)))
+    }
+
+    /// #1617 follow-up: the line the night funnel prints when the ACTIVE device id carries no raw samples.
+    ///
+    /// The previous wording asserted "expected on a freshly re-added strap" unconditionally. That is one of
+    /// two explanations, and the other one is a bug: a registry can hold several ids for the same physical
+    /// strap (#1193/#740), and when the history spine and the raw stream split, the samples are present -
+    /// just filed under a different id. Printing the innocent cause for that case ends the investigation at
+    /// the point it should begin, which is worse than printing nothing.
+    ///
+    /// `othersWithSamples` is (deviceId, sampleCount) for every OTHER registry id that does hold samples in
+    /// the same window. Empty means the samples genuinely are not there and the fresh-re-add wording is
+    /// right; non-empty names the id that has them so the split is visible rather than inferred.
+    ///
+    /// Pure so the wording is unit-tested without a database, a strap, or a registry. Kotlin twin:
+    /// `com.noop.testcentre.orphanedSamplesLine`.
+    static func orphanedSamplesLine(activeId: String, othersWithSamples: [(String, Int)]) -> String {
+        if othersWithSamples.isEmpty {
+            return "(no raw biometric samples under '\(activeId)' for this night — expected on a freshly "
+                + "re-added strap; reconnect + let a history sync run, then re-export)"
+        }
+        // Tie-break on id: Kotlin's sortedByDescending is stable but Swift's `sorted` is NOT, so equal
+        // counts could otherwise order differently on the two platforms and the twin lines would diverge.
+        // The tie-break itself compares Unicode canonical order here and UTF-16 code units in Kotlin; those
+        // agree for the machine-generated ASCII ids this ever sees ("my-whoop", "whoop-<mac>"), and a
+        // device NICKNAME is a separate field that never reaches this id.
+        let named = othersWithSamples.sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
+            .map { "'\($0.0)' (\($0.1) rows)" }
+            .joined(separator: ", ")
+        return "(no raw biometric samples under the ACTIVE id '\(activeId)' for this night — they are under "
+            + "\(named) instead. The history spine and the raw stream are on different device ids (#1193); this "
+            + "is NOT a fresh re-add, the samples exist and are not being read.)"
     }
 }

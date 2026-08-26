@@ -54,10 +54,18 @@ public enum BackupSettings {
         "profile.heightCm": .double,
         "profile.waistCm": .double,
         "profile.hrMax": .int,
+        "profile.hrZoneThresholds": .string,
         "units.system": .string,
         "units.temperature": .string,
         "effort.scale": .string,
         "today.hostedCards": .string,
+        // #1361: the user's own custom journal BEHAVIOURS (newline-joined names). Deliberately NOT in
+        // `appleDefaultsKey` below — it isn't a flat UserDefaults key (customs are derived from the
+        // catalog items blob), so the app layer (`DataBackup`) bridges this one on export and restore.
+        // Byte-identical newline value to the Android bridge.
+        // SCOPE: NAMES only — the wire carries no kind/group, so a numeric custom behaviour restores as a
+        // plain .bool toggle (identical on both platforms; historical entries keep their DB numericValue).
+        "journal.customBehaviors": .string,
     ]
 
     /// Canonical JSON key → this platform's UserDefaults key. Identity everywhere except
@@ -70,6 +78,7 @@ public enum BackupSettings {
         "profile.heightCm": "profile.heightCm",
         "profile.waistCm": "profile.waistCm",
         "profile.hrMax": "profile.hrMaxOverride",
+        "profile.hrZoneThresholds": "profile.hrZoneThresholds",
         "units.system": "units.system",
         "units.temperature": "units.temperature",
         "effort.scale": "effort.scale",

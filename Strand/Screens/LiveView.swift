@@ -757,7 +757,7 @@ private struct LiveHeartReadout: View {
     /// The live HR zone for the focal readout's colour world (presentation only). 0 = below Zone 1.
     private var liveZone: Int {
         guard let bpm = displayHR else { return 0 }
-        return HRZones.zones(maxHR: Double(hrMax)).zoneNumber(forBPM: Double(bpm))
+        return model.profile.hrZoneSet.zoneNumber(forBPM: Double(bpm))
     }
 
     /// The focal vessel / numeral colour: the live HR-zone hue when streaming, the Effort world otherwise.
@@ -1138,6 +1138,9 @@ private struct LiveLogCard: View {
                         }
                     }
                 }
+                #if os(iOS)
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                #endif
                 .frame(height: 200)
                 .onChangeCompat(of: live.log.count) { _ in
                     if let last = live.log.indices.last { proxy.scrollTo(last, anchor: .bottom) }

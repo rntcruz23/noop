@@ -26,6 +26,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import androidx.compose.material.icons.filled.Accessible
+import androidx.compose.material.icons.filled.Hiking
+import androidx.compose.material.icons.filled.IceSkating
+import androidx.compose.material.icons.filled.Kayaking
+import androidx.compose.material.icons.filled.Sailing
+import androidx.compose.material.icons.filled.ScubaDiving
+import androidx.compose.material.icons.filled.Skateboarding
+import androidx.compose.material.icons.filled.Snowshoeing
+import androidx.compose.material.icons.filled.SportsCricket
+import androidx.compose.material.icons.filled.SportsFootball
+import androidx.compose.material.icons.filled.SportsHandball
+import androidx.compose.material.icons.filled.SportsHockey
+import androidx.compose.material.icons.filled.SportsRugby
+import androidx.compose.material.icons.filled.Surfing
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
@@ -35,6 +49,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.SportsMotorsports
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.automirrored.filled.DirectionsRun
@@ -94,6 +110,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
@@ -329,7 +347,7 @@ fun WorkoutsScreen(vm: AppViewModel) {
                     selectionMode = false; selectedKeys = emptySet()
                 },
                 onCancelSelect = { selectionMode = false; selectedKeys = emptySet() },
-                onEdit = { dialog = DialogTarget(it) },
+                onEdit = { editRow, isCopy -> dialog = DialogTarget(editRow, isCopy) },
                 onRelabel = { row, sport ->
                     vm.relabelDetected(row, sport)
                     pendingNoteSport = WorkoutEditing.displaySport(sport)
@@ -356,6 +374,7 @@ fun WorkoutsScreen(vm: AppViewModel) {
     dialog?.let { target ->
         ManualWorkoutDialog(
             editing = target.editing,
+            isCopy = target.isCopy,
             onDismiss = { dialog = null },
             onSave = { row, replacing ->
                 vm.saveManualWorkout(row, replacing)
@@ -366,8 +385,11 @@ fun WorkoutsScreen(vm: AppViewModel) {
     }
 }
 
-/** Drives the manual add/edit dialog. [editing] null = add a new workout, non-null = edit it. */
-private data class DialogTarget(val editing: WorkoutRow?)
+/** Drives the manual add/edit dialog. [editing] null = add a new workout, non-null = edit it.
+ *  [isCopy] marks "Duplicate as manual": the dialog pre-fills FROM a read-only row, but the save is a
+ *  pure ADD and must not travel on as `replacing`. Source alone cannot express this — the copy claims
+ *  "manual" precisely so the form treats it as editable. (#1488) */
+private data class DialogTarget(val editing: WorkoutRow?, val isCopy: Boolean = false)
 
 private data class WorkoutRecoveryTrendPoint(
     val startTs: Long,
@@ -416,22 +438,49 @@ private fun PostLogNoteBanner(text: String) {
     }
 }
 
-/** The "Add workout" pill — opens the manual add dialog. Shown on both the populated screen
- *  (in the range bar) and the empty state, so a user with no imports can still log a session. */
+/**
+ * The "Add workout" pill — opens the manual add dialog. Shown on both the populated screen
+ * (in the range bar) and the empty state, so a user with no imports can still log a session.
+ *
+ * #1602: this sits beside a Material3 [Button] in the Workouts action row, and the two are built by
+ * different mechanisms — so their metrics have to be matched deliberately or they drift. A `Button`
+ * carries `defaultMinSize(minHeight = ButtonDefaults.MinHeight)`; a bare `Row` has no minimum at all,
+ * so its height was whatever the content happened to be plus its padding, and the pair rendered at
+ * different heights with different label sizes.
+ *
+ * Both are pinned here: the same minimum height as a `Button`, and the same [NoopType.captionNumber]
+ * the Start button uses. iOS has never had this because both of its buttons come from ONE primitive
+ * (`NoopButton`, differing only by `kind`) — the real fix is an Android equivalent, and until that
+ * exists this is the seam that has to be held by hand.
+ */
 @Composable
 internal fun AddWorkoutButton(onAdd: () -> Unit, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
+            // Material's constant, not a NOOP token: the goal is not "be 40.dp", it is "be whatever the
+            // Button beside me is". Android has no control-height token to reach for (iOS keeps one,
+            // `NoopMetrics.controlHeight` = 48), and minting one at today's value would match by
+            // coincidence and drift the moment Material changed its default.
+            .defaultMinSize(minHeight = ButtonDefaults.MinHeight)
             .clip(RoundedCornerShape(50))
             .background(Palette.accentMuted)
             .clickable(onClick = onAdd)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            // 10.dp matches the Start button's contentPadding; this used to carry 14.dp. Invisible in
+            // English — width is fixed by `weight(1f)` — but this button already gives up 22.dp to an
+            // icon and spacer that Start has not, and the long translations are comparable in length
+            // ("Ajouter un entraînement" against "Démarrer l'entraînement"), so the extra 8.dp only
+            // decided which label ellipsized first.
+            .padding(horizontal = 10.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Filled.Add, contentDescription = null, tint = Palette.accent, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(6.dp))
-        Text(uiString(R.string.l10n_workouts_screen_add_workout_a196a2cc), style = NoopType.subhead, color = Palette.accent)
+        Text(
+            uiString(R.string.l10n_workouts_screen_add_workout_a196a2cc),
+            style = NoopType.captionNumber,
+            color = Palette.accent,
+        )
     }
 }
 
@@ -918,7 +967,11 @@ private fun SummarySection(
     val totalCount = rows.size
     val totalTimeH = rows.mapNotNull { it.durationS }.sum() / 3600.0
     val totalKcal = rows.mapNotNull { it.energyKcal }.sum()
-    val totalKm = rows.mapNotNull { it.distanceM }.sum() / 1000.0
+    // Only POSITIVE distances count as "has distance" (a strap-detected sport with no GPS/manual
+    // distance is null; an explicit 0 is not a real distance) — matches the per-row distance label. When
+    // nothing in the window has distance, the tile shows "–" instead of a misleading "0.0 km covered".
+    val distancesM = rows.mapNotNull { it.distanceM }.filter { it > 0.0 }
+    val totalKm = distancesM.sum() / 1000.0
     val modal = groups.firstOrNull()
 
     val tiles = listOf<@Composable (Modifier) -> Unit>(
@@ -953,7 +1006,7 @@ private fun SummarySection(
             StatTile(
                 modifier = m,
                 label = uiString(R.string.l10n_workouts_screen_total_distance_e8260e11),
-                value = UnitFormatter.distanceFromKilometers(totalKm, unitSystem),
+                value = if (distancesM.isEmpty()) "–" else UnitFormatter.distanceFromKilometers(totalKm, unitSystem),
                 caption = "covered",
                 accent = Palette.metricCyan,
             )
@@ -1129,7 +1182,7 @@ private fun SessionsSection(
     onMerge: (List<WorkoutRow>) -> Unit,
     onBulkDelete: (List<WorkoutRow>) -> Unit,
     onCancelSelect: () -> Unit,
-    onEdit: (WorkoutRow) -> Unit,
+    onEdit: (WorkoutRow, Boolean) -> Unit,
     onRelabel: (WorkoutRow, String) -> Unit,
     onDismiss: (WorkoutRow) -> Unit,
     onDelete: (WorkoutRow) -> Unit,
@@ -1329,7 +1382,7 @@ private fun SessionRow(
     selectionMode: Boolean,
     selected: Boolean,
     onToggleRow: (WorkoutRow) -> Unit,
-    onEdit: (WorkoutRow) -> Unit,
+    onEdit: (WorkoutRow, Boolean) -> Unit,
     onRelabel: (WorkoutRow, String) -> Unit,
     onDismiss: (WorkoutRow) -> Unit,
     onDelete: (WorkoutRow) -> Unit,
@@ -1885,7 +1938,7 @@ private fun DetailRow(label: String, value: String) {
 @Composable
 private fun RowActionsMenu(
     row: WorkoutRow,
-    onEdit: (WorkoutRow) -> Unit,
+    onEdit: (WorkoutRow, Boolean) -> Unit,
     onRelabel: (WorkoutRow, String) -> Unit,
     onDismiss: (WorkoutRow) -> Unit,
     onDelete: (WorkoutRow) -> Unit,
@@ -1906,7 +1959,7 @@ private fun RowActionsMenu(
                     )
                     DropdownMenuItem(
                         text = { Text(uiString(R.string.l10n_workouts_screen_edit_details_9e62bb59), style = NoopType.body, color = Palette.textPrimary) },
-                        onClick = { open = false; onEdit(row) },
+                        onClick = { open = false; onEdit(row, false) },
                     )
                     DropdownMenuItem(
                         text = { Text(uiString(R.string.l10n_workouts_screen_dismiss_not_a_workout_560c7bb5), style = NoopType.body, color = Palette.statusCritical) },
@@ -1916,7 +1969,7 @@ private fun RowActionsMenu(
                 WorkoutSource.MANUAL -> {
                     DropdownMenuItem(
                         text = { Text(uiString(R.string.l10n_workouts_screen_edit_b454359e), style = NoopType.body, color = Palette.textPrimary) },
-                        onClick = { open = false; onEdit(row) },
+                        onClick = { open = false; onEdit(row, false) },
                     )
                     DropdownMenuItem(
                         text = { Text(uiString(R.string.l10n_workouts_screen_delete_f6fdbe48), style = NoopType.body, color = Palette.statusCritical) },
@@ -1926,7 +1979,7 @@ private fun RowActionsMenu(
                 WorkoutSource.WHOOP, WorkoutSource.APPLE, WorkoutSource.LIFTING, WorkoutSource.ACTIVITY_FILE -> {
                     DropdownMenuItem(
                         text = { Text(uiString(R.string.l10n_workouts_screen_duplicate_as_manual_2d580d46), style = NoopType.body, color = Palette.textPrimary) },
-                        onClick = { open = false; onEdit(row.copy(source = "manual", sport = WorkoutEditing.displaySport(row.sport))) },
+                        onClick = { open = false; onEdit(WorkoutEditing.asManualCopy(row), true) },
                     )
                 }
             }
@@ -1967,6 +2020,7 @@ private fun Cell(text: String, modifier: Modifier, color: Color? = null) {
 @Composable
 private fun ManualWorkoutDialog(
     editing: WorkoutRow?,
+    isCopy: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (row: WorkoutRow, replacing: WorkoutRow?) -> Unit,
 ) {
@@ -2127,10 +2181,14 @@ private fun ManualWorkoutDialog(
             // it: a manual key change deletes the stale row; a detected original is durably dismissed).
             // Duplicating an imported WHOOP/Apple row is a pure ADD — never pass it, or a changed key
             // would delete the imported original.
-            val replacing = editing?.takeIf {
-                val c = WorkoutEditing.classify(it.source)
-                c == WorkoutSource.MANUAL || c == WorkoutSource.DETECTED
-            }
+            //
+            // The source test alone never enforced that. A duplicate is built with source "manual" so the
+            // form treats it as editable, so it classified as MANUAL and passed straight through, carrying
+            // the ORIGINAL's startTs. That reaches the Health Connect write-back, which deletes by startTs
+            // ALONE (`noop-workout-<startTs>`, no deviceId in the key) — so duplicating a strap session
+            // removed the original's records, and a duplicate saved at a new start left them deleted with
+            // nothing to restore them. [DialogTarget.isCopy] carries what the source cannot. (#1488)
+            val replacing = WorkoutEditing.replacingRowFor(editing, isCopy)
             val context = LocalContext.current
             TextButton(onClick = {
                 built?.let {
@@ -2515,34 +2573,83 @@ private fun grouped(v: Double): String = String.format(Locale.US, "%,d", v.round
 // MARK: - Sport icons (Material equivalents of the SF Symbols used on macOS)
 
 // internal (not private): reused by the Today Overview-HR chart to glyph each workout at its HR peak.
-internal fun sportIcon(sport: String): ImageVector {
+internal fun sportIcon(sport: String): ImageVector = when (sport.lowercase().trim()) {
+    // Per-sport glyphs, parity with the iOS SportIcon catalogue. Exact catalogue names first (each gets
+    // its closest Material sports glyph); free-typed / auto-detected labels fall through to the fuzzy
+    // matcher below. Sports Material has no dedicated glyph for (Dancing, Frisbee, Archery, Fishing,
+    // Hunting, Curling, Horseback riding, Elliptical, ...) resolve to the generic FitnessCenter there.
+    "running", "treadmill run" -> Icons.AutoMirrored.Filled.DirectionsRun
+    "walking", "treadmill walk" -> Icons.AutoMirrored.Filled.DirectionsWalk
+    "hiking", "rucking" -> Icons.Filled.Hiking
+    "cycling", "indoor cycle", "spinning", "mountain biking" -> Icons.AutoMirrored.Filled.DirectionsBike
+    "open-water swim", "pool swim", "water polo" -> Icons.Filled.Pool
+    "rowing", "row machine" -> Icons.Filled.Rowing
+    "kayaking", "stand-up paddleboard" -> Icons.Filled.Kayaking
+    "surfing" -> Icons.Filled.Surfing
+    "sailing" -> Icons.Filled.Sailing
+    "scuba diving" -> Icons.Filled.ScubaDiving
+    "skiing" -> Icons.Filled.DownhillSkiing
+    "snowboarding" -> Icons.Filled.Snowboarding
+    "snowshoeing" -> Icons.Filled.Snowshoeing
+    "ice skating" -> Icons.Filled.IceSkating
+    "inline skating", "skateboarding" -> Icons.Filled.Skateboarding
+    "hiit", "gymnastics" -> Icons.Filled.SportsGymnastics
+    "yoga", "pilates", "stretching", "meditation" -> Icons.Filled.SelfImprovement
+    "boxing", "martial arts", "kickboxing", "fencing" -> Icons.Filled.SportsMartialArts
+    "basketball", "netball" -> Icons.Filled.SportsBasketball
+    "soccer", "gaelic football" -> Icons.Filled.SportsSoccer
+    "american football", "australian football" -> Icons.Filled.SportsFootball
+    "rugby" -> Icons.Filled.SportsRugby
+    "cricket" -> Icons.Filled.SportsCricket
+    "baseball", "softball", "bowling" -> Icons.Filled.SportsBaseball
+    "handball" -> Icons.Filled.SportsHandball
+    "ice hockey", "field hockey", "lacrosse" -> Icons.Filled.SportsHockey
+    "tennis", "badminton", "squash", "racquetball", "table tennis", "padel", "pickleball" ->
+        Icons.Filled.SportsTennis
+    "volleyball", "sand volleyball", "spikeball" -> Icons.Filled.SportsVolleyball
+    "golf" -> Icons.Filled.SportsGolf
+    "climbing" -> Icons.Filled.Terrain
+    "wheelchair" -> Icons.Filled.Accessible
+    "gaming" -> Icons.Filled.SportsEsports
+    "motor racing" -> Icons.Filled.SportsMotorsports
+    else -> sportIconFuzzy(sport)
+}
+
+/// Free-text / auto-detected label fallback (e.g. "Morning Run", "trail hike"): fuzzy substring match,
+/// then the generic dumbbell. Catalogue names are handled exactly by [sportIcon] before this runs.
+private fun sportIconFuzzy(sport: String): ImageVector {
     val s = sport.lowercase()
     return when {
         s.contains("run") -> Icons.AutoMirrored.Filled.DirectionsRun
         s.contains("walk") || s.contains("hike") -> Icons.AutoMirrored.Filled.DirectionsWalk
-        s.contains("cycl") || s.contains("bike") || s.contains("ride") -> Icons.AutoMirrored.Filled.DirectionsBike
-        s.contains("swim") -> Icons.Filled.Pool
-        s.contains("row") || s.contains("kayak") || s.contains("paddle") -> Icons.Filled.Rowing
-        s.contains("surf") || s.contains("sail") || s.contains("scuba") || s.contains("polo") -> Icons.Filled.Pool
-        s.contains("cricket") || s.contains("softball") || s.contains("baseball") -> Icons.Filled.SportsBaseball
-        s.contains("spin") -> Icons.AutoMirrored.Filled.DirectionsBike
-        s.contains("yoga") || s.contains("pilates") || s.contains("meditat") || s.contains("stretch") -> Icons.Filled.SelfImprovement
-        s.contains("strength") || s.contains("weight") || s.contains("lift") -> Icons.Filled.FitnessCenter
-        s.contains("box") || s.contains("martial") || s.contains("jiu") || s.contains("judo") || s.contains("karate") ||
-            s.contains("mma") || s.contains("muay") || s.contains("taekwondo") || s.contains("wrestl") -> Icons.Filled.SportsMartialArts
-        s.contains("hiit") || s.contains("functional") || s.contains("gymnast") -> Icons.Filled.SportsGymnastics
+        s.contains("cycl") || s.contains("bike") || s.contains("ride") || s.contains("spin") -> Icons.AutoMirrored.Filled.DirectionsBike
+        s.contains("swim") || s.contains("polo") -> Icons.Filled.Pool
+        s.contains("row") -> Icons.Filled.Rowing
+        s.contains("kayak") || s.contains("paddle") -> Icons.Filled.Kayaking
+        s.contains("surf") -> Icons.Filled.Surfing
+        s.contains("sail") -> Icons.Filled.Sailing
+        s.contains("scuba") || s.contains("dive") -> Icons.Filled.ScubaDiving
         s.contains("snowboard") -> Icons.Filled.Snowboarding
         s.contains("ski") -> Icons.Filled.DownhillSkiing
-        // All racquet sports share the tennis glyph (no dedicated icon for padel/pickleball/squash etc.).
+        s.contains("skat") || s.contains("board") -> Icons.Filled.Skateboarding
+        s.contains("cricket") -> Icons.Filled.SportsCricket
+        s.contains("rugby") -> Icons.Filled.SportsRugby
+        s.contains("hockey") -> Icons.Filled.SportsHockey
+        s.contains("handball") -> Icons.Filled.SportsHandball
+        s.contains("softball") || s.contains("baseball") || s.contains("bowl") -> Icons.Filled.SportsBaseball
+        s.contains("yoga") || s.contains("pilates") || s.contains("meditat") || s.contains("stretch") -> Icons.Filled.SelfImprovement
+        s.contains("strength") || s.contains("weight") || s.contains("lift") -> Icons.Filled.FitnessCenter
+        s.contains("box") || s.contains("martial") || s.contains("jiu") || s.contains("judo") || s.contains("karate") || s.contains("wrestl") || s.contains("fenc") -> Icons.Filled.SportsMartialArts
+        s.contains("hiit") || s.contains("functional") || s.contains("gymnast") -> Icons.Filled.SportsGymnastics
         s.contains("tennis") || s.contains("padel") || s.contains("pickle") || s.contains("squash") || s.contains("racquet") || s.contains("badminton") -> Icons.Filled.SportsTennis
         s.contains("volleyball") -> Icons.Filled.SportsVolleyball
         s.contains("golf") -> Icons.Filled.SportsGolf
-        // No dedicated bowling icon in the Material set; the plain ball glyph is the closest match
-        // (iOS has figure.bowling). (D#850)
-        s.contains("bowl") -> Icons.Filled.SportsBaseball
         s.contains("climb") -> Icons.Filled.Terrain
         s.contains("soccer") || s.contains("football") -> Icons.Filled.SportsSoccer
-        s.contains("basketball") -> Icons.Filled.SportsBasketball
+        s.contains("basketball") || s.contains("netball") -> Icons.Filled.SportsBasketball
+        s.contains("gaming") || s.contains("esport") -> Icons.Filled.SportsEsports
+        s.contains("motor") || s.contains("racing") -> Icons.Filled.SportsMotorsports
+        s.contains("wheelchair") -> Icons.Filled.Accessible
         else -> Icons.Filled.FitnessCenter
     }
 }

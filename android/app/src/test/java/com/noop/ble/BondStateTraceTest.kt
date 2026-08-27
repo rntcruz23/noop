@@ -92,4 +92,67 @@ class BondStateTraceTest {
     fun `with no strap address, an addressed event is not ours to trace`() {
         assertFalse(shouldTraceBondState("AA:BB", null, helloOutstanding = true))
     }
+
+    @Test
+    fun `a pairing-request transition is timed against the pairing, not a hello that never went out`() {
+        // The #1635 explicit-pairing experiment deliberately sends no CLIENT_HELLO. Timing only against
+        // the hello left every transition it causes untimed, so a 200ms pairing and an 8s one read the
+        // same - and how long a pairing took is most of what makes it diagnosable.
+        val line = bondStateTraceLine(
+            previous = android.bluetooth.BluetoothDevice.BOND_BONDING,
+            current = android.bluetooth.BluetoothDevice.BOND_BONDED,
+            address = "FD:D4",
+            sinceMs = 4200L,
+            sinceLabel = "the pairing request",
+        )
+        assertTrue(line.contains("4200ms after the pairing request"))
+        assertFalse(line.contains("CLIENT_HELLO"))
+        assertTrue(line.contains("paired"))
+    }
+
+    @Test
+    fun `the connect line names the bond state the link STARTED with`() {
+        // Without it, a hello failing on an unencrypted link and one failing on an ENCRYPTED link print
+        // identically - and they are completely different findings.
+        val l = bondStateAtConnectLine(android.bluetooth.BluetoothDevice.BOND_BONDED, "FD:D4")
+        assertTrue(l.contains("BOND_BONDED"))
+        assertTrue(l.contains("FD:D4"))
+        assertTrue(bondStateAtConnectLine(android.bluetooth.BluetoothDevice.BOND_NONE, null).contains("unknown"))
+    }
+
+    @Test
+    fun `BONDING with no transition line convicts our receiver, not the strap`() {
+        // The whole point: a capture showed createBond accepted and then silence, and that has two very
+        // different causes. Polling the device removes our own broadcast receiver from the chain, so the
+        // answer no longer depends on the component under suspicion.
+        val line = bondStatePollLine(android.bluetooth.BluetoothDevice.BOND_BONDING, sawTransitionLine = false)
+        assertTrue(line.contains("receiver missed it"))
+        assertTrue(line.contains("a NOOP bug, not the strap"))
+    }
+
+    /**
+     * The verdict this line used to give was "Android did not begin pairing at all". An HCI capture of
+     * exactly this case disproved it: the phone DOES transmit an SMP Pairing Request and a WHOOP 5/MG
+     * answers "Pairing Failed — Pairing Not Supported" (0x05). A refused pairing ends at BOND_NONE with
+     * no BONDED transition, which is indistinguishable from never starting if the bond state is all you
+     * can see. The line must now name both causes and the capture that separates them.
+     */
+    @Test
+    fun `NONE with no transition line names BOTH causes rather than convicting Android`() {
+        val line = bondStatePollLine(android.bluetooth.BluetoothDevice.BOND_NONE, sawTransitionLine = false)
+        assertFalse("the disproved verdict must not come back", line.contains("did not begin pairing at all"))
+        assertFalse("nor its softer form", line.contains("nothing was heard"))
+        assertTrue("a refusal must be named as the other cause", line.contains("REFUSED pairing ends here too"))
+        assertTrue("the known 5/MG answer belongs in the line", line.contains("Pairing Not Supported"))
+        assertTrue(line.contains("SMP 0x05"))
+        assertTrue("name the discriminator", line.contains("HCI capture"))
+        assertFalse(line.contains("NOOP bug"))
+    }
+
+    @Test
+    fun `a heard transition is not reported as a missed one`() {
+        val line = bondStatePollLine(android.bluetooth.BluetoothDevice.BOND_BONDING, sawTransitionLine = true)
+        assertFalse(line.contains("missed it"))
+        assertTrue(bondStatePollLine(android.bluetooth.BluetoothDevice.BOND_BONDED, true).contains("paired"))
+    }
 }

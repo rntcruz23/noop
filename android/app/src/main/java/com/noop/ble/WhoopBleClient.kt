@@ -438,10 +438,14 @@ class WhoopBleClient(
      * call site unchanged.
      */
     private val gattOpsFactory: (BluetoothGatt) -> GattOps = ::RealGattOps,
+    /** Fire-and-forget notification after a true HISTORY_COMPLETE only. The sink must only enqueue. */
+    private val successfulOffloadSink: () -> Unit = {},
 ) {
 
     companion object {
         private const val TAG = "WhoopBleClient"
+        internal fun shouldNotifySuccessfulOffload(reason: String, bankedRows: Boolean): Boolean =
+            reason == "HISTORY_COMPLETE" || (reason == "timeout" && bankedRows)
         /**
          * Cap on the in-app strap-log ring buffer (for the "Share strap log" diagnostics export).
          * Raised from the old ~1h (2,000 lines) to retain a rolling ~24h of activity (#510 —
@@ -4588,6 +4592,27 @@ class WhoopBleClient(
     }
 
     /**
+     * Ask the strap what alarm it currently has stored (#1706). The reply lands on the command-notify
+     * characteristic and is handled by the same GET_ALARM_TIME branch an arm's own follow-up read uses,
+     * so it persists `alarm.lastReportedEpoch` + the RAW response bytes for the debug export.
+     *
+     * Port of Swift `BLEManager.getStrapAlarm`, which until now had no caller on either platform. It
+     * exists here because the readback was otherwise only reachable by ARMING: a user whose alarm is off
+     * could not produce the evidence needed to explain what their strap reports, and on Android arming
+     * was the sole trigger.
+     *
+     * Not family-gated, unlike [armStrapAlarm] — but that is defensive, not a feature. [send] already
+     * no-ops when nothing is connected, and only the 4.0 branch decodes the reply, so an errant call
+     * costs one ignored write. The single caller today is the 4.0 side of the strap-alarm card, so the
+     * 5/MG frame is NOT currently captured by anything; a caller could be added there if that layout
+     * ever needs recording, and this method would not have to change.
+     */
+    fun getStrapAlarm() {
+        send(CommandNumber.GET_ALARM_TIME, byteArrayOf(0x01))
+        log("Alarm: requested current alarm time")
+    }
+
+    /**
      * Arm the strap's **firmware** alarm to buzz at [epochSec] (absolute UTC seconds). The strap fires
      * at that instant even if the phone is asleep or NOOP is closed. SET_CLOCK is sent first so the
      * strap's RTC is UTC-correct (a wrong RTC fires the alarm at the wrong wall-clock time). The 4.0
@@ -4635,6 +4660,9 @@ class WhoopBleClient(
         runCatching {
             val editor = NoopPrefs.of(context).edit()
                 .putLong("alarm.lastArmSentEpoch", sentEpoch)
+                // #1706: WHICH strap this arm went to. Without it the export compares this epoch against
+                // a readback that, on a multi-strap install, may have come from a different device.
+                .putString("alarm.lastArmDeviceId", deviceId)
                 .putLong("alarm.lastArmAt", System.currentTimeMillis())
                 .putBoolean("alarm.lastArmConnected", _state.value.connected)
             // #34: live HR at the moment of the arm, purely to test a hypothesis raised on a reporter's
@@ -6030,8 +6058,15 @@ class WhoopBleClient(
                     // frame. Family-aware, so it's correct for WHOOP4 and 5/MG alike.
                     val parsed = Framing.parseFrame(frame, connectedFamily)
                     // A frame replayed as part of the historical offload (type 47/48/… during a backfill)
-                    // must not drive LIVE-only state (the charging pill). Mirrors iOS, where the offload
-                    // path skips the live router entirely. (PR #568 reimpl)
+                    // must not drive LIVE-only state (the charging pill). (PR #568 reimpl)
+                    //
+                    // NOT the same shape as iOS, despite what this said before. THIS side calls the handler
+                    // for EVERY frame and gates only the live-only effects; iOS skips the router outright
+                    // for offload frames and carves out the few things that must still fire (a live
+                    // gesture, and now the strap's console narration). Same outcome for the charging pill,
+                    // opposite structure — so a reader porting behaviour either way has to check which
+                    // frames reach the handler at all, not assume it matches. That assumption is exactly
+                    // how the console mirror shipped dead on iOS: decoded, keyed correctly, never called.
                     handleFrame(frame, parsed, replayedOffload = offloadFrame)
 
                     // Capture the strap's newest stored record from a GET_DATA_RANGE reply, feeding
@@ -6533,6 +6568,13 @@ class WhoopBleClient(
                         runCatching {
                             NoopPrefs.of(context).edit()
                                 .putLong("alarm.lastReportedEpoch", epoch)
+                                // #1706: the strap this readback came from, and the bytes it came in.
+                                // The raw frame is what separates a genuinely-stored stale alarm from a
+                                // misdecode of a fixed response field, and the live log rolls long before
+                                // a debug export is taken — a 2045 readback went unexplained for exactly
+                                // that reason.
+                                .putString("alarm.lastReportedDeviceId", deviceId)
+                                .putString("alarm.lastReportedRaw", raw)
                                 .putLong("alarm.lastReportedAt", System.currentTimeMillis())
                                 .apply()
                         }
@@ -6571,7 +6613,7 @@ class WhoopBleClient(
                 // The 5/MG strap narrates its own sync engine here ("BLE: PullStats: Data: N…",
                 // "RTC timestamp … is invalid") — gold for protocol research, so mirror it into the
                 // strap log (capped; the ring buffer holds 2k lines). (#78 fork)
-                (parsed.parsed["console"] as? String)?.let { txt ->
+                (parsed.parsed["log"] as? String)?.let { txt ->
                     log("strap: ${txt.take(300)}")
                 }
             }
@@ -8024,6 +8066,17 @@ class WhoopBleClient(
             .maxOrNull() ?: now
         val streams: Streams = extractStreams(parsed, deviceClockRef = newestRealtimeTs, wallClockRef = now)
         val batch = StreamPersistence.toBatch(streams)
+        // #1118: the SECOND live transport. The standard 0x2A37 path above stamps a beat at the second
+        // it arrived; this one stamps it from the strap's own record clock. The same beat reaching both
+        // lands on two different seconds, which no same-second de-dup can collapse — the signature every
+        // affected night prints as `crossSecondOverCount`.
+        if (batch.rr.isNotEmpty()) {
+            if (com.noop.analytics.RrEmissionStats.shouldEmitLiveCensus(lastRealtimeRrCensusSec, now)) {
+                lastRealtimeRrCensusSec = now
+                val census = com.noop.analytics.RrEmissionStats.compute(batch.rr.map { it.ts.toInt() to it.rrMs })
+                log(com.noop.analytics.RrEmissionStats.logLine("live-realtime", batch.rr.size, null, census))
+            }
+        }
         if (!batch.isEmpty) {
             try {
                 repository.insert(batch, deviceId)
@@ -8033,6 +8086,26 @@ class WhoopBleClient(
             }
         }
     }
+
+    /** #1118: last emit of each LIVE R-R census line, unix seconds; 0 = never. See
+     *  [com.noop.analytics.RrEmissionStats.shouldEmitLiveCensus] for why these are rate-limited.
+     *
+     *  Deliberately UNSYNCHRONIZED, unlike the buffers they sit beside. The two flushes can run
+     *  concurrently on the io scope, but a 32-bit write is atomic on the JVM so the worst outcome of a
+     *  stale read is one duplicate diagnostic line — cheaper than taking `collectorLock` on a path whose
+     *  only job is to describe itself. (The Swift twin is @MainActor-isolated and gets the guarantee for
+     *  free; the asymmetry is intentional, not an oversight.)
+     *
+     *  Lifetime, which DIVERGES from the Swift twin and is worth knowing before reading a log:
+     *  `WhoopBleClient` is the process-wide lazy singleton on `NoopApplication`, and a device switch
+     *  mutates `deviceId` via [setActiveDeviceId] rather than rebuilding the client — so these never
+     *  reset for the life of the process, and the 15-minute cadence holds across reconnects. The Swift
+     *  side keeps them on `Collector`, which `BLEManager.bootstrapStore()` REBUILDS (a store rebuild
+     *  after unlock, among other paths), so an iOS log can carry an extra line after one of those.
+     *  Harmless either way — it is a rate-limit on a diagnostic, not a measurement — but a reader
+     *  comparing two logs should not have to work out why one has more lines than the other. */
+    private var lastStdRrCensusSec: Int = 0
+    private var lastRealtimeRrCensusSec: Int = 0
 
     /**
      * Buffer one standard 0x2A37 reading (carries a wall-clock ts directly, no clock ref needed).
@@ -8054,6 +8127,20 @@ class WhoopBleClient(
             val h = ArrayList(stdHr); val r = ArrayList(stdRr)
             stdHr.clear(); stdRr.clear()
             h to r
+        }
+        // #1118: census this batch BEFORE it is stored, exactly as the historical path does, so a
+        // strap log carries one `ratioRep` per transport. If each transport reports ~1.0 while the
+        // stored night reads 2.77, the over-count is the UNION of the transports and no single
+        // decoder is at fault — which is the question this instrumentation exists to settle.
+        if (rr.isNotEmpty()) {
+            val nowSec = (System.currentTimeMillis() / 1000L).toInt()
+            if (com.noop.analytics.RrEmissionStats.shouldEmitLiveCensus(lastStdRrCensusSec, nowSec)) {
+                lastStdRrCensusSec = nowSec
+                val census = com.noop.analytics.RrEmissionStats.compute(rr.map { it.ts.toInt() to it.rrMs })
+                // `inserted` is NULL, not echoed from `offered`: the store's conflict key decides that
+                // and this census runs before the insert. The line renders `inserted=n/a`.
+                log(com.noop.analytics.RrEmissionStats.logLine("live-standard", rr.size, null, census))
+            }
         }
         try {
             repository.insert(StreamBatch(hr = hr, rr = rr), deviceId)
@@ -8185,10 +8272,21 @@ class WhoopBleClient(
                 clockUntrusted = clockUntrusted,
             )
         ) {
+            // #1683: the empty streak only stretches the floor for the AUTOMATIC triggers (PERIODIC and
+            // STRAP). Naming it on a CONNECT/FOREGROUND skip - which uses the flat event floor and is not
+            // backed off at all - reads as though the streak caused the skip. It misled a reader of a real
+            // capture, so the line now names the streak only where the streak is actually doing something.
+            val streakGatesThisTrigger =
+                trigger == BackfillTrigger.PERIODIC || trigger == BackfillTrigger.STRAP
             log(
-                "Backfill: skipped ($trigger) - policy floor not met " +
-                    "(empty streak ${emptySyncTracker.consecutiveEmptySyncs}" +
-                    "${if (clockUntrusted) ", clock future-dated" else ""})",
+                "Backfill: skipped ($trigger) - policy floor not met" +
+                    // BOTH the streak and the future-dated clock gate PERIODIC/STRAP only; CONNECT and
+                    // FOREGROUND use the flat event floor. Naming either on those triggers reads as a
+                    // cause, which is how this line misled a reader of a real capture.
+                    (if (streakGatesThisTrigger)
+                        " (empty streak ${emptySyncTracker.consecutiveEmptySyncs}" +
+                            "${if (clockUntrusted) ", clock future-dated" else ""})"
+                    else ""),
             )
             return
         }
@@ -8401,6 +8499,18 @@ class WhoopBleClient(
                 bankedSensorRecords = bankedSensorRecords,
                 consoleOnly = bankedNothingRaw,
             ) else false
+        // #1683: the strap's newest stored record, ONLY when it is stale enough to be worth naming.
+        // Declared out here because both the log line inside the block below and the user-facing banner
+        // further down consume it, and they must not disagree about whether the strap is stale.
+        // WHOOP4 only, explicitly, on BOTH platforms. The underlying field is not populated alike: Swift
+        // gates it on `feedsSync` (#695 - WHOOP4 today, the 5/MG path deliberately leaves it unset), while
+        // this side sets it for any family that answers GET_DATA_RANGE. Reading it without a gate would
+        // let a 5/MG show the dated wording here and not on iOS. Gating the READ on both keeps the two in
+        // step whichever way that pre-existing difference is settled later, and a 5/MG that cannot offload
+        // has no business being told it stopped saving to flash.
+        val staleNewestSeen: Long? = strapNewestTs
+            ?.takeIf { connectedFamily == DeviceFamily.WHOOP4 }
+            ?.takeIf { Backfiller.isStaleNewestRecord(it, nowSec) }
         if (bankedNothing) {
             val detail = if (consoleChunksThisSession >= 3)
                 "console-only across $consoleChunksThisSession chunks"
@@ -8409,6 +8519,11 @@ class WhoopBleClient(
                 "Backfill: completed but the strap banked no sensor history ($detail); " +
                     "consecutive empty syncs = ${emptySyncTracker.consecutiveEmptySyncs}.",
             )
+            // #1683: say HOW OLD the strap's newest stored record is. Without this the line above reads
+            // identically for a strap that is caught up and one that stopped banking three weeks ago -
+            // NOOP knows the difference (GET_DATA_RANGE gave it) and simply never said so, which is why
+            // #1541 stayed open and unactionable. Rare-event evidence, so always-on.
+            staleNewestSeen?.let { log(Backfiller.staleRecordLine(it, nowSec)) }
         }
         // #battery: maintain the empty-offload backoff counter (see [consecutiveEmptyOffloads]). A 0-row
         // session — clean HISTORY_COMPLETE-empty OR an idle-timeout STALL — means there was nothing new to
@@ -8494,7 +8609,11 @@ class WhoopBleClient(
                 // the two platforms never disagree on which banner a given sync shows.
                 lastSyncError = when {
                     bankedNothing && sustainedEmpty ->
-                        "Synced, but your strap had no stored history to hand over - only its diagnostic output. This usually means its clock has lost sync, so it isn't saving data to flash. Fully charge it to 100%, then reconnect, and it should start banking again."
+                        // #1683: when the strap's own newest record dates the silence, SAY it. The
+                        // generic copy omits that and promises a recovery the charge advice has already
+                        // been retried for every session.
+                        staleNewestSeen?.let { Backfiller.staleRecordBanner(it, nowSec) }
+                            ?: "Synced, but your strap had no stored history to hand over - only its diagnostic output. This usually means its clock has lost sync, so it isn't saving data to flash. Fully charge it to 100%, then reconnect, and it should start banking again."
                     bankedNothing -> null   // banked nothing but not yet sustained — stay silent (matches Swift)
                     // #324/#928: the strap banked records but its newest is dated implausibly in the future
                     // (RTC relatched ahead). #773 drops the samples so nothing is misfiled, but this path
@@ -8544,8 +8663,12 @@ class WhoopBleClient(
         backfillDrain.clear()
         closeWhoop5BackfillCapture(flushSummary = true)
         log("Backfill: session ended — reason=$reason")
-        // Inactivity reminder (#419): read-only hook on the natural offload completion (no cadence
-        // change). Only on a true HISTORY_COMPLETE — a timeout/disconnect didn't bring a fresh window.
+        // Downstream export also treats a WHOOP 4 idle timeout with persisted rows as successful: that
+        // firmware routinely finishes productive offloads without emitting HISTORY_COMPLETE.
+        if (shouldNotifySuccessfulOffload(reason, persistedSensorRows)) {
+            runCatching { successfulOffloadSink() }
+        }
+        // Existing inactivity/stress/nap hooks retain their stricter HISTORY_COMPLETE semantics.
         if (reason == "HISTORY_COMPLETE") {
             maybeBuzzInactivity()
             // L3 stress check-in (v5): same read-only hook — fire the StressOnsetDetector over the live
@@ -9805,10 +9928,12 @@ internal fun isPlausibleAlarmEpoch(epoch: Long): Boolean = epoch in 1_500_000_00
 
 /**
  * Extract the armed-alarm epoch from a GET_ALARM_TIME (cmd 67) COMMAND_RESPONSE, defensively (#401
- * close-out). The WHOOP 4.0 response layout is UNDOCUMENTED, so this tries the two shapes the firmware
- * could plausibly answer with - the SET_ALARM_TIME mirror (`[form 0x01][u32 LE epoch]…`, matching the
- * 9-byte payload we arm with) first, then a bare leading u32 LE - and accepts a candidate only when it
- * passes [isPlausibleAlarmEpoch]. Anything else returns null and the caller logs raw hex instead.
+ * close-out). The WHOOP 4.0 response layout is UNDOCUMENTED, so this tries the shapes the firmware has
+ * been seen to answer with - the 11-byte GET readback captured on fw 41.17.6.0
+ * (`[form 0x01][stored flag][u32 LE epoch][00 00][04 00 20]`, epoch at offset 2) first, then the
+ * SET_ALARM_TIME mirror (`[form 0x01][u32 LE epoch]…`, matching the 9-byte payload we arm with), then
+ * a bare leading u32 LE - and accepts a candidate only when it passes [isPlausibleAlarmEpoch].
+ * Anything else returns null and the caller logs raw hex instead.
  * Pinned by `AlarmReadbackDecodeTest`; twin of the Swift `FrameRouter.armedAlarmEpoch`.
  */
 internal fun whoop4ArmedAlarmEpoch(frame: ByteArray): Long? {
@@ -9820,6 +9945,18 @@ internal fun whoop4ArmedAlarmEpoch(frame: ByteArray): Long? {
             ((payload[at + 2].toLong() and 0xFFL) shl 16) or
             ((payload[at + 3].toLong() and 0xFFL) shl 24)
     }
+    // The GET readback (fw 41.17.6.0, three arm/readback captures 2026-08-26..28, #34/#1706): the
+    // epoch sits ONE byte further than in the SET mirror, because the readback carries a stored flag
+    // (0x00 = nothing stored, 0x01 = stored) the arm payload does not. The mirror-offset read of this
+    // shape returns the epoch's LOW THREE bytes shifted up a byte, plus the flag — wrong by roughly
+    // 256x and free to land anywhere in u32 range. In all three captures it landed on a 2045 date
+    // INSIDE the 2017..2100 plausibility window (an arm for 2026-08-26 read back as 2045-09-24), so
+    // the gate did not catch it and a MISMATCH was counted against a strap whose register is fine. So
+    // on this shape the mirror offsets are known-wrong and must NOT be tried: offset 2 decodes, or
+    // the payload falls to the raw-hex line.
+    if (payload.size == 11 && payload[0] == 0x01.toByte()) {
+        return u32le(2)?.takeIf { isPlausibleAlarmEpoch(it) }
+    }
     if (payload.isNotEmpty() && payload[0] == 0x01.toByte()) {
         u32le(1)?.takeIf { isPlausibleAlarmEpoch(it) }?.let { return it }
     }
@@ -9828,8 +9965,10 @@ internal fun whoop4ArmedAlarmEpoch(frame: ByteArray): Long? {
 
 /**
  * True when a GET_ALARM_TIME readback explicitly reports NO alarm stored — the epoch field decodes to
- * 0 in the same shapes [whoop4ArmedAlarmEpoch] reads (SET-mirror `[0x01][u32=0]` first, then a bare
- * leading `u32=0`). This is the strap's "nothing armed" sentinel, distinct from a genuinely unparseable
+ * 0 in the same shapes [whoop4ArmedAlarmEpoch] reads (the 11-byte GET readback `[0x01][flag][u32=0]…`
+ * first — the #34 field-report payload `01 00 00 00 00 00 00 00 04 00 20` is exactly this shape with
+ * the stored flag 0x00 — then the SET-mirror `[0x01][u32=0]`, then a bare leading `u32=0`). This is
+ * the strap's "nothing armed" sentinel, distinct from a genuinely unparseable
  * payload: an arm the strap silently dropped reads back as epoch 0, so labelling it "unrecognised" hid
  * the real signal (#34). Only consulted AFTER [whoop4ArmedAlarmEpoch] returns null. Twin of the Swift
  * `FrameRouter.readbackReportsNoAlarm`; pinned by `AlarmReadbackDecodeTest`.
@@ -9842,6 +9981,9 @@ internal fun whoop4ReadbackReportsNoAlarm(frame: ByteArray): Boolean {
             ((payload[at + 1].toLong() and 0xFFL) shl 8) or
             ((payload[at + 2].toLong() and 0xFFL) shl 16) or
             ((payload[at + 3].toLong() and 0xFFL) shl 24)
+    }
+    if (payload.size == 11 && payload[0] == 0x01.toByte()) {
+        return u32le(2)?.let { it == 0L } ?: false
     }
     if (payload.isNotEmpty() && payload[0] == 0x01.toByte()) {
         return u32le(1)?.let { it == 0L } ?: false

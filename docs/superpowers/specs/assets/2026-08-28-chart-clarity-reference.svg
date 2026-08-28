@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="980" viewBox="0 0 1440 980" role="img" aria-labelledby="title desc">
+  <title id="title">NOOP chart clarity reference mockups</title>
+  <desc id="desc">Phone and wide-layout reference cards for HRV and resting heart rate, showing one primary value, personal context, coverage, a muted typical range, a single line, sparse dates, and one latest point.</desc>
+  <rect width="1440" height="980" fill="#121518"/>
+  <style>
+    .title { font: 700 30px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #ffffff; }
+    .section { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.5px; fill: #9aa4ac; }
+    .label { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.4px; fill: #ffffff; }
+    .value { font: 700 42px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #ffffff; }
+    .unit { font: 500 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #9aa4ac; }
+    .context { font: 500 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #9aa4ac; }
+    .coverage { font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #6b7177; }
+    .axis { font: 500 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #6b7177; }
+    .annotation { font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #9aa4ac; }
+    .card { fill: #25292c; }
+  </style>
+
+  <text x="60" y="62" class="title">NOOP chart clarity</text>
+  <text x="60" y="90" class="context">Phase 0 reference: answer first, evidence second</text>
+
+  <text x="60" y="138" class="section">PHONE WIDTH · DEFAULT</text>
+  <rect x="60" y="162" width="410" height="338" rx="20" class="card"/>
+  <text x="88" y="202" class="label">HRV</text>
+  <text x="442" y="202" text-anchor="end" class="context">›</text>
+  <text x="88" y="258" class="value">58</text>
+  <text x="145" y="258" class="unit">ms</text>
+  <text x="88" y="290" class="context">Within your typical range</text>
+  <text x="88" y="316" class="coverage">24 of 30 nights</text>
+  <rect x="88" y="354" width="354" height="54" rx="8" fill="#a06ce0" opacity="0.12"/>
+  <line x1="88" y1="381" x2="442" y2="381" stroke="#a06ce0" opacity="0.23" stroke-width="1"/>
+  <path d="M88 418 L101 402 L114 408 L127 370 L140 378 L153 392 M179 401 L192 384 L205 390 L218 365 L231 373 L244 387 L257 382 M283 394 L296 376 L309 384 L322 369 L335 381 L348 374 L361 389 L374 380 L387 386 L400 372 L413 379 L426 367 L442 374" fill="none" stroke="#a06ce0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="442" cy="374" r="5" fill="#ffffff" stroke="#a06ce0" stroke-width="3"/>
+  <text x="88" y="462" class="axis">30 Jul</text>
+  <text x="265" y="462" text-anchor="middle" class="axis">13 Aug</text>
+  <text x="442" y="462" text-anchor="end" class="axis">28 Aug</text>
+
+  <rect x="510" y="162" width="410" height="338" rx="20" class="card"/>
+  <text x="538" y="202" class="label">RESTING HR</text>
+  <text x="892" y="202" text-anchor="end" class="context">›</text>
+  <text x="538" y="258" class="value">52</text>
+  <text x="595" y="258" class="unit">bpm</text>
+  <text x="538" y="290" class="context">3 bpm below your baseline</text>
+  <text x="538" y="316" class="coverage">27 of 30 nights</text>
+  <rect x="538" y="360" width="354" height="48" rx="8" fill="#e06b80" opacity="0.11"/>
+  <line x1="538" y1="384" x2="892" y2="384" stroke="#e06b80" opacity="0.22" stroke-width="1"/>
+  <path d="M538 369 L551 372 L564 370 L577 389 L590 394 L603 386 L616 371 L629 375 L642 381 L655 390 M681 386 L694 379 L707 383 L720 391 L733 388 L746 395 L759 390 L772 385 L785 389 L798 392 L811 387 L824 391 L837 386 L850 388 L863 384 L876 386 L892 382" fill="none" stroke="#e06b80" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="892" cy="382" r="5" fill="#ffffff" stroke="#e06b80" stroke-width="3"/>
+  <text x="538" y="462" class="axis">30 Jul</text>
+  <text x="715" y="462" text-anchor="middle" class="axis">13 Aug</text>
+  <text x="892" y="462" text-anchor="end" class="axis">28 Aug</text>
+
+  <text x="60" y="552" class="section">WIDE LAYOUT · SAME HIERARCHY, MORE EVIDENCE WIDTH</text>
+  <rect x="60" y="576" width="1320" height="278" rx="20" class="card"/>
+  <line x1="384" y1="608" x2="384" y2="822" stroke="#1c1f22" stroke-width="1"/>
+  <text x="92" y="620" class="label">HRV</text>
+  <text x="352" y="620" text-anchor="end" class="context">›</text>
+  <text x="92" y="690" class="value">58</text>
+  <text x="149" y="690" class="unit">ms</text>
+  <text x="92" y="730" class="context">Within your typical range</text>
+  <text x="92" y="758" class="coverage">24 of 30 nights</text>
+  <rect x="420" y="642" width="920" height="64" rx="8" fill="#a06ce0" opacity="0.12"/>
+  <line x1="420" y1="674" x2="1340" y2="674" stroke="#a06ce0" opacity="0.23" stroke-width="1"/>
+  <path d="M420 728 L454 711 L488 718 L522 663 L556 675 L590 701 M658 710 L692 683 L726 691 L760 657 L794 670 L828 697 L862 685 M930 702 L964 676 L998 690 L1032 668 L1066 686 L1100 673 L1134 695 L1168 682 L1202 690 L1236 671 L1270 680 L1304 664 L1340 676" fill="none" stroke="#a06ce0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="1340" cy="676" r="5" fill="#ffffff" stroke="#a06ce0" stroke-width="3"/>
+  <text x="420" y="790" class="axis">30 Jul</text>
+  <text x="880" y="790" text-anchor="middle" class="axis">13 Aug</text>
+  <text x="1340" y="790" text-anchor="end" class="axis">28 Aug</text>
+
+  <text x="60" y="910" class="annotation">Muted band = context · single line = metric identity · gap = missing night · white point = latest or selected</text>
+  <text x="60" y="938" class="annotation">No persistent Y axis · no area fill · no duplicated mean/min/max footer · full detail remains one action away</text>
+</svg>

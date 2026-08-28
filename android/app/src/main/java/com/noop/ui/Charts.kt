@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -111,10 +112,11 @@ private fun pointsFor(
     height: Float,
     topPad: Float,
     bottomPad: Float,
+    xPositions: List<Float>? = null,
 ): List<Offset> {
     val clean = values.filter { it.isFinite() }
     if (clean.size < 2 || width <= 0f || height <= 0f) return emptyList()
-    return pointsFor(clean, width, height, topPad, bottomPad, clean.min(), clean.max())
+    return pointsFor(clean, width, height, topPad, bottomPad, clean.min(), clean.max(), xPositions)
 }
 
 private fun pointsFor(
@@ -125,19 +127,90 @@ private fun pointsFor(
     bottomPad: Float,
     minV: Double,
     maxV: Double,
+    xPositions: List<Float>? = null,
 ): List<Offset> {
     if (values.size < 2 || width <= 0f || height <= 0f) return emptyList()
 
     val span = (maxV - minV)
     val usableH = (height - topPad - bottomPad).coerceAtLeast(1f)
+    val positions = validatedXPositions(xPositions, values.size)
     val stepX = if (values.size > 1) width / (values.size - 1) else width
 
     return values.mapIndexed { i, v ->
-        val x = stepX * i
+        val x = positions?.get(i)?.times(width) ?: (stepX * i)
         val norm = if (span > 0.0) ((v - minV) / span).toFloat() else 0.5f
         val y = topPad + (1f - norm) * usableH
         Offset(x, y)
     }
+}
+
+private fun markerPointFor(
+    values: List<Double>,
+    index: Int,
+    width: Float,
+    height: Float,
+    topPad: Float,
+    bottomPad: Float,
+    minV: Double,
+    maxV: Double,
+    xPositions: List<Float>?,
+): Offset? {
+    if (index !in values.indices || width <= 0f || height <= 0f) return null
+    val positions = validatedXPositions(xPositions, values.size)
+    val x = when {
+        positions != null -> positions[index] * width
+        values.size == 1 -> width / 2f
+        else -> width * index / (values.size - 1)
+    }
+    val span = maxV - minV
+    val usableH = (height - topPad - bottomPad).coerceAtLeast(1f)
+    val normalizedY = if (span > 0.0) ((values[index] - minV) / span).toFloat() else 0.5f
+    return Offset(x, topPad + (1f - normalizedY) * usableH)
+}
+
+internal fun normalizedCalendarXPositions(
+    dayKeys: List<String>,
+    windowStart: String,
+    windowEnd: String,
+): List<Float>? {
+    val start = runCatching { LocalDate.parse(windowStart) }.getOrNull() ?: return null
+    val end = runCatching { LocalDate.parse(windowEnd) }.getOrNull() ?: return null
+    val span = end.toEpochDay() - start.toEpochDay()
+    if (span <= 0) return null
+    var previous = Float.NEGATIVE_INFINITY
+    return dayKeys.map { key ->
+        val date = runCatching { LocalDate.parse(key) }.getOrNull() ?: return null
+        val position = ((date.toEpochDay() - start.toEpochDay()).toDouble() / span.toDouble()).toFloat()
+        if (!position.isFinite() || position !in 0f..1f || position < previous) return null
+        previous = position
+        position
+    }
+}
+
+internal fun dailyLineSegmentIds(dayKeys: List<String>, existingIds: List<String>? = null): List<String>? {
+    if (dayKeys.isEmpty()) return emptyList()
+    val dates = dayKeys.map { runCatching { LocalDate.parse(it) }.getOrNull() ?: return null }
+    val sources = existingIds?.takeIf { it.size == dates.size }
+    var run = 0
+    return dates.indices.map { index ->
+        if (index > 0 && (
+                dates[index].toEpochDay() - dates[index - 1].toEpochDay() != 1L ||
+                    (sources != null && sources[index] != sources[index - 1])
+            )) {
+            run += 1
+        }
+        "$run:${sources?.get(index) ?: "default"}"
+    }
+}
+
+internal fun validatedXPositions(xPositions: List<Float>?, count: Int): List<Float>? {
+    if (xPositions == null || xPositions.size != count) return null
+    var previous = Float.NEGATIVE_INFINITY
+    for (position in xPositions) {
+        if (!position.isFinite() || position !in 0f..1f || position < previous) return null
+        previous = position
+    }
+    return xPositions
 }
 
 /** Draw the faint zero/empty baseline used when there is nothing to plot. */
@@ -199,6 +272,64 @@ fun Sparkline(
 
 // MARK: - LineChart
 
+enum class LineChartMode { CLASSIC, SUMMARY }
+
+internal data class LineChartRenderPolicy(
+    val drawFill: Boolean,
+    val markerIndex: Int?,
+    val drawFloatingLabel: Boolean,
+)
+
+internal fun lineChartRenderPolicy(
+    mode: LineChartMode,
+    requestedFill: Boolean,
+    selectedIndex: Int?,
+    pointCount: Int,
+): LineChartRenderPolicy = when (mode) {
+    LineChartMode.CLASSIC -> LineChartRenderPolicy(
+        drawFill = requestedFill,
+        markerIndex = selectedIndex?.takeIf { it in 0 until pointCount },
+        drawFloatingLabel = selectedIndex != null,
+    )
+    LineChartMode.SUMMARY -> LineChartRenderPolicy(
+        drawFill = false,
+        markerIndex = selectedIndex?.takeIf { it in 0 until pointCount } ?: (pointCount - 1).takeIf { it >= 0 },
+        drawFloatingLabel = false,
+    )
+}
+
+internal fun lineChartYDomain(
+    values: List<Double>,
+    rangeBand: ClosedFloatingPointRange<Double>?,
+): ClosedFloatingPointRange<Double>? {
+    val finite = values.filter { it.isFinite() }.toMutableList()
+    if (rangeBand != null && rangeBand.start.isFinite() && rangeBand.endInclusive.isFinite() &&
+        rangeBand.start <= rangeBand.endInclusive
+    ) {
+        finite += rangeBand.start
+        finite += rangeBand.endInclusive
+    }
+    return if (finite.isEmpty()) null else finite.min()..finite.max()
+}
+
+internal fun normalizedBandYRange(
+    rangeBand: ClosedFloatingPointRange<Double>,
+    domain: ClosedFloatingPointRange<Double>,
+): ClosedFloatingPointRange<Float>? {
+    if (!rangeBand.start.isFinite() || !rangeBand.endInclusive.isFinite() ||
+        !domain.start.isFinite() || !domain.endInclusive.isFinite() ||
+        rangeBand.start > rangeBand.endInclusive || domain.start >= domain.endInclusive ||
+        rangeBand.endInclusive < domain.start || rangeBand.start > domain.endInclusive
+    ) return null
+    val lower = rangeBand.start.coerceIn(domain.start, domain.endInclusive)
+    val upper = rangeBand.endInclusive.coerceIn(domain.start, domain.endInclusive)
+    if (lower > upper) return null
+    val span = domain.endInclusive - domain.start
+    val top = (1.0 - (upper - domain.start) / span).toFloat()
+    val bottom = (1.0 - (lower - domain.start) / span).toFloat()
+    return top..bottom
+}
+
 /** Contiguous point-index ranges for a segmented line. A null/misaligned id list preserves the classic
  *  single-line behavior. Equal ids that reappear later become a new range because only adjacency connects. */
 internal fun lineChartSegmentRanges(count: Int, segmentIds: List<String>?): List<IntRange> {
@@ -247,6 +378,15 @@ fun LineChart(
     // Optional sequential line-segment ids, index-aligned with [values]. Adjacent unequal ids break the
     // stroke/fill without dropping either reading; used by VO₂max when its estimator changes.
     segmentIds: List<String>? = null,
+    // Optional normalized calendar positions, index-aligned with values. Invalid input falls back to the
+    // classic evenly-spaced geometry so existing callers remain unchanged.
+    xPositions: List<Float>? = null,
+    dayKeys: List<String>? = null,
+    gapPolicyDaily: Boolean = false,
+    rangeBand: ClosedFloatingPointRange<Double>? = null,
+    mode: LineChartMode = LineChartMode.CLASSIC,
+    accessibilitySummary: String? = null,
+    onSelectionChange: ((Int?) -> Unit)? = null,
 ) {
     val cleanValues = remember(values) { values.filter { it.isFinite() } }
     // Timestamps filtered by the SAME finiteness cut as cleanValues so indices stay aligned;
@@ -259,46 +399,80 @@ fun LineChart(
         if (selectionLabels == null || selectionLabels.size != values.size) null
         else values.indices.filter { values[it].isFinite() }.map { selectionLabels[it] }
     }
-    val cleanSegmentIds = remember(values, segmentIds) {
-        if (segmentIds == null || segmentIds.size != values.size) null
-        else values.indices.filter { values[it].isFinite() }.map { segmentIds[it] }
+    val cleanSegmentIds = remember(values, segmentIds, dayKeys, gapPolicyDaily) {
+        val finiteIndices = values.indices.filter { values[it].isFinite() }
+        val filteredSegments = if (segmentIds == null || segmentIds.size != values.size) null
+        else finiteIndices.map { segmentIds[it] }
+        if (gapPolicyDaily && dayKeys != null && dayKeys.size == values.size) {
+            dailyLineSegmentIds(finiteIndices.map { dayKeys[it] }, filteredSegments)
+        } else {
+            filteredSegments
+        }
     }
+    val cleanXPositions = remember(values, xPositions) {
+        if (xPositions == null || xPositions.size != values.size) null
+        else validatedXPositions(
+            values.indices.filter { values[it].isFinite() }.map { xPositions[it] },
+            cleanValues.size,
+        )
+    }
+    val yDomain = remember(cleanValues, rangeBand) { lineChartYDomain(cleanValues, rangeBand) }
     var selectedIndex by remember(cleanValues) { mutableIntStateOf(-1) }
+    val renderPolicy = lineChartRenderPolicy(
+        mode = mode,
+        requestedFill = fill,
+        selectedIndex = selectedIndex.takeIf { it >= 0 },
+        pointCount = cleanValues.size,
+    )
     val interactiveModifier = if (selectionEnabled) {
         Modifier
-            .pointerInput(cleanValues) {
+            .pointerInput(cleanValues, cleanXPositions) {
                 detectTapGestures(
                     onTap = { offset ->
                         if (cleanValues.size >= 2 && size.width > 0) {
                             selectedIndex = nearestIndexForX(
+                                xPositions = cleanXPositions,
                                 count = cleanValues.size,
                                 width = size.width.toFloat(),
                                 x = offset.x,
                             )
+                            onSelectionChange?.invoke(selectedIndex)
                         }
                     },
                 )
             }
             .then(
                 if (dragSelectionEnabled) {
-                    Modifier.pointerInput(cleanValues) {
+                    Modifier.pointerInput(cleanValues, cleanXPositions) {
                         detectHorizontalDragGestures(
                             onDragStart = { start ->
                                 if (cleanValues.size < 2 || size.width <= 0f) return@detectHorizontalDragGestures
                                 selectedIndex = nearestIndexForX(
+                                    xPositions = cleanXPositions,
                                     count = cleanValues.size,
                                     width = size.width.toFloat(),
                                     x = start.x,
                                 )
+                                onSelectionChange?.invoke(selectedIndex)
                             },
                             onHorizontalDrag = { change, _ ->
                                 if (cleanValues.size < 2 || size.width <= 0f) return@detectHorizontalDragGestures
                                 selectedIndex = nearestIndexForX(
+                                    xPositions = cleanXPositions,
                                     count = cleanValues.size,
                                     width = size.width.toFloat(),
                                     x = change.position.x,
                                 )
+                                onSelectionChange?.invoke(selectedIndex)
                                 change.consume()
+                            },
+                            onDragEnd = {
+                                selectedIndex = -1
+                                onSelectionChange?.invoke(null)
+                            },
+                            onDragCancel = {
+                                selectedIndex = -1
+                                onSelectionChange?.invoke(null)
                             },
                         )
                     }
@@ -313,7 +487,7 @@ fun LineChart(
     // ONE collapsed semantics node for the whole chart (line + fill + selection marker subtree) so the
     // accessibility delegate reads a single trend summary rather than descending into the canvas. The
     // summary uses the same finite-filtered values the line draws. Changes no drawing or interaction.
-    val axSummary = seriesSummary(cleanValues, "Trend")
+    val axSummary = accessibilitySummary ?: seriesSummary(cleanValues, "Trend")
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -350,23 +524,36 @@ fun LineChart(
                     val strokePx = 2.5f
                     val topPad = strokePx + 4f
                     val bottomPad = strokePx + 4f
-                    val pts = pointsFor(cleanValues, size.width, size.height, topPad, bottomPad)
+                    val minV = yDomain?.start ?: 0.0
+                    val maxV = yDomain?.endInclusive ?: 0.0
+                    val pts = pointsFor(
+                        cleanValues,
+                        size.width,
+                        size.height,
+                        topPad,
+                        bottomPad,
+                        minV,
+                        maxV,
+                        cleanXPositions,
+                    )
                     if (pts.isEmpty()) {
                         onDrawBehind { drawBaseline() }
                     } else {
                         val segments = lineChartSegmentRanges(pts.size, cleanSegmentIds)
-                        val fillPaths = if (fill) segments.map { range ->
+                        val fillPaths = if (renderPolicy.drawFill) segments.map { range ->
                             Path().apply {
                                 val first = pts[range.first]
                                 val last = pts[range.last]
                                 moveTo(first.x, size.height)
                                 lineTo(first.x, first.y)
-                                for (i in (range.first + 1)..range.last) lineTo(pts[i].x, pts[i].y)
+                                if (range.first < range.last) {
+                                    for (i in (range.first + 1)..range.last) lineTo(pts[i].x, pts[i].y)
+                                }
                                 lineTo(last.x, size.height)
                                 close()
                             }
                         } else emptyList()
-                        val fillBrush = if (fill) {
+                        val fillBrush = if (renderPolicy.drawFill) {
                             Brush.verticalGradient(
                                 colors = listOf(
                                     color.copy(alpha = StrandAlpha.chartFillStrong),
@@ -382,11 +569,25 @@ fun LineChart(
                         val linePaths = segments.map { range ->
                             Path().apply {
                                 moveTo(pts[range.first].x, pts[range.first].y)
-                                for (i in (range.first + 1)..range.last) lineTo(pts[i].x, pts[i].y)
+                                if (range.first < range.last) {
+                                    for (i in (range.first + 1)..range.last) lineTo(pts[i].x, pts[i].y)
+                                }
                             }
                         }
                         val lineStroke = Stroke(width = strokePx, cap = StrokeCap.Round, join = StrokeJoin.Round)
                         onDrawBehind {
+                            if (rangeBand != null && yDomain != null) {
+                                normalizedBandYRange(rangeBand, yDomain)?.let { band ->
+                                    drawRect(
+                                        color = color.copy(alpha = StrandAlpha.chartFillSoft),
+                                        topLeft = Offset(0f, topPad + band.start * (size.height - topPad - bottomPad)),
+                                        size = androidx.compose.ui.geometry.Size(
+                                            size.width,
+                                            (band.endInclusive - band.start) * (size.height - topPad - bottomPad),
+                                        ),
+                                    )
+                                }
+                            }
                             // Soft gradient fill under the curve.
                             if (fillBrush != null) {
                                 for (path in fillPaths) drawPath(path = path, brush = fillBrush)
@@ -395,7 +596,7 @@ fun LineChart(
                             for (path in linePaths) drawPath(path = path, color = color, style = lineStroke)
                             // A one-reading segment has no visible stroke. Method-segmented trends retain
                             // a small point so neither side of a method transition disappears.
-                            if (cleanSegmentIds != null) {
+                            if (cleanSegmentIds != null && mode == LineChartMode.CLASSIC) {
                                 for (point in pts) drawCircle(color = color, radius = 2.5f, center = point)
                             }
                         }
@@ -405,29 +606,43 @@ fun LineChart(
                 // the chart. Recomputes the single selected point from the same pointsFor geometry.
                 .drawWithContent {
                     drawContent()
-                    if (selectionEnabled && selectedIndex >= 0) {
+                    val markerIndex = renderPolicy.markerIndex
+                    if ((selectionEnabled || mode == LineChartMode.SUMMARY) && markerIndex != null) {
                         val strokePx = 2.5f
                         val topPad = strokePx + 4f
                         val bottomPad = strokePx + 4f
-                        val pts = pointsFor(cleanValues, size.width, size.height, topPad, bottomPad)
-                        if (selectedIndex in pts.indices) {
-                            val p = pts[selectedIndex]
-                            drawLine(
-                                color = color.copy(alpha = StrandAlpha.chartMarker),
-                                start = Offset(p.x, 0f),
-                                end = Offset(p.x, size.height),
-                                strokeWidth = 1.5f,
-                                cap = StrokeCap.Round,
-                            )
+                        val minV = yDomain?.start ?: 0.0
+                        val maxV = yDomain?.endInclusive ?: 0.0
+                        val p = markerPointFor(
+                            values = cleanValues,
+                            index = markerIndex,
+                            width = size.width,
+                            height = size.height,
+                            topPad = topPad,
+                            bottomPad = bottomPad,
+                            minV = minV,
+                            maxV = maxV,
+                            xPositions = cleanXPositions,
+                        )
+                        if (p != null) {
+                            if (selectedIndex >= 0) {
+                                drawLine(
+                                    color = color.copy(alpha = StrandAlpha.chartMarker),
+                                    start = Offset(p.x, 0f),
+                                    end = Offset(p.x, size.height),
+                                    strokeWidth = 1.5f,
+                                    cap = StrokeCap.Round,
+                                )
+                            }
                             drawCircle(color = color, radius = 5f, center = p)
                             drawCircle(color = Palette.surfaceBase.copy(alpha = StrandAlpha.chartShadow), radius = 9f, center = p)
                             drawCircle(color = color, radius = 4.5f, center = p)
-                            drawContext.canvas.nativeCanvas.apply {
+                            if (renderPolicy.drawFloatingLabel) drawContext.canvas.nativeCanvas.apply {
                                 val label = lineChartSelectionLabel(
-                                    value = cleanValues[selectedIndex],
+                                    value = cleanValues[markerIndex],
                                     formatValue = formatValue,
-                                    epochSec = cleanTimestamps?.getOrNull(selectedIndex),
-                                    pointLabel = cleanSelectionLabels?.getOrNull(selectedIndex),
+                                    epochSec = cleanTimestamps?.getOrNull(markerIndex),
+                                    pointLabel = cleanSelectionLabels?.getOrNull(markerIndex),
                                 )
                                 drawText(label, 8f, 32f, markerPaint)
                             }
@@ -490,8 +705,27 @@ fun MultiLineChart(
     }
 }
 
-private fun nearestIndexForX(count: Int, width: Float, x: Float): Int {
+internal fun nearestIndexForX(
+    xPositions: List<Float>?,
+    count: Int,
+    width: Float,
+    x: Float,
+): Int {
     if (count <= 1 || width <= 0f) return 0
+    val positions = validatedXPositions(xPositions, count)
+    if (positions != null) {
+        val normalizedX = (x / width).coerceIn(0f, 1f)
+        var best = 0
+        var bestDistance = Float.POSITIVE_INFINITY
+        positions.forEachIndexed { index, position ->
+            val distance = abs(position - normalizedX)
+            if (distance < bestDistance) {
+                best = index
+                bestDistance = distance
+            }
+        }
+        return best
+    }
     val step = width / (count - 1)
     val clampedX = x.coerceIn(0f, width)
     val raw = (clampedX / step).roundToInt()

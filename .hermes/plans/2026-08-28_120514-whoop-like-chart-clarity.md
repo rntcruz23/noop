@@ -180,7 +180,7 @@ Phase 0 resolved these decisions as D1–D10 in `docs/superpowers/specs/2026-08-
 # Phase 1: Shared chart contract and gap-safe data model
 
 **Priority:** P0  
-**Status:** Not started  
+**Status:** In progress
 **Depends on:** Phase 0 approval
 
 **Objective:** Add the smallest shared chart-geometry seams for range bands, calendar-time positioning, gaps, sparse axes, and latest/selected state without changing screen hierarchy or metric-window policy yet.

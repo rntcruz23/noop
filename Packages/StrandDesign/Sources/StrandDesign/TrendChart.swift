@@ -82,6 +82,8 @@ public struct TrendChart: View {
     public var contextRangeColor: Color
     /// Optional full selected-window domain, including dates without observations.
     public var xDomain: ClosedRange<Date>?
+    /// Calendar used consistently for daily segmentation and summary-axis boundaries.
+    private let calendar: Calendar
     /// Reports the full-resolution selected point, or nil when inspection ends.
     public var onSelectionChange: ((TrendPoint?) -> Void)?
     /// Optional card-level semantics including period, context, and coverage.
@@ -136,6 +138,7 @@ public struct TrendChart: View {
         self.contextRange = contextRange
         self.contextRangeColor = contextRangeColor
         self.xDomain = xDomain
+        self.calendar = calendar
         self.onSelectionChange = onSelectionChange
         self.accessibilityValue = accessibilityValue
         let avg = sorted.isEmpty

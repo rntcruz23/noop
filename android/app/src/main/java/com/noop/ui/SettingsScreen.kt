@@ -109,14 +109,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -143,7 +141,6 @@ import com.noop.ble.WhoopModel
 import com.noop.data.DataBackup
 import com.noop.ingest.RawSensorExport
 import com.noop.ingest.WhoopCsvExporter
-import com.noop.protocol.Whoop5SessionAudit
 import com.noop.update.UpdateCheck
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -498,7 +495,6 @@ fun SettingsScreen(
     onOpenStepsCalibration: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val live by vm.live.collectAsStateWithLifecycle()
 
@@ -539,8 +535,6 @@ fun SettingsScreen(
     // callee's error handling - a throw would strand the button disabled behind a spinner that never
     // stops, with no way back short of leaving the screen.
     var strapLogBusy by remember { mutableStateOf(false) }
-    var whoop5CaptureBusy by remember { mutableStateOf(false) }
-    var rawAndLogBusy by remember { mutableStateOf(false) }
 
     // Re-scan must request the runtime Bluetooth permission before scanning — without this the
     // button calls connect() directly and silently no-ops on Android 12+ when the permission was
@@ -583,7 +577,6 @@ fun SettingsScreen(
     // SharedPreferences isn't reactive, so the Switch drives a local mutableState that the store reads.
     val puffinExperiment = remember { PuffinExperiment.from(context) }
     var puffinExperiments by remember(rev) { mutableStateOf(puffinExperiment.isEnabled) }
-    var puffinCapture by remember(rev) { mutableStateOf(puffinExperiment.isCaptureEnabled) }
     var deepData by remember(rev) { mutableStateOf(puffinExperiment.isDeepDataEnabled) }
 
     // #174: set when the deep-data switch is turned OFF, so the app can OFFER to clear the flags on the
@@ -598,6 +591,7 @@ fun SettingsScreen(
     val r22FlagCount = Whoop5Config.enableR22Sequence.size
     var broadcastHr by remember(rev) { mutableStateOf(puffinExperiment.broadcastHr) }
     var explicitBond by remember(rev) { mutableStateOf(puffinExperiment.explicitBond) }
+    var unbondedOffload by remember(rev) { mutableStateOf(puffinExperiment.unbondedOffload) }
     var helloDespiteRefusal by remember(rev) { mutableStateOf(puffinExperiment.helloDespiteBondRefusal) }
     // ECG raw-data gate (#891): the opt-in, the write result, and the attested-MG gate the buttons need.
     var ecgRawData by remember(rev) { mutableStateOf(puffinExperiment.ecgRawData) }
@@ -2255,11 +2249,13 @@ fun SettingsScreen(
             )
         }
         // --- Experimental · WHOOP 5 / MG --- (hidden when the user is confidently on a 4.0, #22)
-        if (showFiveMGControls) {
+        // Developer-only 5/MG controls now live in Test Centre. Keep the implementation below during
+        // the compatibility transition, but never render a second copy in everyday Settings.
+        if (false && showFiveMGControls) {
         SettingsCard(
             icon = Icons.Filled.Science,
             title = uiString(R.string.l10n_settings_screen_experimental_whoop_5_mg_41ef7041),
-            blurb = "Live heart rate already works on a WHOOP 5/MG strap. These probes go further and try to coax more out of it. They are guesses, off by default, and only ever touch a 5/MG strap. WHOOP 4.0 is never affected.",
+            blurb = "Normal WHOOP 5/MG recording and history sync are supported. These remaining controls are developer experiments for unmapped protocol features; they are not required for everyday use.",
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 // Evidence-based status (#103): once THIS strap has demonstrated a capability, say so
@@ -2376,6 +2372,41 @@ fun SettingsScreen(
                         ),
                         modifier = Modifier.semantics {
                             contentDescription = uiString(R.string.l10n_settings_screen_ask_android_to_pair_323fccbe)
+                        },
+                    )
+                }
+
+                // --- Try the historical offload on a link that never bonded. (#1635) ---
+                // The offload is gated on the CLIENT_HELLO ack, which a strap answering SMP "Pairing Not
+                // Supported" can never give — so the gate is ours, not the strap's, and the assumption it
+                // rests on has never been measured. This asks, read-only first.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        uiString(R.string.l10n_settings_screen_try_history_sync_without_pairing_experimental_54c31ea2),
+                        style = NoopType.subhead,
+                        color = Palette.textPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = unbondedOffload,
+                        onCheckedChange = {
+                            unbondedOffload = it
+                            puffinExperiment.unbondedOffload = it
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Palette.surfaceBase,
+                            checkedTrackColor = Palette.accent,
+                            uncheckedThumbColor = Palette.textSecondary,
+                            uncheckedTrackColor = Palette.surfaceInset,
+                            uncheckedBorderColor = Palette.hairline,
+                        ),
+                        modifier = Modifier.semantics {
+                            contentDescription =
+                                uiString(R.string.l10n_settings_screen_try_history_sync_without_pairing_33ae8594)
                         },
                     )
                 }
@@ -2621,144 +2652,11 @@ fun SettingsScreen(
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    Text(
-                        uiString(R.string.l10n_settings_screen_record_5_mg_raw_capture_research_1d966bbf),
-                        style = NoopType.subhead,
-                        color = Palette.textPrimary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = puffinCapture,
-                        onCheckedChange = {
-                            puffinCapture = it
-                            puffinExperiment.isCaptureEnabled = it
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Palette.surfaceBase,
-                            checkedTrackColor = Palette.accent,
-                            uncheckedThumbColor = Palette.textSecondary,
-                            uncheckedTrackColor = Palette.surfaceInset,
-                            uncheckedBorderColor = Palette.hairline,
-                        ),
-                        modifier = Modifier.semantics {
-                            contentDescription = uiString(R.string.l10n_settings_screen_record_5_mg_raw_capture_9354fe89)
-                        },
-                    )
-                }
                 Text(
-                    uiString(R.string.l10n_settings_screen_records_the_raw_frames_of_each_98a284df),
+                    uiString(R.string.raw_diag_moved),
                     style = NoopType.caption,
                     color = Palette.textTertiary,
                 )
-                NoopButton(
-                    text = uiString(R.string.l10n_settings_screen_share_5_mg_capture_for_the_e41ac6bd),
-                    leadingIcon = Icons.Filled.Upload,
-                    kind = NoopButtonKind.Secondary,
-                    fullWidth = true,
-                    enabled = !whoop5CaptureBusy,
-                    onClick = {
-                        whoop5CaptureBusy = true
-                        scope.launch {
-                            // try/finally: the flag must clear on any exit, not just the happy path (#961 follow-up).
-                            try {
-                                LogExport.shareWhoop5Capture(context, live.whoop5Detected, live.encryptedBond)
-                            } finally {
-                                whoop5CaptureBusy = false
-                            }
-                        }
-                    },
-                )
-                if (whoop5CaptureBusy) {
-                    NoopBusyRow()
-                }
-
-                // One-tap "matched pair" export (#510): hands a reporter BOTH the raw capture file and
-                // the strap log together (timestamped, same minute) so a protocol-mapping issue arrives
-                // with the frames AND the context that produced them.
-                NoopButton(
-                    text = uiString(R.string.l10n_settings_screen_export_raw_log_matched_pair_d65390bf),
-                    leadingIcon = Icons.Filled.IosShare,
-                    kind = NoopButtonKind.Secondary,
-                    fullWidth = true,
-                    enabled = !rawAndLogBusy,
-                    onClick = {
-                        rawAndLogBusy = true
-                        scope.launch {
-                            // try/finally: the flag must clear on any exit, not just the happy path (#961 follow-up).
-                            try {
-                                LogExport.shareRawAndLog(context, vm.ble.exportLogText(), live.whoop5Detected, live.encryptedBond)
-                            } finally {
-                                rawAndLogBusy = false
-                            }
-                        }
-                    },
-                )
-                if (rawAndLogBusy) {
-                    NoopBusyRow()
-                }
-
-                // --- Protocol health check (#174/#103) — read-only; one 5/MG session → verdicts. ---
-                Text(
-                    "Protocol health check",
-                    style = NoopType.subhead,
-                    color = Palette.textPrimary,
-                )
-                Text(
-                    "Checks what your strap actually does with NOOP: handshake, bond, live heart rate, clock, frame CRCs, command channel, R22 flag acks, history offload, and record decode. It never changes strap state; starting it sends a single GET_CLOCK read so the clock row can grade. Connect your 5/MG, let it sync (and optionally send the R22 sequence above), then copy the report and attach it with your strap log to the deep-data issue.",
-                    style = NoopType.caption,
-                    color = Palette.textTertiary,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    NoopButton(
-                        text = if (live.whoop5AuditActive) "Stop check" else "Start check",
-                        leadingIcon = if (live.whoop5AuditActive) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                        kind = if (live.whoop5AuditActive) NoopButtonKind.Secondary else NoopButtonKind.Primary,
-                        onClick = {
-                            if (live.whoop5AuditActive) vm.ble.stopWhoop5Audit() else vm.ble.startWhoop5Audit()
-                        },
-                    )
-                    if (live.whoop5AuditSnapshot != null) {
-                        NoopButton(
-                            text = "Copy report",
-                            leadingIcon = Icons.Filled.ContentCopy,
-                            kind = NoopButtonKind.Secondary,
-                            onClick = { clipboard.setText(AnnotatedString(vm.ble.whoop5AuditReport())) },
-                        )
-                    }
-                }
-                live.whoop5AuditSnapshot?.let { snap ->
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        for (check in snap.checks) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    auditGlyph(check.verdict),
-                                    style = NoopType.caption,
-                                    color = auditColor(check.verdict),
-                                )
-                                Column {
-                                    Text(
-                                        auditTitle(check.id),
-                                        style = NoopType.caption,
-                                        color = Palette.textPrimary,
-                                    )
-                                    Text(
-                                        check.detail,
-                                        style = NoopType.caption,
-                                        color = Palette.textTertiary,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
         } // end if (showFiveMGControls)
@@ -4079,36 +3977,4 @@ private fun fiveMGVerifiedLine(vm: AppViewModel): String? {
     if (f.r22AcceptedAt != null) parts.add("deep-data flags")
     if (f.liveHRAt != null) parts.add("live heart rate")
     return "Verified on your strap: " + parts.joinToString(" · ")
-}
-
-// MARK: - 5/MG protocol health check rendering (#174/#103)
-
-/** Status glyph for a protocol-check verdict (text, not an icon, so the row stays one line of caption
- *  type at any font scale). Colors via [auditColor]. */
-private fun auditGlyph(v: Whoop5SessionAudit.Verdict): String = when (v) {
-    Whoop5SessionAudit.Verdict.PASS -> "✓"
-    Whoop5SessionAudit.Verdict.PARTIAL -> "!"
-    Whoop5SessionAudit.Verdict.FAIL -> "✗"
-    Whoop5SessionAudit.Verdict.SKIP -> "·"
-}
-
-private fun auditColor(v: Whoop5SessionAudit.Verdict): Color = when (v) {
-    Whoop5SessionAudit.Verdict.PASS -> Palette.statusPositive
-    Whoop5SessionAudit.Verdict.PARTIAL -> Palette.statusWarning
-    Whoop5SessionAudit.Verdict.FAIL -> Palette.statusCritical
-    Whoop5SessionAudit.Verdict.SKIP -> Palette.textTertiary
-}
-
-/** Display names for the report's stable snake_case check ids (twin of the iOS auditTitle). */
-private fun auditTitle(id: String): String = when (id) {
-    "handshake" -> "Handshake (CLIENT_HELLO)"
-    "bond" -> "Encrypted bond"
-    "live_hr" -> "Live heart rate (0x2A37)"
-    "clock" -> "Strap clock (GET_CLOCK)"
-    "framing" -> "Frame CRCs (CRC16 + CRC32)"
-    "commands" -> "Command channel"
-    "r22_unlock" -> "R22 enable sequence"
-    "offload" -> "History offload"
-    "decode" -> "Record decode (type-47)"
-    else -> id
 }

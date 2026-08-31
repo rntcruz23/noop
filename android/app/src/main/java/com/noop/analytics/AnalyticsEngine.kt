@@ -225,19 +225,6 @@ object AnalyticsEngine {
     }
 
     /**
-     * Analyze one day's streams into a [DayResult].
-     *
-     * @param day the calendar day (UTC) this metric is for; a sleep session is
-     *   attributed to the day its `end` falls on (a night ending that morning).
-     * @param hr/rr/resp/gravity the day's raw streams (the wider window around the
-     *   night may be passed; sleep detection finds the in-bed span itself).
-     * @param profile user profile (age/sex/weight/height) for HRmax + calories.
-     * @param baselines personal baselines for recovery normalization.
-     * @param maxHROverride explicit HRmax (bpm) to use for strain/zones; null →
-     *   Tanaka from profile.age.
-     */
-    @Suppress("UNUSED_PARAMETER") // sleepNeedNights kept for signature stability (unused in the current body)
-    /**
      * Minimum span (seconds) a night's vendor respiration rows must cover before their median is taken
      * as the night's rate. One hour: enough that the value describes the night rather than a fragment,
      * and low enough to keep a partially-drained night. Twin of the Swift constant.
@@ -272,6 +259,18 @@ object AnalyticsEngine {
         return if (median in SleepStager.respPlausibleRangeBpm) median else null
     }
 
+    /**
+     * Analyze one day's streams into a [DayResult].
+     *
+     * @param day the calendar day (UTC) this metric is for; a sleep session is
+     *   attributed to the day its `end` falls on (a night ending that morning).
+     * @param hr/rr/resp/gravity the day's raw streams (the wider window around the
+     *   night may be passed; sleep detection finds the in-bed span itself).
+     * @param profile user profile (age/sex/weight/height) for HRmax + calories.
+     * @param baselines personal baselines for recovery normalization.
+     * @param maxHROverride explicit HRmax (bpm) to use for strain/zones; null →
+     *   Tanaka from profile.age.
+     */
     fun analyzeDay(
         day: String,
         hr: List<HrSample> = emptyList(),
@@ -341,9 +340,6 @@ object AnalyticsEngine {
         // Personal sleep need (hours) for the Rest "duration vs need" component. null → 8 h default.
         // IntelligenceEngine refines it from the user's recent average asleep hours. (Charge/Effort/Rest)
         sleepNeedHours: Double? = null,
-        // How many recent nights informed [sleepNeedHours] (0 = still on the 8 h default). Drives the
-        // Rest confidence tier ONLY; does not affect the score. (Charge/Effort/Rest)
-        sleepNeedNights: Int = 0,
         // Sleep/wake regularity in [0,1] (1 = perfectly regular) for the Rest "consistency" component.
         // null (single-day / pure callers with no history) → the term drops and its weight
         // renormalizes, exactly like the recovery driver-drop discipline. (Charge/Effort/Rest)
@@ -495,11 +491,30 @@ object AnalyticsEngine {
         var inBedS = 0.0
         var effWeighted = 0.0
         var disturbances = 0
+        // Hypnogram COVERAGE across the group: how much of the fragments' own spans the stage segments
+        // actually account for. Accumulated separately from `inBedS` because that one later absorbs the
+        // inter-fragment gap (#777/#705), which is a different quantity — a bridged out-of-bed gap is
+        // known-awake time between two fragments, whereas a hole INSIDE a fragment is time we never
+        // observed at all. Summed straight off `s.stages` (no JSON re-parse: the segments are already
+        // decoded here), then handed to HypnogramCoverage so the ratio/clamp/null rules have ONE
+        // definition shared with the merge-side guard. Mirrors Swift.
+        // NOTE on scope at THIS call site: coverage here is summed off the DECODED segments, not off
+        // `stagesJSON`, so the timestamp-free shapes are not screened out by the payload-shape rule the
+        // merge side uses. A minute-dict session decodes to zero segments and contributes span with no
+        // cover, and what keeps it from reading as a holed night is `fraction`'s `coveredSeconds > 0`
+        // returning nil for a group with no timestamped stages at all. Same outcome, different
+        // mechanism — and it holds only while a group is single-sourced, which the day merge ensures by
+        // choosing one side. A group mixing a timestamped fragment with a minute-dict one would read as
+        // holed; `HypnogramCoverageTest.mixedSourceGroupReadsAsHoled` pins both halves.
+        var coveredS = 0.0
+        var spanS = 0.0
         for (s in mainGroup) {
             val m = SleepStager.hypnogramMetrics(s)
             val inBed = (s.end - s.start).toDouble()
             inBedS += inBed                       // each fragment's own in-bed span (the gap is added below)
             effWeighted += s.efficiency * inBed   // in-bed-weighted efficiency across the group
+            spanS += inBed
+            for (seg in s.stages) if (seg.end > seg.start) coveredS += (seg.end - seg.start).toDouble()
             deepS += m.deepMin * 60.0
             remS += m.remMin * 60.0
             lightS += m.lightMin * 60.0
@@ -856,8 +871,11 @@ object AnalyticsEngine {
         // Rest confidence with H9 + the #345 sparse-motion guard: downgrade to low-confidence a night whose
         // deep+REM share is implausibly low on a high-efficiency night (H9 staging miss) OR that was staged
         // on sparse gravity (WHOOP 4.0 coarse-banked motion can't reliably stage sleep — a confident 85–100
-        // Rest is unearned however the engine filled it). Confidence-only, no faked stages. tstS/efficiency
-        // are the main-group totals above; restorative = deepS + remS. Mirrors Swift.
+        // Rest is unearned however the engine filled it). `stageCoverage` adds the third guard: a night
+        // whose stage timeline covers only part of its own span (an incompletely-received device
+        // hypnogram) cannot earn a SOLID Rest either, and neither of the other two can see it.
+        // Confidence-only, no faked stages. tstS/efficiency are the main-group totals above;
+        // restorative = deepS + remS. Mirrors Swift.
         val restConfidence = ScoreConfidence.forRest(
             hasSession = matched.isNotEmpty(),
             hasStagedSleep = (deepS + remS) > 0,
@@ -865,6 +883,7 @@ object AnalyticsEngine {
             restorativeSeconds = deepS + remS,
             efficiency = efficiency,
             gravitySparse = gravitySparse,
+            stageCoverage = HypnogramCoverage.fraction(coveredS, spanS),
         )
 
         // ── Per-session per-epoch motion (H8) ─────────────────────────────────
@@ -1460,13 +1479,6 @@ object RestScorer {
     }
 
     /**
-     * Sleep & Rest test-mode (E11) diagnostic line for the Rest composite. Recomputes the four weighted
-     * sub-scores from the SAME inputs `rest()` reads (on the 0..1 scale, byte-aligned with the Swift
-     * `Rest.subScoreLine`), and reuses `rest()` for the final `composite=` value so the trace can never
-     * disagree with the score. `groupFragments` / `groupInBedSeconds` describe the main-night GROUP
-     * composition (#525/#561). Pure, side-effect-free, no em-dashes. Mirrors Swift exactly.
-     */
-    /**
      * #319 diagnostic (Sleep & Rest test mode): the motion-coverage + staging context behind the Rest
      * number, so a high score on a poor night can be explained straight from an export. `grav`/`hr` are the
      * night-window sample counts; `sparse` is the gravity-sparse gate (WHOOP 4.0 banks motion coarsely, so
@@ -1510,6 +1522,13 @@ object RestScorer {
         return "sleep-onset onsetTs=$onsetTs hrAtOnset=$hrAtOnsetBpm baselineHr=$baselineHrBpm hrRatio=$r2"
     }
 
+    /**
+     * Sleep & Rest test-mode (E11) diagnostic line for the Rest composite. Recomputes the four weighted
+     * sub-scores from the SAME inputs `rest()` reads (on the 0..1 scale, byte-aligned with the Swift
+     * `Rest.subScoreLine`), and reuses `rest()` for the final `composite=` value so the trace can never
+     * disagree with the score. `groupFragments` / `groupInBedSeconds` describe the main-night GROUP
+     * composition (#525/#561). Pure, side-effect-free, no em-dashes. Mirrors Swift exactly.
+     */
     @Suppress("UNUSED_PARAMETER") // inBedSeconds mirrors the Swift subScoreLine signature (parity)
     fun subScoreLine(
         tstSeconds: Double, inBedSeconds: Double, efficiency: Double, restorativeSeconds: Double,

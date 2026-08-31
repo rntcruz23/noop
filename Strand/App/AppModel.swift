@@ -560,6 +560,12 @@ final class AppModel: ObservableObject {
             })
         coordinator.start()
         self.deviceRegistry = registry
+        // #1303: adoption re-points the strap onto its stable `whoop-<serial>` id inside BLEManager (which
+        // holds only the non-observable store), so mirror it onto the OBSERVABLE registry here or the
+        // Devices screen and the source coordinator keep watching an id that no longer exists.
+        self.ble.onSerialIdentityAdopted = { [weak registry] serialId in
+            registry?.setActive(serialId)
+        }
         self.sourceCoordinator = coordinator
         // #814 READ SPINE (HIGH-1): drive the read side off the registry's `activeDeviceId` for the WHOLE
         // session, exactly as SourceCoordinator drives the WRITE side off the SAME publisher. A Devices-
@@ -635,7 +641,7 @@ final class AppModel: ObservableObject {
         // analyzeRecent tick , otherwise a just-synced night's Charge / Effort / Rest can take up to
         // 15 minutes to appear on a strap-only (no-import) dashboard. analyzeRecent no-ops if a tick is
         // already running and refreshes the dashboard itself once the new scores persist. (PR #218)
-        // #1196/#1146: `skipIfUnchanged` gates THIS post-offload pass on the HR fingerprint — an empty/
+        // #1196/#1146: `skipIfUnchanged` gates THIS post-offload pass on the complete raw-input fingerprint — an empty/
         // duplicate offload (nothing new banked, common on a flapping link) skips the whole-window rescore
         // instead of churning it, which was surfacing as a Trends/streak "0 days" flicker. Only this
         // post-offload caller opts in; every other analyzeRecent path still forces unconditionally.

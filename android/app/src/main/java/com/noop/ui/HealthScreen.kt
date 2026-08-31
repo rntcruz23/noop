@@ -278,7 +278,9 @@ private fun SyncStatusSection(vm: AppViewModel, onSyncNow: () -> Unit) {
     // leaf re-runs per tick. Appearance + behaviour identical.
     val live by vm.live.collectAsStateWithLifecycle()
     // The strap link is usable for a manual offload kick (matches WhoopBleClient.syncNow's own gate).
-    val canSync = live.connected && live.bonded && !live.backfilling
+    // historyReady, not `bonded`: on a 5/MG the live-HR path sets `bonded` for a strap that has never
+    // completed a handshake, so this button enabled itself and beginBackfill then declined it silently.
+    val canSync = live.connected && live.bonded && live.historyReady && !live.backfilling
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
         SectionHeader(
             "Sync",
@@ -309,10 +311,14 @@ private fun SyncStatusSection(vm: AppViewModel, onSyncNow: () -> Unit) {
                         )
                     }
                     else -> StatePill(
-                        title = if (live.bonded) "Ready to sync" else "Pairing…",
+                        // Same condition as the button below it. Keyed on `bonded` this said "Ready to
+                        // sync", not pulsing, directly above a DISABLED Sync now — on exactly the strap
+                        // that cannot sync. Before the button was gated the two agreed (both wrong);
+                        // gating one without the other is what made them contradict.
+                        title = if (live.historyReady) "Ready to sync" else "Pairing…",
                         tone = StrandTone.Accent,
                         showsDot = true,
-                        pulsing = !live.bonded,
+                        pulsing = !live.historyReady,
                     )
                 }
 
@@ -357,7 +363,12 @@ private fun syncHelperText(live: LiveState): String = when {
         "now continues automatically across passes instead of waiting between syncs."
     !live.connected -> "Connect your strap to sync its stored history. Until then, only imported data " +
         "shows here."
-    !live.bonded -> "Finishing the pairing handshake. Sync now becomes available once the strap is paired."
+    // historyReady, not `bonded`. This branch already said the right thing and simply never fired on the
+    // strap that needed it: `bonded` is set by the live-HR path, so a 5/MG that never completed a
+    // handshake fell through to the "syncs right away" line, directly under a Sync-now button that had
+    // just been disabled. Same condition as the button and the card title, so all three agree.
+    !live.historyReady ->
+        "Finishing the pairing handshake. Sync now becomes available once the strap is paired."
     else -> "Syncs your strap's stored history right away, instead of waiting for the next automatic sync."
 }
 
@@ -2079,6 +2090,19 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                     formatValue = { "${detail.format(it)} ${detail.unit}".trim() },
                     segmentIds = if (key == "vo2max_est") vo2MaxTrendSegmentIds(filteredReadings) else null,
                 )
+                // #1662: the VO2max line is SPLIT on purpose wherever the estimator changes, so two
+                // non-adjacent Nes runs are never joined across an incompatible Uth stretch. Nothing said
+                // so, and a silent gap in a trend is indistinguishable from a rendering fault - it was
+                // reported as "something weird with a broken line". Shown only when a break actually
+                // exists, so it explains the chart in front of the reader rather than describing a
+                // behaviour they cannot see.
+                if (key == "vo2max_est" && vo2MaxTrendHasBreak(filteredReadings)) {
+                    Text(
+                        text = uiString(R.string.vo2max_method_change_caption),
+                        style = NoopType.footnote,
+                        color = Palette.textTertiary,
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2351,7 +2375,13 @@ private suspend fun buildSeriesVitalDetail(vm: AppViewModel, key: String): Vital
                 )
                 VitalReading(point.day, point.value, vo2MaxAttributionSource(estimator))
             },
-            format = { it.roundToInt().toString() },
+            // #1662: ONE decimal, matching the iOS catalog's `decimals: 1` for this key. Android rounded
+            // to an integer, so a chart plotted at full precision sat under labels that could not move
+            // with it: VO2max shifts well under 1 ml/kg between weekly points, so the line visibly sloped
+            // while every read-out, the Min/Avg/Max row and the readings table all printed the same
+            // number. #1664 made those text surfaces agree with each other; it could not make them agree
+            // with the LINE, because the precision was too coarse to express what the line draws.
+            format = { String.format(Locale.US, "%.1f", it) },
         )
     }
     "steps_est" -> {

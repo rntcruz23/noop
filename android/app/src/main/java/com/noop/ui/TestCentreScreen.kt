@@ -16,13 +16,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -38,7 +45,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.BuildConfig
@@ -54,6 +64,7 @@ import com.noop.data.DailyMetric
 import com.noop.data.GravitySample
 import com.noop.data.HrSample
 import com.noop.polar.PolarModel
+import com.noop.protocol.Whoop5SessionAudit
 import com.noop.testcentre.CaptureAccumulator
 import com.noop.testcentre.CaptureKind
 import com.noop.testcentre.DisplayPerformanceMonitor
@@ -80,8 +91,9 @@ import kotlin.math.roundToInt
  * scheduled-export / experimental controls on the same bindings the Settings cards use. No em-dash.
  */
 @Composable
-fun TestCentreScreen(vm: AppViewModel) {
+fun TestCentreScreen(vm: AppViewModel, onOpenGroundTruthCollector: () -> Unit = {}) {
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     val testCentre = remember { TestCentre.from(context) }
     // CAPTURE-D: a UI scope to emit the data-volume line off the toggle-on path (a store read, so it can't
     // run inline in the non-suspend onToggle).
@@ -97,6 +109,19 @@ fun TestCentreScreen(vm: AppViewModel) {
     // Match the Settings `showFiveMGControls` gate exactly: pref OR a live-detected 5/MG this session, so a
     // 5/MG connected before its pref is written still sees the experimental block. (SettingsScreen.kt:346.)
     val is5MG = selectedModelName == WhoopModel.WHOOP5_MG.name || live.whoop5Detected
+    val puffinExperiment = remember { PuffinExperiment.from(context) }
+    var protocolProbes by remember { mutableStateOf(puffinExperiment.isEnabled) }
+    var passiveRawCapture by remember { mutableStateOf(puffinExperiment.isCaptureEnabled) }
+    var deepData by remember { mutableStateOf(puffinExperiment.isDeepDataEnabled) }
+    var broadcastHr by remember { mutableStateOf(puffinExperiment.broadcastHr) }
+    var explicitBond by remember { mutableStateOf(puffinExperiment.explicitBond) }
+    var unbondedOffload by remember { mutableStateOf(puffinExperiment.unbondedOffload) }
+    var ecgRawData by remember { mutableStateOf(puffinExperiment.ecgRawData) }
+    val r22DisableReport by vm.ble.r22DisableReport.collectAsStateWithLifecycle()
+    val ecgGateReport by vm.ble.ecgRawDataGate.collectAsStateWithLifecycle()
+    val ecgVariant by vm.ble.whoop5VariantFlow.collectAsStateWithLifecycle()
+    var rawCaptureBusy by remember { mutableStateOf(false) }
+    var rawAndLogBusy by remember { mutableStateOf(false) }
 
     // A report awaiting the mandatory review-before-share gate (spec section 12). Non-null shows the
     // review dialog; confirming runs TestReportFlow.run.
@@ -182,6 +207,226 @@ fun TestCentreScreen(vm: AppViewModel) {
         // --- Section 2: Diagnostic tools ---
         DiagnosticToolsCard(vm)
 
+        SettingsSectionTC(
+            icon = Icons.AutoMirrored.Filled.DirectionsWalk,
+            title = stringResource(R.string.ground_truth_title),
+            blurb = stringResource(R.string.ground_truth_test_centre_desc),
+        ) {
+            NoopButton(
+                text = stringResource(R.string.ground_truth_open),
+                kind = NoopButtonKind.Secondary,
+                fullWidth = true,
+                onClick = onOpenGroundTruthCollector,
+            )
+        }
+
+        if (is5MG) {
+            SettingsSectionTC(
+                icon = Icons.Filled.Science,
+                title = stringResource(R.string.raw_diag_title),
+                blurb = "Developer tools for protocol research. These are separate from the bounded Raw Data Collector above.",
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    remember { fiveMGVerifiedLine(vm) }?.let { verified ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                            Icon(
+                                imageVector = Icons.Filled.Verified,
+                                contentDescription = null,
+                                tint = Palette.statusPositive,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(verified, style = NoopType.caption, color = Palette.statusPositive)
+                        }
+                        HorizontalDivider(color = Palette.hairline)
+                    }
+                    DeveloperToggleRow(
+                        title = stringResource(R.string.raw_diag_protocol_probes),
+                        detail = "Sends experimental protocol queries. It is not needed for normal WHOOP 5/MG sync, sleep, recovery, or steps.",
+                        checked = protocolProbes,
+                        onCheckedChange = {
+                            protocolProbes = it
+                            puffinExperiment.isEnabled = it
+                        },
+                    )
+                    DeveloperToggleRow(
+                        title = stringResource(R.string.raw_diag_broadcast_hr),
+                        detail = "Writes the reversible WHOOP 5/MG advertising flag for Garmin, Zwift, and gym equipment.",
+                        checked = broadcastHr,
+                        onCheckedChange = {
+                            broadcastHr = it
+                            puffinExperiment.broadcastHr = it
+                            vm.ble.setBroadcastHr(it)
+                        },
+                    )
+                    DeveloperToggleRow(
+                        title = stringResource(R.string.raw_diag_pair),
+                        detail = "Experimental explicit Android bonding. Normal 5/MG support does not " +
+                            "require this switch. A strap that refuses pairing defers its handshake for one " +
+                            "connect while this is on, so leave it off unless you are testing #1635.",
+                        checked = explicitBond,
+                        onCheckedChange = {
+                            explicitBond = it
+                            puffinExperiment.explicitBond = it
+                        },
+                    )
+                    DeveloperToggleRow(
+                        title = stringResource(R.string.raw_diag_unbonded_offload),
+                        detail = "Subscribes the puffin notify characteristics on a link with no " +
+                            "CLIENT_HELLO, then asks the strap a read-only GET_CLOCK. If it answers, the " +
+                            "clock is set and history is requested. Once per link, and never again on a " +
+                            "strap that refuses. Takes effect on the next connect, not this one. " +
+                            "Leave it off unless you are testing #1635.",
+                        checked = unbondedOffload,
+                        onCheckedChange = {
+                            unbondedOffload = it
+                            puffinExperiment.unbondedOffload = it
+                        },
+                    )
+                    DeveloperToggleRow(
+                        title = stringResource(R.string.raw_diag_r22),
+                        detail = "Accepted writes have not been shown to enable a separate live stream. Not required for normal sync or raw capture.",
+                        checked = deepData,
+                        onCheckedChange = {
+                            deepData = it
+                            puffinExperiment.isDeepDataEnabled = it
+                        },
+                    )
+                    if (deepData) {
+                        NoopButton(
+                            text = stringResource(R.string.raw_diag_r22_enable),
+                            kind = NoopButtonKind.Secondary,
+                            fullWidth = true,
+                            enabled = live.encryptedBond && live.worn,
+                            onClick = { vm.ble.enableWhoop5DeepData() },
+                        )
+                    }
+                    NoopButton(
+                        text = stringResource(R.string.raw_diag_r22_clear),
+                        kind = NoopButtonKind.Secondary,
+                        fullWidth = true,
+                        enabled = live.encryptedBond && r22DisableReport != WhoopBleClient.WAITING_DEVICE_CONFIG_PROBE,
+                        onClick = { vm.ble.disableWhoop5DeepData() },
+                    )
+                    r22DisableReport?.let {
+                        Text(it, style = NoopType.caption, color = Palette.textSecondary)
+                    }
+                    DeveloperToggleRow(
+                        title = stringResource(R.string.raw_diag_ecg),
+                        detail = "MG-only protocol research. This is instrumentation, not a medical ECG feature.",
+                        checked = ecgRawData,
+                        onCheckedChange = {
+                            ecgRawData = it
+                            puffinExperiment.ecgRawData = it
+                        },
+                    )
+                    if (ecgRawData) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            NoopButton(
+                                text = stringResource(R.string.raw_diag_ecg_on),
+                                kind = NoopButtonKind.Secondary,
+                                enabled = live.bonded && ecgVariant.isMG,
+                                onClick = { vm.ble.setEcgRawDataGate(true) },
+                            )
+                            NoopButton(
+                                text = stringResource(R.string.raw_diag_ecg_off),
+                                kind = NoopButtonKind.Secondary,
+                                enabled = live.bonded && ecgVariant.isMG,
+                                onClick = { vm.ble.setEcgRawDataGate(false) },
+                            )
+                        }
+                        ecgGateReport?.let {
+                            Text(it.summary, style = NoopType.caption, color = Palette.textSecondary)
+                        }
+                    }
+                    DeveloperToggleRow(
+                        title = stringResource(R.string.raw_diag_passive),
+                        detail = "Records frames that already arrive during history sync. It does not start IMU or any other sensor and may create large files.",
+                        checked = passiveRawCapture,
+                        onCheckedChange = {
+                            passiveRawCapture = it
+                            puffinExperiment.isCaptureEnabled = it
+                        },
+                    )
+                    NoopButton(
+                        text = stringResource(R.string.raw_diag_share),
+                        leadingIcon = Icons.Filled.Upload,
+                        kind = NoopButtonKind.Secondary,
+                        fullWidth = true,
+                        enabled = !rawCaptureBusy,
+                        onClick = {
+                            rawCaptureBusy = true
+                            scope.launch {
+                                try {
+                                    LogExport.shareWhoop5Capture(context, live.whoop5Detected, live.encryptedBond)
+                                } finally {
+                                    rawCaptureBusy = false
+                                }
+                            }
+                        },
+                    )
+                    NoopButton(
+                        text = stringResource(R.string.raw_diag_export_log),
+                        leadingIcon = Icons.Filled.Upload,
+                        kind = NoopButtonKind.Secondary,
+                        fullWidth = true,
+                        enabled = !rawAndLogBusy,
+                        onClick = {
+                            rawAndLogBusy = true
+                            scope.launch {
+                                try {
+                                    LogExport.shareRawAndLog(
+                                        context, vm.ble.exportLogText(), live.whoop5Detected, live.encryptedBond,
+                                    )
+                                } finally {
+                                    rawAndLogBusy = false
+                                }
+                            }
+                        },
+                    )
+                    Text("Protocol health check", style = NoopType.subhead, color = Palette.textPrimary)
+                    Text(
+                        "Checks what your strap actually does with NOOP: handshake, bond, live heart rate, clock, frame CRCs, command channel, R22 flag acks, history offload, and record decode. It never changes strap state; starting it sends a single GET_CLOCK read so the clock row can grade. Connect your 5/MG, let it sync (and optionally send the R22 sequence above), then copy the report and attach it with your strap log to the deep-data issue.",
+                        style = NoopType.caption,
+                        color = Palette.textTertiary,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        NoopButton(
+                            text = if (live.whoop5AuditActive) "Stop check" else "Start check",
+                            leadingIcon = if (live.whoop5AuditActive) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                            kind = if (live.whoop5AuditActive) NoopButtonKind.Secondary else NoopButtonKind.Primary,
+                            onClick = {
+                                if (live.whoop5AuditActive) vm.ble.stopWhoop5Audit() else vm.ble.startWhoop5Audit()
+                            },
+                        )
+                        if (live.whoop5AuditSnapshot != null) {
+                            NoopButton(
+                                text = "Copy report",
+                                leadingIcon = Icons.Filled.ContentCopy,
+                                kind = NoopButtonKind.Secondary,
+                                onClick = { clipboard.setText(AnnotatedString(vm.ble.whoop5AuditReport())) },
+                            )
+                        }
+                    }
+                    live.whoop5AuditSnapshot?.let { snapshot ->
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for (check in snapshot.checks) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(auditGlyph(check.verdict), style = NoopType.caption, color = auditColor(check.verdict))
+                                    Column {
+                                        Text(auditTitle(check.id), style = NoopType.caption, color = Palette.textPrimary)
+                                        Text(check.detail, style = NoopType.caption, color = Palette.textTertiary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Section 3: Export and auto-export ---
         ExportCard(
             vm = vm,
@@ -227,6 +472,64 @@ fun TestCentreScreen(vm: AppViewModel) {
                 }
             },
         )
+    }
+}
+
+private fun fiveMGVerifiedLine(vm: AppViewModel): String? {
+    val facts = vm.whoop5EvidenceFacts(vm.activeStrapId)
+    if (!facts.anyVerified) return null
+    val parts = mutableListOf<String>()
+    if (facts.historyAt != null) parts.add("history sync (${facts.historyRows} records)")
+    if (facts.decodeCleanAt != null) parts.add("record decode")
+    if (facts.r22AcceptedAt != null) parts.add("deep-data flags")
+    if (facts.liveHRAt != null) parts.add("live heart rate")
+    return "Verified on your strap: " + parts.joinToString(" · ")
+}
+
+private fun auditGlyph(verdict: Whoop5SessionAudit.Verdict): String = when (verdict) {
+    Whoop5SessionAudit.Verdict.PASS -> "✓"
+    Whoop5SessionAudit.Verdict.PARTIAL -> "!"
+    Whoop5SessionAudit.Verdict.FAIL -> "✗"
+    Whoop5SessionAudit.Verdict.SKIP -> "·"
+}
+
+private fun auditColor(verdict: Whoop5SessionAudit.Verdict): Color = when (verdict) {
+    Whoop5SessionAudit.Verdict.PASS -> Palette.statusPositive
+    Whoop5SessionAudit.Verdict.PARTIAL -> Palette.statusWarning
+    Whoop5SessionAudit.Verdict.FAIL -> Palette.statusCritical
+    Whoop5SessionAudit.Verdict.SKIP -> Palette.textTertiary
+}
+
+private fun auditTitle(id: String): String = when (id) {
+    "handshake" -> "Handshake (CLIENT_HELLO)"
+    "bond" -> "Encrypted bond"
+    "live_hr" -> "Live heart rate (0x2A37)"
+    "clock" -> "Strap clock (GET_CLOCK)"
+    "framing" -> "Frame CRCs (CRC16 + CRC32)"
+    "commands" -> "Command channel"
+    "r22_unlock" -> "R22 enable sequence"
+    "offload" -> "History offload"
+    "decode" -> "Record decode (type-47)"
+    else -> id
+}
+
+@Composable
+private fun DeveloperToggleRow(
+    title: String,
+    detail: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, style = NoopType.subhead, color = Palette.textPrimary)
+            Text(detail, style = NoopType.caption, color = Palette.textSecondary)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -407,10 +710,10 @@ private fun TestCentreLiveReadoutPanel(
         val now = System.currentTimeMillis() / 1_000
         val from = now - 60 * 60
         hrSamples = runCatching {
-            vm.repo.hrSamples(activeStrapId, from, now, limit = 10_000)
+            vm.repo.hrSamplesForDevice(activeStrapId, from, now, limit = 10_000)
         }.getOrDefault(emptyList())
         gravitySamples = runCatching {
-            vm.repo.gravitySamples(activeStrapId, from, now, limit = 10_000)
+            vm.repo.gravitySamplesForDevice(activeStrapId, from, now, limit = 10_000)
         }.getOrDefault(emptyList())
     }
 

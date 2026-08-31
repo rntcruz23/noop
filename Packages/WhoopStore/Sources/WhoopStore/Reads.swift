@@ -99,6 +99,42 @@ extension WhoopStore {
         }
     }
 
+    /// Cross-device change detector for every raw stream that can change a daily score or sleep session.
+    ///
+    /// The original analysis watermark covered `hrSample` only. Historical offloads do not commit their
+    /// streams atomically: HR can land first and motion/gravity later. A pass run between those commits sees
+    /// no usable sleep, then the post-offload gate used to skip the decisive retry because HR itself had not
+    /// changed. Fingerprint the complete scoring input instead. HR keeps its established count+timestamp
+    /// fingerprint; the other streams use SQLite's monotonic rowid frontier, which catches old backfills
+    /// without full-table COUNT scans over millions of dense motion/R-R rows.
+    /// `v2` intentionally changes the persisted watermark once on upgrade so every install gets one clean
+    /// rescore under the complete contract.
+    public func analysisFingerprint() async throws -> String {
+        try syncRead { db in
+            guard let row = try Row.fetchOne(db, sql: """
+                SELECT
+                  (SELECT COUNT(*) FROM hrSample) AS hc,
+                  (SELECT COALESCE(MAX(ts), 0) FROM hrSample) AS hm,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM ppgHrSample) AS p,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM rrInterval) AS r,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM respSample) AS x,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM gravitySample) AS g,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM sleepStateSample) AS s,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM event) AS e,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM spo2Sample) AS o,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM skinTempSample) AS t,
+                  (SELECT COALESCE(MAX(rowid), 0) FROM stepSample) AS z
+                """) else { return "" }
+            let hc: Int = row["hc"], hm: Int = row["hm"]
+            let keys = ["p", "r", "x", "g", "s", "e", "o", "t", "z"]
+            let tails = keys.map { key -> String in
+                let frontier: Int = row[key]
+                return key + String(frontier)
+            }
+            return "v2|h\(hc):\(hm)|" + tails.joined(separator: "|")
+        }
+    }
+
     /// Aggregate HR over a window: `(n, avg, max)` computed in SQLite over the same measured-∪-PPG rows
     /// [hrSamples] returns, WITHOUT materialising them and WITHOUT a row limit.
     ///
@@ -216,7 +252,7 @@ extension WhoopStore {
     public func rrIntervals(deviceId: String, from: Int, to: Int, limit: Int) async throws -> [RRInterval] {
         try syncRead { db in
             try Row.fetchAll(db, sql: """
-                SELECT ts, rrMs, srcChannel, ord FROM rrInterval
+                SELECT ts, rrMs, srcChannel, ord, seq FROM rrInterval
                 WHERE deviceId = ? AND ts >= ? AND ts <= ?
                 AND (srcChannel IS NULL OR srcChannel <> ?)
                 AND (tsSuspect IS NULL OR tsSuspect <> 1)   -- #1073: exclude future-stamped beats
@@ -225,7 +261,7 @@ extension WhoopStore {
                 .map { row in
                     RRInterval(ts: row["ts"], rrMs: row["rrMs"],
                                srcChannel: (row["srcChannel"] as Int?).flatMap(RRSourceChannel.init(rawValue:)),
-                               ord: row["ord"] as Int?)
+                               ord: row["ord"] as Int?, seq: row["seq"])
                 }
         }
     }
@@ -397,7 +433,7 @@ extension WhoopStore {
             let rawTables = ["hrSample", "rrInterval", "event", "battery",
                              "spo2Sample", "skinTempSample", "respSample", "gravitySample",
                              "stepSample", "ppgHrSample", "sleepStateSample", "ppgWaveformSample",
-                             "rawImuSample", "v18AuxSample"]
+                             "v18AuxSample"]
             var decoded = 0
             for t in rawTables {
                 decoded += try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(t)") ?? 0

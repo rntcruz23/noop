@@ -13,12 +13,6 @@ protocol StoreWriting: AnyObject {
         -> (hr: Int, rr: Int, events: Int, battery: Int,
             spo2: Int, skinTemp: Int, resp: Int, gravity: Int)
     func enqueueRawBatch(_ meta: RawBatchMeta, frames: [[UInt8]]) async throws
-    func insertRawImu(deviceId: String, rows: [(ts: Int, cols: [Int16])], retentionRows: Int) async throws
-}
-extension StoreWriting {
-    /// #423: default no-op so a test SpyStore needn't implement the raw-IMU capture path. WhoopStore's
-    /// real impl (StreamStore.swift) satisfies the requirement and is used in production.
-    func insertRawImu(deviceId: String, rows: [(ts: Int, cols: [Int16])], retentionRows: Int) async throws {}
 }
 extension WhoopStore: StoreWriting {}
 
@@ -91,6 +85,18 @@ final class Collector {
     private var lastStdRrCensusSec: Int = 0
     private var lastRealtimeRrCensusSec: Int = 0
 
+    /// Consecutive live-persist failures per transport, and when each last reported.
+    ///
+    /// Kept PER TRANSPORT because the standard 0x2A37 path and the puffin REALTIME_DATA path (#1118) fail
+    /// independently — a shared counter would let one path's success reset the other's run and report a
+    /// persistent failure as a string of first-failures. @MainActor isolation makes these safe without a
+    /// lock; the Kotlin twin uses AtomicInteger because its two flushes can run concurrently on the io
+    /// scope, and there the count is the load-bearing distinction between a transient and a run.
+    private var stdInsertFailures = 0
+    private var realtimeInsertFailures = 0
+    private var lastStdInsertFailureLogMs: Int64 = 0
+    private var lastRealtimeInsertFailureLogMs: Int64 = 0
+
     /// Standard 0x2A37 HR/RR buffer — the reliable, always-on stream, recorded continuously
     /// (independent of the custom realtime stream or which screen is open).
     private var stdHR: [HRSample] = []
@@ -116,6 +122,28 @@ final class Collector {
     func storageStats() async -> (decodedRows: Int, rawBatches: Int, rawBytes: Int)? {
         guard let s = concreteStore else { return nil }
         return try? await s.storageStats()
+    }
+
+    /// Decoded history rows in a stable long-form CSV for arbitrary user-selected export windows.
+    func historySensorsCSV(from: Int, to: Int) async -> Data {
+        guard let store = concreteStore, from <= to else { return Data("stream,unix_s,v1,v2,v3,v4\n".utf8) }
+        let limit = min(max(to - from + 1, 1) * 4, 1_000_000)
+        async let hr = try? store.hrSamples(deviceId: deviceId, from: from, to: to, limit: limit)
+        async let battery = try? store.batterySamples(deviceId: deviceId, from: from, to: to, limit: limit)
+        async let spo2 = try? store.spo2Samples(deviceId: deviceId, from: from, to: to, limit: limit)
+        async let temp = try? store.skinTempSamples(deviceId: deviceId, from: from, to: to, limit: limit)
+        async let steps = try? store.stepSamples(deviceId: deviceId, from: from, to: to, limit: limit)
+        async let resp = try? store.respSamples(deviceId: deviceId, from: from, to: to, limit: limit)
+        async let gravity = try? store.gravitySamples(deviceId: deviceId, from: from, to: to, limit: limit)
+        var lines = ["stream,unix_s,v1,v2,v3,v4"]
+        lines += await (hr ?? []).map { "heart_rate,\($0.ts),\($0.bpm),,," }
+        lines += await (battery ?? []).map { "battery,\($0.ts),\($0.soc.map { String($0) } ?? ""),\($0.mv.map { String($0) } ?? ""),," }
+        lines += await (spo2 ?? []).map { "spo2_raw,\($0.ts),\($0.red),\($0.ir),," }
+        lines += await (temp ?? []).map { "skin_temp_raw,\($0.ts),\($0.raw),\($0.aux1Raw.map { String($0) } ?? ""),\($0.aux2Raw.map { String($0) } ?? "")," }
+        lines += await (steps ?? []).map { "steps,\($0.ts),\($0.counter),\($0.activityClass.map { String($0) } ?? ""),," }
+        lines += await (resp ?? []).map { "resp_raw,\($0.ts),\($0.raw),,," }
+        lines += await (gravity ?? []).map { "gravity,\($0.ts),\($0.x),\($0.y),\($0.z),\($0.dynAccel.map { String($0) } ?? "")" }
+        return Data((lines.joined(separator: "\n") + "\n").utf8)
     }
 
     /// Max persisted HR sample ts (the biometric "data frontier" for the stuck-strap watchdog).
@@ -149,21 +177,6 @@ final class Collector {
         ingest(frame: frame, parsed: parseFrame(frame, family: family))
     }
 
-    /// #423: persist the WHOOP 5/MG raw-IMU offload buffer NOOP already decodes for the deep-buffer log —
-    /// the queryable twin of that (table-less) diagnostics line. Same `noopPuffinCapture` gate; only the
-    /// 1244-B 6-axis buffer decodes (rawColumns nil otherwise). Fire-and-forget into the store, bounded by
-    /// a rolling retention prune. Raw i16, no downstream consumer yet. Twin of Android
-    /// `WhoopBleClient.storeWhoop5RawImuIfBuffer`.
-    func storeRawImu(frame: [UInt8]) {
-        guard UserDefaults.standard.bool(forKey: PuffinFrameRecorder.enabledKey) else { return }
-        guard let cols = Whoop5RawImu.rawColumns(frame), let baseTs = Whoop5RawImu.baseTs(frame) else { return }
-        let dev = deviceId
-        Task { [store] in
-            try? await store.insertRawImu(
-                deviceId: dev, rows: [(ts: baseTs, cols: cols)], retentionRows: WhoopStore.rawImuRetentionRows)
-        }
-    }
-
     /// Buffer one complete frame + its pre-parsed decode (synchronous: preserves delegate arrival order).
     /// Auto-flushes via a detached Task when the cadence threshold is hit (flush is async). (#47)
     func ingest(frame: [UInt8], parsed: ParsedFrame) {
@@ -171,6 +184,7 @@ final class Collector {
         assert(parsed == parseFrame(frame, family: family),
                "Collector.ingest: threaded ParsedFrame != fresh parse (#47 parse-once invariant)")
         #endif
+        recordGroundTruthImu(frame)
         buffer.append((frame, parsed))
         // Pre-clock only: bound memory if GET_CLOCK never lands while data keeps flowing.
         // Drop OLDEST beyond the cap (keep most recent). Post-clock this branch is skipped —
@@ -183,6 +197,7 @@ final class Collector {
             Task { @MainActor in await self.flush() }
         }
     }
+
 
     /// Persist + queue everything buffered. No-op when empty or before a clock ref exists.
     /// Buffer is snapshotted and cleared SYNCHRONOUSLY before the first await so that any
@@ -212,9 +227,22 @@ final class Collector {
         }
         do {
             try await store.insert(streams, deviceId: deviceId)   // DECODED FIRST (durable)
+            realtimeInsertFailures = 0
         } catch {
             // Re-buffer at the front so these frames (and their parses) are retried on the next cadence.
             buffer.insert(contentsOf: batch, at: 0)
+            // Swallowing this made the census above read like success: a store rejecting everything still
+            // reported what was OFFERED, with nothing to say none of it landed.
+            realtimeInsertFailures += 1
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            if LivePersistTrace.shouldEmitLiveInsertFailure(lastEmitMs: lastRealtimeInsertFailureLogMs,
+                                                            nowMs: nowMs) {
+                lastRealtimeInsertFailureLogMs = nowMs
+                log?(LivePersistTrace.liveInsertFailedLine(
+                    transport: "live-realtime", errorName: String(describing: type(of: error)),
+                    message: error.localizedDescription, hrFrames: streams.hr.count,
+                    rrFrames: streams.rr.count, consecutiveFailures: realtimeInsertFailures))
+            }
             return
         }
         // Reset only after a successful insert so the interval trigger keeps firing if
@@ -268,9 +296,20 @@ final class Collector {
         }
         do {
             try await store.insert(Streams(hr: hr, rr: rr), deviceId: deviceId)
+            stdInsertFailures = 0
         } catch {
             stdHR.insert(contentsOf: hr, at: 0)
             stdRR.insert(contentsOf: rr, at: 0)
+            stdInsertFailures += 1
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+            if LivePersistTrace.shouldEmitLiveInsertFailure(lastEmitMs: lastStdInsertFailureLogMs,
+                                                            nowMs: nowMs) {
+                lastStdInsertFailureLogMs = nowMs
+                log?(LivePersistTrace.liveInsertFailedLine(
+                    transport: "live-standard", errorName: String(describing: type(of: error)),
+                    message: error.localizedDescription, hrFrames: hr.count, rrFrames: rr.count,
+                    consecutiveFailures: stdInsertFailures))
+            }
         }
     }
 
@@ -280,6 +319,11 @@ final class Collector {
     /// research toggle off. Auto-expires at the (clamped) monotonic deadline.
     func beginRawCapture(seconds: TimeInterval) {
         rawCapture.open(at: monotonic(), duration: seconds)
+    }
+
+    private func recordGroundTruthImu(_ frame: [UInt8]) {
+        _ = ImuSessionFileStore.shared.append(deviceId: deviceId, frame: frame,
+            receivedAtMs: Int64(Date().timeIntervalSince1970 * 1_000))
     }
 
     /// Flush WHILE the window is still active so the just-captured frames get persisted as raw,

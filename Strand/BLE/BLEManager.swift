@@ -561,6 +561,11 @@ public final class BLEManager: NSObject, ObservableObject {
     private let router: FrameRouter
     private var collector: Collector?
     /// #716: stored on bootstrap so the scan callback can fix the seeded "WHOOP" model label.
+    /// #1303: fired after the strap's history has been re-pointed onto its stable `whoop-<serial>` id.
+    /// The live persist paths are already re-pointed inline by then; this exists so the OBSERVABLE spine
+    /// (`DeviceRegistry`, and the coordinator that watches it) follows too — the store write above is not
+    /// observable, so without this the UI would keep showing the old id until relaunch.
+    var onSerialIdentityAdopted: ((String) -> Void)?
     private var registryStore: DeviceRegistryStore?
     /// #716: true once the seeded "WHOOP" model has been stamped to the correct family.
     private var modelStamped = false
@@ -852,6 +857,8 @@ public final class BLEManager: NSObject, ObservableObject {
     /// Re-entrancy guard for captureRawAccel: true while a bounded on-demand window is running.
     /// A second tap is a no-op until the active capture's asyncAfter block fires and clears this.
     private var rawCaptureInFlight = false
+    private var rawCaptureStoppedAt = Date.distantPast
+    private var unexpectedImuStopAt = Date.distantPast
     /// Ordered queue of frames awaiting drain through the serial Backfiller task.
     private var backfillFrameQueue: [[UInt8]] = []
     /// True while the drain task is running (prevents a second drain task from launching).
@@ -1236,7 +1243,10 @@ public final class BLEManager: NSObject, ObservableObject {
         // before any BLE data arrives.
         self.collector = nil
         super.init()
-        state.lastSyncedAt = UserDefaults.standard.object(forKey: "lastSyncedAt") as? Double
+        // Deliberately NOT seeded from the global key here. It belongs to whichever strap synced last,
+        // which on a two-strap install is not the one the screens are scoped to — the misattribution this
+        // whole change removes. `seedLastSyncFromActiveStrap` fills it from the ACTIVE strap once the
+        // registry exists (bootstrapStore); a blank moment is honest, another strap's timestamp is not.
         // Restore identifier + background-capable central (foundation for M3 state restoration).
         #if os(iOS)
         // iOS background state preservation/restoration: the restore identifier is what makes
@@ -1256,6 +1266,40 @@ public final class BLEManager: NSObject, ObservableObject {
 
     /// Build the WhoopStore + Collector + Backfiller asynchronously. Safe to call multiple
     /// times — bails out early if the collector is already initialised.
+    /// Seed the last-sync display from the ACTIVE strap's own stamp — PR #556's intent, correctly attributed.
+    ///
+    /// Resolved against the registry's active row, exactly as the debug export resolves firmware. NOT from
+    /// the legacy global key, which belongs to whichever strap synced last: on a two-strap install that is
+    /// not the strap the screens are scoped to, and seeding from it would put one strap's sync time on the
+    /// other's Today screen — the defect this change exists to remove.
+    ///
+    /// The legacy global still applies when exactly one strap is paired, because only then can it not be
+    /// ambiguous (see `LastSyncAttribution.resolve`). Called from `bootstrapStore` because that is the
+    /// first point the registry exists; the initialisers deliberately seed nothing.
+    ///
+    /// Never overwrites a value this session has already earned: a HISTORY_COMPLETE landing while this
+    /// runs is newer than anything persisted and must win.
+    private func seedLastSyncFromActiveStrap(registry: DeviceRegistryStore) {
+        // Registry + defaults resolved off-actor, then a single hop to publish. The `lastSyncedAt == nil`
+        // check lives INSIDE that hop and nowhere else: checking it out here as well would be a
+        // check-then-act across an await, and the value it guards is exactly the one a HISTORY_COMPLETE
+        // can set while this runs.
+        let rows = (try? registry.all()) ?? []
+        let activeId = (try? registry.activeDeviceId()) ?? nil
+        let activeAddr = rows.first(where: { $0.id == activeId })?.peripheralId
+        let d = UserDefaults.standard
+        guard let seed = LastSyncAttribution.resolve(
+            perDevice: LastSyncAttribution.prefKey(peripheralId: activeAddr)
+                .flatMap { d.object(forKey: $0) as? Double },
+            legacyGlobal: d.object(forKey: "lastSyncedAt") as? Double,
+            pairedCount: rows.count) else { return }
+        Task { @MainActor [state] in
+            // Never overwrite a value this session earned: a HISTORY_COMPLETE landing while the registry
+            // read was in flight is newer than anything persisted, and must win.
+            if state.lastSyncedAt == nil { state.lastSyncedAt = seed }
+        }
+    }
+
     func bootstrapStore() async {
         guard collector == nil else { return }
         // Surface store-open failures instead of swallowing them with `try?` (#222): a silent failure
@@ -1285,6 +1329,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // its own concurrency).
         let registry = DeviceRegistryStore(dbQueue: store.registryWriter)
         self.registryStore = registry
+        seedLastSyncFromActiveStrap(registry: registry)
         if let activeId = try? registry.activeDeviceId(),
            !activeId.isEmpty {
             self.deviceId = activeId
@@ -1373,7 +1418,10 @@ public final class BLEManager: NSObject, ObservableObject {
         self.router = FrameRouter(state: state)
         self.collector = collector
         super.init()
-        state.lastSyncedAt = UserDefaults.standard.object(forKey: "lastSyncedAt") as? Double
+        // Deliberately NOT seeded from the global key here. It belongs to whichever strap synced last,
+        // which on a two-strap install is not the one the screens are scoped to — the misattribution this
+        // whole change removes. `seedLastSyncFromActiveStrap` fills it from the ACTIVE strap once the
+        // registry exists (bootstrapStore); a blank moment is honest, another strap's timestamp is not.
         // Restore identifier + background-capable central (mirrors the production initializer
         // so a restored manager matches by identifier; only exercised by tests/previews).
         #if os(iOS)
@@ -1853,8 +1901,14 @@ public final class BLEManager: NSObject, ObservableObject {
         rawCaptureInFlight = true
         let secs = RawCaptureWindow.clamp(seconds)
         collector?.beginRawCapture(seconds: secs)
-        send(.startRawData, payload: [0x01])
-        send(.toggleIMUMode, payload: [0x01])
+        // Hardware-verified on WHOOP 5/MG: opcode 106 alone acknowledges but does not start the
+        // producer. START_RAW_DATA must precede the two-byte realtime IMU selector.
+        send(.startRawData, payload: [0x01], writeType: .withResponse)
+        if selectedModel.deviceFamily == .whoop5 {
+            send(.toggleIMUMode, payload: [0x01, 0x01], writeType: .withResponse)
+        } else {
+            send(.toggleIMUMode, payload: [0x01], writeType: .withResponse)
+        }
         log("Raw-accel capture: started for \(secs)s")
         DispatchQueue.main.asyncAfter(deadline: .now() + secs) { [weak self] in
             guard let self else { return }
@@ -1862,7 +1916,10 @@ public final class BLEManager: NSObject, ObservableObject {
             // continuous stream must keep running — we just flush/upload the bounded window we
             // captured without halting the wider session.
             if !UserDefaults.standard.bool(forKey: "enableRawCapture") {
-                self.send(.stopRawData, payload: [0x01])
+                self.send(.stopRawData, payload: [0x01], writeType: .withResponse)
+                if self.selectedModel.deviceFamily == .whoop5 {
+                    self.send(.toggleIMUMode, payload: [0x01, 0x00], writeType: .withResponse)
+                }
             }
             self.rawCaptureInFlight = false
             Task { @MainActor in
@@ -1870,6 +1927,50 @@ public final class BLEManager: NSObject, ObservableObject {
             }
             self.log("Raw-accel capture: stopped + flushed")
         }
+    }
+
+    /// Start a manually stopped 5/MG raw-data session. Returns false when another capture is active.
+    @discardableResult
+    public func startGroundTruthRawCapture(sessionId: String) -> Bool {
+        guard !rawCaptureInFlight else { return false }
+        rawCaptureInFlight = true
+        send(.startRawData, payload: [0x01], writeType: .withResponse)
+        send(.toggleIMUMode,
+             payload: selectedModel.deviceFamily == .whoop5 ? [0x01, 0x01] : [0x01],
+             writeType: .withResponse)
+        log("Raw-data session: started")
+        return true
+    }
+
+    /// Stop and flush the current manually controlled raw-data session.
+    public func stopGroundTruthRawCapture() async {
+        if rawCaptureInFlight && !UserDefaults.standard.bool(forKey: "enableRawCapture") {
+            send(.stopRawData, payload: [0x01], writeType: .withResponse)
+            if selectedModel.deviceFamily == .whoop5 {
+                send(.toggleIMUMode, payload: [0x01, 0x00], writeType: .withResponse)
+            }
+        }
+        rawCaptureInFlight = false
+        rawCaptureStoppedAt = Date()
+        log("Raw-data session: stopped + flushed")
+    }
+
+    /// Stop a realtime IMU producer left armed after a crash, lost stop write, or another client.
+    private func stopUnexpectedRealtimeImu(_ frame: [UInt8], isOffload: Bool, now: Date = Date()) {
+        guard selectedModel.deviceFamily == .whoop5, !isOffload, frame.count > 8,
+              frame[8] == 43 || frame[8] == 51,
+              !rawCaptureInFlight, !UserDefaults.standard.bool(forKey: "enableRawCapture"),
+              now.timeIntervalSince(rawCaptureStoppedAt) >= 3,
+              now.timeIntervalSince(unexpectedImuStopAt) >= 30 else { return }
+        unexpectedImuStopAt = now
+        send(.stopRawData, payload: [0x01], writeType: .withResponse)
+        send(.toggleIMUMode, payload: [0x01, 0x00], writeType: .withResponse)
+        log("Raw IMU fail-safe: unexpected realtime packet type \(frame[8]) while capture was off; stop requested")
+    }
+
+    public func groundTruthHistoryCSV(from: Int, to: Int) async -> Data {
+        await collector?.historySensorsCSV(from: from, to: to)
+            ?? Data("stream,unix_s,v1,v2,v3,v4\n".utf8)
     }
 
     /// Send a command to the WHOOP strap.
@@ -1954,6 +2055,10 @@ public final class BLEManager: NSObject, ObservableObject {
                 || (DeviceConfigReadProbe.isReadOnlyOpcode(command.rawValue) && deviceConfigReport != nil)
                 || command == .sendHistoricalData || command == .historicalDataResult
                 || command == .setClock || command == .getClock
+                // Bounded Raw Data Collector only. These writes remain impossible unless the explicit
+                // user-started capture window is in flight; normal sync never enables this gate.
+                || (rawCaptureInFlight && (command == .startRawData
+                    || command == .stopRawData || command == .toggleIMUMode))
                 // SET_CONFIG / SET_FF_VALUE (120), ENABLE direction — the R22 deep-stream unlock. Allowed
                 // only while the deep-data experiment is opted in, and only for a KEY and a VALUE the gate
                 // recognises: one of the sixteen R22 flags carrying that key's own enable value. The clause
@@ -2437,8 +2542,27 @@ public final class BLEManager: NSObject, ObservableObject {
             // STALLED on a persist failure" — the latter (usually a restore without a restart) is otherwise
             // invisible in a report that just shows "0 synced".
             let du = UserDefaults.standard
-            if (backfiller?.sessionRowsPersisted ?? 0) > 0 { du.set(Date().timeIntervalSince1970, forKey: "sync.lastWriteOkAt") }
-            if backfiller?.persistStalled == true { du.set(Date().timeIntervalSince1970, forKey: "sync.lastWriteStalledAt") }
+            // Per strap, not per install. The global keys reported one strap's write health on another's
+            // screen — see LastSyncAttribution. This site has the peripheral, so it is the one place that
+            // can attribute them honestly (same argument as #1634's firmware write).
+            let whoOk = LastSyncAttribution.writeHealthPrefKey(peripheralId: peripheral?.identifier.uuidString,
+                                                               kind: "lastWriteOkAt")
+            let whoStalled = LastSyncAttribution.writeHealthPrefKey(peripheralId: peripheral?.identifier.uuidString,
+                                                                    kind: "lastWriteStalledAt")
+            // The global keys are STILL written, deliberately, exactly as `noop.lastFirmware` still is
+            // (FrameRouter). DebugDataDiagnostics.strapStateLines is sync and prefs-only by contract, so it
+            // cannot resolve per device — and dropping the global write would not make that line
+            // per-device, it would freeze it at whatever it held before the upgrade and then read "no rows
+            // ever persisted" forever, for everyone. A stale global is the smaller lie than a dead one, and
+            // every reader that CAN attribute prefers the per-device key.
+            if (backfiller?.sessionRowsPersisted ?? 0) > 0 {
+                du.set(Date().timeIntervalSince1970, forKey: "sync.lastWriteOkAt")
+                if let k = whoOk { du.set(Date().timeIntervalSince1970, forKey: k) }
+            }
+            if backfiller?.persistStalled == true {
+                du.set(Date().timeIntervalSince1970, forKey: "sync.lastWriteStalledAt")
+                if let k = whoStalled { du.set(Date().timeIntervalSince1970, forKey: k) }
+            }
             if unarchived > 0 {
                 state.lastSyncError = "Synced, but \(archived + unarchived) record(s) couldn't be decoded (unrecognised strap firmware layout), and the on-device archive is full - the \(unarchived) newest weren't preserved. Please share a strap log so the layout can be mapped."
             } else if archived > 0 {
@@ -2504,6 +2628,16 @@ public final class BLEManager: NSObject, ObservableObject {
                     Whoop5Evidence.recordDecodeClean(deviceId: deviceId)
                 }
             }
+            // Stamped against the strap that actually completed this offload, never globally: the single
+            // key reported one strap's sync on another's screen, and it read as reassuring rather than
+            // wrong — see LastSyncAttribution. Kotlin twin: NoopPrefs.setLastSyncAtFor.
+            if let key = LastSyncAttribution.prefKey(peripheralId: peripheral?.identifier.uuidString) {
+                UserDefaults.standard.set(state.lastSyncedAt, forKey: key)
+            }
+            // Global kept for the same reason as the write-health pair above: the prefs-only debug header
+            // is its only remaining reader and cannot resolve per device, so dropping this write would
+            // freeze that line rather than fix it. It is also what `seedLastSyncFromActiveStrap`'s
+            // single-strap fallback reads across the upgrade.
             UserDefaults.standard.set(state.lastSyncedAt, forKey: "lastSyncedAt")
             // NOTE: the auto-continue streak is NOT reset here. A HISTORY_COMPLETE is no longer assumed to
             // mean "caught up" (#25): a strap whose firmware segments a deep offload into many small
@@ -4603,6 +4737,50 @@ public final class BLEManager: NSObject, ObservableObject {
         // existing consumer — nothing about framing or decode reads this.
         state.whoop5Variant = variant.label
         reconcileModelFromAttestation(variant)
+        adoptWhoopSerialIdentity()
+    }
+
+    /// #1303: the 5/MG DIS read hands us the strap's OWN serial, so re-point this pairing from its
+    /// transient CoreBluetooth-UUID id onto a stable `whoop-<serial>` id — through the SAME generic
+    /// migration the ring already uses (`adoptSerialIdentity`, #771), so a re-pair or factory reset stops
+    /// forking one physical strap into a second row and orphaning its history (#1193).
+    ///
+    /// A WHOOP 4.0 is deliberately untouched: it does not expose a DIS serial (the read above is gated
+    /// `!= .whoop4`) and the 4.0 serial's source on the wire is not yet identified, so there is nothing
+    /// honest to adopt onto here.
+    ///
+    /// Deferred to the next main-loop turn, mirroring `adoptOuraSerial`: adoption re-points the ACTIVE
+    /// device, and the observers that react tear down and rebuild the very connection this callback is
+    /// running inside, so the current BLE callback must return first. Idempotent — after the first
+    /// adoption the id already equals the serial id, so every later reconnect costs one string compare and
+    /// touches no database. A serial `WhoopSerialIdentity` refuses (blank, truncated, non-serial prose)
+    /// leaves the strap on its existing id: adopting onto a junk id would migrate every device-scoped row
+    /// onto a garbage key, which is worse than not adopting.
+    private func adoptWhoopSerialIdentity() {
+        guard let rs = registryStore,
+              let serialId = WhoopSerialIdentity.adoptedId(serial: disSerial),
+              let active = try? rs.all().first(where: { $0.status == .active }),
+              WhoopSerialIdentity.mayAdopt(currentId: active.id),
+              active.id != serialId
+        else { return }
+        let currentId = active.id
+        Task { @MainActor [weak self] in
+            guard let self, let rs = self.registryStore,
+                  (try? rs.all().first(where: { $0.status == .active }))?.id == currentId
+            else { return }
+            guard (try? rs.adoptSerialIdentity(from: currentId, to: serialId)) == true else { return }
+            try? rs.setActive(serialId)
+            // The rows have MOVED to the serial id and the old registry row is gone, so the live persist
+            // paths must follow in the same turn: `deviceId`, the Collector and the Backfiller all stamp
+            // rows at write time, and leaving them on the now-deleted id would write new samples into a
+            // second, orphaned history — the same split this phase exists to prevent, just on the
+            // provisional path instead of the legacy one. Kotlin reaches the identical call through
+            // `SourceCoordinator.pointWhoop`, which re-points any non-legacy id.
+            self.setActiveDeviceId(serialId)
+            // Prefix only. `serialId` embeds the full serial, which must never reach a shareable log.
+            self.log("Adopted stable serial identity (serialPrefix=\(WhoopSerialIdentity.logSafe(serial: self.disSerial))) - history re-pointed off the transient pairing id (#1303)")
+            self.onSerialIdentityAdopted?(serialId)
+        }
     }
 
     /// The strap's own DIS attestation is ground truth (a WHOOP 4.0 never attests a 5AM/5AG serial). When
@@ -5383,6 +5561,9 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         didBond = false
         clientHelloWriteAt = nil   // #1635: no hello survives the link that carried it
         whoop5RealtimeArmed = false
+        // A user capture remains represented by RawDataSessionStore, but its transport must be re-armed
+        // on the next connection. Keeping this true would make that reconnect attempt a silent no-op.
+        rawCaptureInFlight = false
         // The strap forgets the realtime-HR toggle across a disconnect; the post-bond branch re-arms it
         // from `wantsRealtime`. Clear only the "what we last sent" flag — `screenWantsRealtime` /
         // `keepRealtimeForData` (and thus `wantsRealtime`) are intent and must survive a reconnect so the
@@ -5394,6 +5575,9 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         clockRequested = false
         clockRetries = 0
         connectHandshakeDone = false
+        // Mirrors the flag above: a new link has not done the handshake, so it cannot hand over history
+        // until it does. Cleared HERE and nowhere else, so the two can never disagree.
+        state.historyReady = false
         cmdNotifyConfirmedActive = false   // #34: a fresh connection needs its own notify-confirm + settle
         connectSettledSignaled = false
         restoreNeedsResubscribe = false    // #613: a real reconnect isn't a restore — never force-toggle here
@@ -5943,6 +6127,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
             if !whoop5SessionStarted {
                 whoop5SessionStarted = true
                 connectHandshakeDone = true     // unblocks beginBackfill()'s guard
+                state.historyReady = true       // and the sync controls, which must not offer what it declines
                 log("WHOOP 5/MG: connect handshake done — backfill unblocked")
                 auditNote { $0.noteHandshake() }   // protocol check (#103)
                 noteRebootReconnectIfNeeded()
@@ -5993,6 +6178,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         // type-47 fine because it runs the sequence once on a stable connection; the app stormed it.
         guard !connectHandshakeDone else { return }
         connectHandshakeDone = true
+        state.historyReady = true
         noteRebootReconnectIfNeeded()
         backfillStarted = true
 
@@ -6162,11 +6348,19 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         // log was indistinguishable from one where the strap never answered, which is why a broken decode
         // survived unnoticed. The raw-frame dump above is unconditional for the same reason. If a firmware
         // revision ever shifts these fields again, the rejection must be visible rather than silent.
-        if let pages = DataRange.pagesBehind(from: frame, cmdOff: cmdOff) {
-            log("Strap backlog pages behind: \(pages) (#689 — GET_DATA_RANGE ring backlog, diagnostic only)")
-        } else {
-            log("Strap backlog pages behind: not decodable from this frame (#689 — offsets may have moved; "
-                + "the raw frame above is the input). Diagnostic only, sync is unaffected.")
+        // ...but NOT on the PENDING(2) ack. GET_DATA_RANGE answers twice — a short ack, then the payload —
+        // which Framing's result-code table already records ("2=PENDING precedes SUCCESS on
+        // GET_DATA_RANGE"). The ack carries no ring pointers at all, so decoding it failed every time and
+        // reported a decode problem that did not exist: one "offsets may have moved" per sync, on healthy
+        // hardware, pointing the reader at an alignment bug rather than at the ack. Skip it here; the
+        // SUCCESS frame still logs its failure loudly, which is the case the paragraph above protects.
+        if !DataRange.isPendingResponse(frame, cmdOff: cmdOff) {
+            if let pages = DataRange.pagesBehind(from: frame, cmdOff: cmdOff) {
+                log("Strap backlog pages behind: \(pages) (#689 — GET_DATA_RANGE ring backlog, diagnostic only)")
+            } else {
+                log("Strap backlog pages behind: not decodable from this frame (#689 — offsets may have moved; "
+                    + "the raw frame above is the input). Diagnostic only, sync is unaffected.")
+            }
         }
         if let newest = BLEManager.dataRangeNewestUnix(from: frame) {
             // #695: the sync-affecting side-effects (strapNewestTs, backfill window, LiveState range) only
@@ -6389,9 +6583,8 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
                     // reverse-engineering — its own file the bulk-capture eviction never churns.
                     // BEFORE the offload branch so it catches the burst; no-op unless capture is on.
                     puffinDeepBufferLog.appendIfDeepBuffer(frame: frame, char: characteristic.uuid, isOffload: isOffload)
+                    stopUnexpectedRealtimeImu(frame, isOffload: isOffload)
                     // #423: the queryable twin of that diagnostics line — persist the decoded 100 Hz 6-axis
-                    // IMU samples into the rawImuSample table when raw capture is on (same gate, gated inside).
-                    collector?.storeRawImu(frame: frame)
                     if isOffload {
                         // Same policy as WHOOP4: historical offload frames are bulk sync traffic.
                         // Keep them out of the live UI parser during backfill and let Backfiller

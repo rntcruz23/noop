@@ -10,7 +10,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -18,6 +26,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -25,7 +37,9 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.noop.BuildConfig
+import com.noop.CrashCapture
 import com.noop.NoopApplication
+import com.noop.R
 import com.noop.ble.WhoopModel
 import com.noop.data.DemoSeeder
 import com.noop.data.WhoopRepository
@@ -57,6 +71,24 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        // NOTE: `crash` stays RAW here on purpose. acknowledge() fingerprints what it is given, and
+        // pendingCrash() fingerprints the stored file — hand it redacted text and the two hashes never
+        // match, so the screen would reappear on every launch forever, which is precisely the loop the
+        // fingerprint exists to prevent. Masking happens where it is SHOWN and COPIED, inside the screen.
+        CrashCapture.pendingCrash(this)?.let { crash ->
+            setContent {
+                NoopTheme {
+                    CrashRecoveryScreen(
+                        crash = crash,
+                        onContinue = {
+                            CrashCapture.acknowledge(this, crash)
+                            recreate()
+                        },
+                    )
+                }
+            }
+            return
+        }
         // Load the saved "Card transparency" so every frosted card renders at the chosen opacity from launch.
         CardAppearance.init(this)
 
@@ -139,6 +171,36 @@ class MainActivity : ComponentActivity() {
         }.toTypedArray()
 
         if (needed.isNotEmpty()) permissionLauncher.launch(needed)
+    }
+}
+
+@Composable
+private fun CrashRecoveryScreen(crash: String, onContinue: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    // Masked for the two paths that leave the device — the visible trace and the clipboard. The stored
+    // file stays verbatim for anything that needs it, and the acknowledgement fingerprint is taken on
+    // the raw text by the caller. redactStrapLogPii is the same sink the strap log and the test bundle
+    // use (BLE MACs and WHOOP serials) and is documented as total, so it cannot throw here. A BLE
+    // exception carrying a device address is exactly its shape, and this screen's copy button exists
+    // to paste into public bug reports.
+    val shown = remember(crash) { com.noop.ble.redactStrapLogPii(crash) }
+    Surface(Modifier.fillMaxSize(), color = Palette.surfaceBase) {
+        Column(
+            Modifier.padding(horizontal = 20.dp, vertical = 32.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(stringResource(R.string.crash_recovery_title), style = NoopType.title1, color = Palette.textPrimary)
+            Text(stringResource(R.string.crash_recovery_body), style = NoopType.body, color = Palette.textSecondary)
+            Button(onClick = { clipboard.setText(AnnotatedString(shown)) }) {
+                Text(stringResource(R.string.crash_recovery_copy))
+            }
+            Button(onClick = onContinue) {
+                Text(stringResource(R.string.crash_recovery_continue))
+            }
+            SelectionContainer {
+                Text(shown, style = NoopType.caption, color = Palette.textSecondary)
+            }
+        }
     }
 }
 
@@ -406,9 +468,9 @@ object NoopPrefs {
         of(context).edit().putBoolean(KEY_FAST_LINK_PHY, enabled).apply()
     }
 
-    /** #836, the raw-HR fingerprint ("count:maxTs") the last COMPLETED idle rescore scored against. The
-     *  15-min backstop tick skips when the current fingerprint equals this; cleared implicitly by any HR
-     *  insert/delete (the fingerprint moves). Mirrors the Swift `analyzeWatermark` UserDefaults key. */
+    /** #836, the complete raw-analysis fingerprint the last COMPLETED idle rescore scored against. The
+     *  15-min backstop tick skips when the current fingerprint equals this; any new scoring-stream row
+     *  moves it. Mirrors the Swift `analyzeWatermark` UserDefaults key. */
     fun analyzeWatermark(context: Context): String? =
         of(context).getString(KEY_ANALYZE_WATERMARK, null)
 
@@ -1255,10 +1317,20 @@ object NoopPrefs {
      *  recreation / process restart and stops reverting to "Never". 0 = never synced on this install. */
     const val KEY_LAST_SYNC_AT = "noop.lastSyncAtSec"
 
+    /** LEGACY global reader. Kept only as [com.noop.ble.resolveLastSync]'s single-strap fallback, so an
+     *  install that has one strap keeps its timestamp across the upgrade. No longer written. */
     fun lastSyncAt(context: Context): Long = of(context).getLong(KEY_LAST_SYNC_AT, 0L)
 
-    fun setLastSyncAt(context: Context, epochSec: Long) {
-        of(context).edit().putLong(KEY_LAST_SYNC_AT, epochSec).apply()
+    /** This strap's own last completed offload, keyed by BLE address — see
+     *  [com.noop.ble.lastSyncPrefKey]. 0 when this strap has never synced. */
+    fun lastSyncAtFor(context: Context, peripheralId: String?): Long =
+        com.noop.ble.lastSyncPrefKey(peripheralId)?.let { of(context).getLong(it, 0L) } ?: 0L
+
+    /** Stamp a completed offload against the strap it came from. A blank address writes nothing rather
+     *  than writing to a key that belongs to no device. */
+    fun setLastSyncAtFor(context: Context, peripheralId: String?, epochSec: Long) {
+        val key = com.noop.ble.lastSyncPrefKey(peripheralId) ?: return
+        of(context).edit().putLong(key, epochSec).apply()
     }
 
     /** Last-known strap firmware string, persisted on connect so the debug export can name it OFFLINE

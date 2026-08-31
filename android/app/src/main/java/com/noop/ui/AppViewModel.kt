@@ -267,9 +267,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val id = activeStrapId
         fun cap(s: String) = com.noop.analytics.InputCoverage.fetchLimit(s)
         return mapOf(
-            "hr" to repository.hrSamples(id, from, to, cap("hr")).size,
-            "rr" to repository.rrIntervals(id, from, to, cap("rr")).size,
-            "motion" to repository.gravitySamples(id, from, to, cap("motion")).size,
+            "hr" to repository.hrSamplesForDevice(id, from, to, cap("hr")).size,
+            "rr" to repository.rrIntervalsForDevice(id, from, to, cap("rr")).size,
+            "motion" to repository.gravitySamplesForDevice(id, from, to, cap("motion")).size,
             "skin_temp" to repository.skinTempSamples(id, from, to, cap("skin_temp")).size,
             "resp" to repository.respSamples(id, from, to, cap("resp")).size,
             "spo2" to repository.spo2Samples(id, from, to, cap("spo2")).size,
@@ -279,15 +279,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Permanently delete all of a device's recorded data (its registry row is kept). */
     suspend fun deletePairedDeviceData(id: String) {
-        noopApp.deviceRegistry.deleteDeviceData(id)
-        // Evidence goes with the data (#103): a later re-add must re-prove capabilities.
-        com.noop.ble.Whoop5Evidence.from(appContext).clear(id)
+        if (com.noop.testcentre.ImuSessionFileStore(getApplication()).deleteDevice(id)) {
+            noopApp.deviceRegistry.deleteDeviceData(id)
+            // Evidence goes with the data (#103): a later re-add must re-prove capabilities.
+            com.noop.ble.Whoop5Evidence.from(appContext).clear(id)
+        }
     }
 
     /** Permanently forget a device: wipe all its recorded data AND remove its registry entry, so a
      *  duplicate/stale strap disappears from the list entirely (an archived row could otherwise only be
      *  re-activated or data-wiped, never purged — #1193). Twin of Swift `DeviceRegistry.forget`. */
-    suspend fun forgetPairedDevice(id: String) = noopApp.deviceRegistry.forget(id)
+    suspend fun forgetPairedDevice(id: String) {
+        if (com.noop.testcentre.ImuSessionFileStore(getApplication()).deleteDevice(id))
+            noopApp.deviceRegistry.forget(id)
+    }
 
     /**
      * A DISCOVERY-ONLY [StandardHrSource] for the Add-a-strap wizard. It runs its OWN scan and never
@@ -460,15 +465,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *  recordings under a read pinned to the literal "my-whoop" (#814 twin of the Workouts screen). */
     val deviceId = noopApp.activeDeviceId
 
-    /** Last (bins, daysObserved) computed on the collector pass. Reused by the SYNCHRONOUS settings
-     *  re-evaluate below, which has no coroutine to read the store from — without this, flipping the
+    /** Last (bins, daysObserved) computed on the collector pass. Reused by the cycle-tracking
+     *  re-evaluates below so they need no store read of their own — without this, flipping the
      *  cycle-tracking toggle would blank the body clock until the next collector tick.
+     *
+     *  Those sites now go through [freshCircadianBins], which reads the store ONLY when this cache is
+     *  empty, and they sit inside `viewModelScope.launch`. On `Dispatchers.Main.immediate` a body that
+     *  never suspends runs inline, so the populated-cache path is as immediate as the plain call it
+     *  replaced; only the empty-cache case actually defers. (This comment previously said the
+     *  re-evaluate was SYNCHRONOUS and had no coroutine — true before that change, not after.)
      *
      *  Not volatile and not synchronised, deliberately: the write resumes on `viewModelScope`
      *  (Dispatchers.Main.immediate) and the read is a UI-thread settings callback, so both touch it on
      *  the main thread. The Swift twin gets the same guarantee from `@MainActor` on AppModel. */
     private var lastCircadianBins: Pair<List<CircadianEngine.ActivityBin>, Int> =
         emptyList<CircadianEngine.ActivityBin>() to 0
+
+    /**
+     * The circadian bins, re-read first if the cache is empty.
+     *
+     * Only the main collect path refreshed [lastCircadianBins]; the cycle-tracking paths reused whatever
+     * was cached, which starts as `emptyList() to 0` and returns to empty whenever a store read fails
+     * (`circadianActivityBins` swallows that to an empty list). Either way a cycle re-evaluation would
+     * then hand `V5HealthSignals` no bins, drop below its six-bin floor, and null out `bodyClock` — the
+     * Health card disappearing on a device whose data is fine, which is exactly the symptom that started
+     * this. Refreshing only when EMPTY keeps the cheap path cheap: a populated cache is left alone and
+     * the collector stays the thing that keeps it current.
+     */
+    private suspend fun freshCircadianBins(): Pair<List<CircadianEngine.ActivityBin>, Int> {
+        if (lastCircadianBins.first.isEmpty()) lastCircadianBins = circadianActivityBins()
+        return lastCircadianBins
+    }
 
     /**
      * Per-hour activity profile for the body clock (#852), from the last ~14 days of hourly HR buckets.
@@ -839,6 +866,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             ble.connectedPeripheralAddress
                 .collect { addr -> noopApp.sourceCoordinator.connectedPeripheralChanged(addr) }
         }
+        // #1303: the 5/MG DIS read hands up the strap's OWN serial, so re-point this pairing from its
+        // transient address-based id onto a stable `whoop-<serial>` id, through the SAME migration the ring
+        // already uses (#771) — a re-pair or factory reset then stops forking one physical strap into a
+        // second row and orphaning its history (#1193). Lives here rather than in SourceCoordinator, which
+        // is deliberately inert on the WHOOP path and never touches WhoopBleClient internals; this class
+        // already owns the registry handle and a scope. Twin of Swift `BLEManager.adoptWhoopSerialIdentity`.
+        //
+        // A WHOOP 4.0 never reaches here: it exposes no DIS serial, and the 4.0 serial's source on the wire
+        // is not yet identified, so there is nothing honest to adopt onto.
+        ble.onSerial = { serial ->
+            viewModelScope.launch {
+                val serialId = com.noop.data.WhoopSerialIdentity.adoptedId(serial)
+                val currentId = deviceRegistry.activeDeviceId()
+                // Idempotent: once adopted the id already equals the serial id, so a reconnect costs one
+                // string compare and no database work. A serial WhoopSerialIdentity refuses (blank,
+                // truncated, non-serial prose) leaves the strap on its existing id — adopting onto a junk id
+                // would migrate every device-scoped row onto a garbage key, worse than not adopting at all.
+                if (serialId != null && currentId != null && currentId != serialId &&
+                    com.noop.data.WhoopSerialIdentity.mayAdopt(currentId) &&
+                    deviceRegistry.adoptSerialIdentity(currentId, serialId)
+                ) {
+                    // Prefix only. `serialId` embeds the full serial, which must never reach a shared log.
+                    ble.logIdentity(
+                        "WHOOP: adopted stable serial identity (serialPrefix=" +
+                            com.noop.data.WhoopSerialIdentity.logSafe(serial) +
+                            ") - history re-pointed off the transient pairing id (#1303)",
+                    )
+                    deviceRegistry.setActive(serialId)
+                    // The process-wide handle too, not just the registry and the coordinator. It is read
+                    // by the diagnostics export and threaded into the BLE client and the source
+                    // coordinator at startup; leaving it behind meant the engine kept deriving days under
+                    // the PRE-adoption id until the next cold start, splitting the computed history across
+                    // both ids (field-confirmed on a 5/MG before this line existed).
+                    noopApp.onActiveDeviceAdopted(serialId)
+                    noopApp.sourceCoordinator.onActiveDeviceChanged(serialId)
+                }
+            }
+        }
         // Re-arm the strap's firmware alarm once per process-alive day. The firmware alarm is a single
         // absolute instant with NO recurrence and was previously re-armed ONLY on the bond edge — so a
         // strap that stays continuously bonded (a phone in range overnight) would fire once and then
@@ -1026,10 +1091,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }.onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
                 // #836 parity (Android): the 15-min tick is a backstop, not a data-driven refresh. Every real
                 // update (sync, import, edit, recalibrate, the #547 heal above) rescores via its own path and
-                // moves the raw-HR fingerprint, so skip the heavy 21-day rescore when the HR stream is unchanged
+                // moves the complete raw-input fingerprint, so skip the heavy 21-day rescore when every scoring stream is unchanged
                 // since the last COMPLETED run. Mirrors the Swift analyzeRecent(force:false) gate; the watermark
                 // advances only on success (below), so an interrupted run can never hide unscored data.
-                val analyzeFp = repository.hrFingerprint()
+                val analyzeFp = repository.analysisFingerprint()
                 // #1538: attribute the tick that is about to run. An idle-tick pass previously emitted NO
                 // trigger line at all — a "re-score: done" with nothing before it — so a strap log could not
                 // be read by pairing trigger->done, and a stalled background pass was easy to misattribute to
@@ -1147,7 +1212,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     // analyzeRecent now hops to Dispatchers.Default; a scope cancellation surfaces as a
                     // CancellationException that runCatching would otherwise swallow, breaking the loop's
                     // own cancellation — rethrow it so onCleared() actually stops the loop. (#125)
-                }.onSuccess { NoopPrefs.setAnalyzeWatermark(appContext, analyzeFp) }
+                }.onSuccess {
+                    NoopPrefs.setAnalyzeWatermark(appContext, analyzeFp)
+                    // #1735: the watermark says WHAT was scored, never WHEN. "re-score: done" goes only to
+                    // the live log, so hours later the rolling buffer has dropped it and an export cannot
+                    // tell a pass that ran from one that never did - which is half of "my ride still is not
+                    // showing". Stamp the completion; AndroidDiagnostics renders it beside "Data write".
+                    runCatching {
+                        NoopPrefs.of(appContext).edit()
+                            .putLong("score.lastPassAt", System.currentTimeMillis() / 1000).apply()
+                    }
+                }
                     .onFailure { if (it is kotlin.coroutines.cancellation.CancellationException) throw it }
                 // Opt-in writeback: push the freshly computed nights into Health Connect so other
                 // apps see them. Idempotent (clientRecordId per metric+day), so re-running every
@@ -2552,16 +2627,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setCycleTrackingEnabled(enabled: Boolean) {
         _cycleTrackingEnabled.value = enabled
         NoopPrefs.setCycleTracking(appContext, enabled)
-        val days = recentDays.value
-        runCatching {
-            _v5Signals.value = V5HealthSignals.evaluate(
-                days = days,
-                cycleOptedIn = enabled,
-                loggedPeriodStarts = _periodStarts.value,
-                journalContext = illnessJournalContext(days),
-                activityBins = lastCircadianBins.first,
-                daysObserved = lastCircadianBins.second,
-            )
+        // Launched, like the sibling toggles, because the bins may need a store read before this snapshot
+        // is safe to publish — evaluating straight off an empty cache is what erased `bodyClock`.
+        viewModelScope.launch {
+            val days = recentDays.value
+            val bins = freshCircadianBins()
+            runCatching {
+                _v5Signals.value = V5HealthSignals.evaluate(
+                    days = days,
+                    cycleOptedIn = enabled,
+                    loggedPeriodStarts = _periodStarts.value,
+                    journalContext = illnessJournalContext(days),
+                    activityBins = bins.first,
+                    daysObserved = bins.second,
+                )
+            }
         }
     }
 
@@ -2613,13 +2693,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val starts = store.starts()
         _periodStarts.value = starts
         val days = recentDays.value
+        val bins = freshCircadianBins()
         _v5Signals.value = V5HealthSignals.evaluate(
             days = days,
             cycleOptedIn = _cycleTrackingEnabled.value,
             loggedPeriodStarts = starts,
             journalContext = illnessJournalContext(days),
-            activityBins = lastCircadianBins.first,
-            daysObserved = lastCircadianBins.second,
+            activityBins = bins.first,
+            daysObserved = bins.second,
         )
     }
 

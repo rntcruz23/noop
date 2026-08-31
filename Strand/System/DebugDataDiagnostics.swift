@@ -44,6 +44,13 @@ enum DebugDataDiagnostics {
         // per-device value there; this line is superseded by it and wants the same follow-up as the Apple
         // write site, which has no peripheral identity to key on today.
         lines.append("Firmware:    \(d.string(forKey: "noop.lastFirmware") ?? "unknown (connect to record)")")
+        // NOTE: still the legacy GLOBAL key, for the same reason the firmware line above is — strapStateLines
+        // is sync and prefs-only by contract, and the per-device rule needs a registry read for pairedCount.
+        // The BLE layer therefore keeps writing the global alongside the per-device one; without that this
+        // line would not become per-device, it would simply freeze at its pre-upgrade value. Unlike
+        // firmware there is no per-device block further down to supersede it, so on a multi-strap install
+        // it can still name the OTHER strap's sync — the Kotlin twin resolves it because its export has the
+        // registry in hand. Tracked with the same follow-up.
         let syncSec = d.double(forKey: "lastSyncedAt")
         lines.append("Last sync:   \(syncSec > 0 ? relTime(Date().timeIntervalSince1970 - syncSec) : "never")")
         // #57: write-health. "Last sync" fires even on an empty/failed offload, so distinguish "rows
@@ -500,6 +507,13 @@ enum DebugDataDiagnostics {
     /// each day to whichever device actually holds its data. Samples under another id are then completely
     /// normal, and calling that a read failure sends the reader hunting a bug that is not there. Only when
     /// the id holding the samples is NOT a live registered strap is the #1193 split the explanation left.
+    ///
+    /// That correction then over-corrected. "So this is expected" assumes a night is worn on ONE strap, and
+    /// a reporter wearing a 4.0 and a 5.0 together hit the case it denies: the active strap banked nothing
+    /// because its handshake never completed (#1635), while the other strap's rows made the line declare
+    /// the silence normal. Nothing available here can tell the two apart — the wearer knows which straps
+    /// were on the wrist and this function cannot — so it states the fork instead of picking a side, and
+    /// names the sync as what to check in the half where something IS wrong.
     static func orphanedSamplesLine(activeId: String, othersWithSamples: [(String, Int)],
                                     otherLiveStrapIds: Set<String> = []) -> String {
         if othersWithSamples.isEmpty {
@@ -512,8 +526,9 @@ enum DebugDataDiagnostics {
                 .map { "'\($0.0)' (\($0.1) rows)" }
                 .joined(separator: ", ")
             return "(no raw biometric samples under the ACTIVE id '\(activeId)' for this night — they are "
-                + "under \(who), another registered strap. A night worn on a different strap is OWNED by that "
-                + "strap, so this is expected; the dayOwner line for this date names the owner.)"
+                + "under \(who), another registered strap. If you wore THAT strap this night, this is expected "
+                + "and the dayOwner line for this date names the owner. If you wore BOTH, the active strap "
+                + "banked nothing for this night and its sync is what to check, not this line.)"
         }
         // Tie-break on id: Kotlin's sortedByDescending is stable but Swift's `sorted` is NOT, so equal
         // counts could otherwise order differently on the two platforms and the twin lines would diverge.

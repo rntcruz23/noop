@@ -24,6 +24,14 @@ public final class LiveState: ObservableObject {
     /// connect/disconnect. Drives the Live pill's two-state distinction; the encrypted channel (buzz,
     /// alarm, double-tap, history offload) only works when this is true.
     @Published public var encryptedBond: Bool = false
+    /// True once this strap can actually hand over history — the UI mirror of `BLEManager`'s
+    /// `connectHandshakeDone`, which `beginBackfill` already requires before it will request an offload.
+    ///
+    /// Exposed because `bonded` is NOT that condition and reads true too early: the live-HR path sets it
+    /// for a 5/MG that has never completed a handshake, so the sync controls were offered, accepted, and
+    /// then refused deeper down in silence. Gating on this makes them unavailable exactly when the sync
+    /// would have been declined anyway — never when it would have run. Kotlin twin: `LiveState.historyReady`.
+    @Published public var historyReady: Bool = false
     /// #34: bumped by BLEManager once a WHOOP 4.0 connection has BOTH run its connect handshake (hello +
     /// SET_CLOCK, exactly once — `connectHandshakeDone`) AND had the cmd-notify characteristic confirm
     /// subscribed (`didUpdateNotificationStateFor` for it fired with `isNotifying == true`) — whichever of
@@ -784,6 +792,20 @@ public final class LiveState: ObservableObject {
         out = out.replacingOccurrences(
             of: "(?![0-9A-Fa-f]{8}-(?:0000-1000-8000-00805f9b34fb|8d6d-82b8-614a-1c8cb0f8dcc6))[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
             with: "<device>", options: [.regularExpression, .caseInsensitive])
+        // #1303: an ADOPTED device id (`whoop-<SERIAL>`) is a device identifier in every line that prints
+        // an id. Neither rule above catches it — the MAC rule wants MAC shape and the serial rule wants the
+        // literal "WHOOP " then a DIGIT, while an adopted id is `whoop-` + a serial commonly starting with
+        // a letter. Keeps three characters, matching `WhoopSerialIdentity.logSafe`, so two straps stay
+        // distinguishable; PRESERVES the `-noop` computed-sibling suffix, which is not identifying and is
+        // what lets a reader tell derived rows from measured ones. Six-character minimum matches
+        // `minSerialLength`, so `my-whoop` and `my-whoop-noop` are untouched. Kotlin twin in
+        // `redactStrapLogPii`.
+        out = out.replacingOccurrences(
+            of: "whoop-([A-Za-z0-9]{3})[A-Za-z0-9-]{3,}(-noop)",
+            with: "whoop-$1…$2", options: .regularExpression)
+        out = out.replacingOccurrences(
+            of: "whoop-([A-Za-z0-9]{3})[A-Za-z0-9-]{3,}",
+            with: "whoop-$1…", options: .regularExpression)
         return out
     }
 

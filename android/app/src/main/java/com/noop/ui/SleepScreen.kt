@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.analytics.AnalyticsEngine
+import com.noop.analytics.CircadianEngine
 import com.noop.analytics.SleepEditGuard
 import com.noop.analytics.SleepGroupEdit
 import com.noop.analytics.SleepStageTotals
@@ -82,6 +83,8 @@ import com.noop.data.SleepSession
 import com.noop.data.WhoopRepository
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.Instant
+import java.time.ZoneId
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -90,6 +93,59 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+
+internal enum class SleepFreshnessStatus {
+    SYNCING, CALCULATING, SYNC_FAILED, AWAITING_SYNC, NOT_DETECTED,
+}
+
+private data class SleepFreshnessLiveSnapshot(
+    val backfilling: Boolean,
+    val analyzing: Boolean,
+    val lastSyncAt: Long?,
+    val syncFailed: Boolean,
+)
+
+/** Pure priority ladder for the expected current night. The missing states wait until morning so opening
+ * Sleep at 02:00 does not claim the night still in progress has been missed. Swift twin:
+ * `resolveSleepFreshness`. */
+internal fun resolveSleepFreshness(
+    hasCurrentNight: Boolean,
+    morningReady: Boolean,
+    syncing: Boolean,
+    calculating: Boolean,
+    syncedSinceDayStart: Boolean,
+    syncFailed: Boolean,
+): SleepFreshnessStatus? {
+    if (syncing) return SleepFreshnessStatus.SYNCING
+    if (calculating) return SleepFreshnessStatus.CALCULATING
+    if (hasCurrentNight || !morningReady) return null
+    if (syncFailed) return SleepFreshnessStatus.SYNC_FAILED
+    return if (syncedSinceDayStart) SleepFreshnessStatus.NOT_DETECTED
+    else SleepFreshnessStatus.AWAITING_SYNC
+}
+
+@Composable
+private fun SleepFreshnessNote(status: SleepFreshnessStatus, chunks: Int) {
+    when (status) {
+        SleepFreshnessStatus.SYNCING -> SyncingHistoryNote(chunks)
+        SleepFreshnessStatus.CALCULATING -> DataPendingNote(
+            title = stringResource(R.string.sleep_status_calculating_title),
+            body = stringResource(R.string.sleep_status_calculating_body),
+        )
+        SleepFreshnessStatus.SYNC_FAILED -> DataPendingNote(
+            title = stringResource(R.string.sleep_status_sync_failed_title),
+            body = stringResource(R.string.sleep_status_sync_failed_body),
+        )
+        SleepFreshnessStatus.AWAITING_SYNC -> DataPendingNote(
+            title = stringResource(R.string.sleep_status_waiting_title),
+            body = stringResource(R.string.sleep_status_waiting_body),
+        )
+        SleepFreshnessStatus.NOT_DETECTED -> DataPendingNote(
+            title = stringResource(R.string.sleep_status_not_detected_title),
+            body = stringResource(R.string.sleep_status_not_detected_body),
+        )
+    }
+}
 
 /**
  * Sleep — Whoop-sleep clarity on the locked Noop component system. Mirrors the macOS
@@ -129,6 +185,9 @@ fun SleepScreen(
     // the sleep surfaces name a ring-PROVIDED night's provenance "Oura" and flag its split as the ring's
     // RAW on-device stages. Read/UI only, no stored value. Mirrors macOS Repository.activeDeviceIsOura.
     val activeIsOura = com.noop.data.DeviceBrandCatalog.isOura(vm.activeStrapId)
+    // #1680: the body-clock phase behind the 24 h dial section. Same snapshot the Health screen reads for
+    // BodyClockCard, so the two surfaces cannot disagree about the estimate.
+    val v5Signals by vm.v5Signals.collectAsStateWithLifecycle()
 
     // PERF (#scroll-jank): the BLE live state ticks ~1Hz. This screen reads `live` ONLY for the
     // "syncing history" note (backfilling + the chunk count), so reading the whole `live` object at
@@ -141,6 +200,18 @@ fun SleepScreen(
         derivedStateOf {
             val s = live
             if (s.backfilling) s.syncChunksThisSession else null
+        }
+    }
+    // Like backfillNote, collapse the 1 Hz BLE state to only fields that can change the missing-night
+    // banner. Live HR ticks then remain equality-identical and do not recompose this heavy screen.
+    val freshnessLive by remember {
+        derivedStateOf {
+            SleepFreshnessLiveSnapshot(
+                backfilling = live.backfilling,
+                analyzing = live.analyzingHistory,
+                lastSyncAt = live.lastSyncAt,
+                syncFailed = live.lastSyncError != null,
+            )
         }
     }
 
@@ -228,9 +299,9 @@ fun SleepScreen(
     // and lays them along the hypnogram's timeline. A block with no stored series stays absent (honest empty
     // state for older rows whose motionJSON is NULL). Mirrors iOS SleepView.motionByStart.
     var motionByStart by remember { mutableStateOf<Map<Long, List<Double>>>(emptyMap()) }
-    LaunchedEffect(sleeps) {
+    LaunchedEffect(sleeps, vm.activeStrapId) {
         motionByStart = runCatching {
-            vm.repo.sessionMotions("my-whoop", sleeps.map { it.startTs })
+            vm.repo.sessionMotions(vm.activeStrapId, sleeps)
         }.getOrDefault(emptyMap())
     }
 
@@ -381,6 +452,13 @@ fun SleepScreen(
         )
     }
 
+    // Debt credit is the canonical main-night DailyMetric total PLUS actual asleep minutes from blocks
+    // outside that main-night group. Keep the nap sum separate: Rest, the hero and daily total deliberately
+    // remain main-night-only. Stage-less naps add no guessed in-bed time. Mirrors Swift SleepView. (#525)
+    val napSleepMinByDay = remember(sleeps, habitualMidsleep) {
+        napSleepMinutesByDay(sleeps, habitualMidsleep)
+    }
+
     // Tapping a metric tile opens a full-history detail sheet for that one metric. (PR #260)
     val metricSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var detailMetricKey by remember { mutableStateOf<String?>(null) }
@@ -392,7 +470,12 @@ fun SleepScreen(
             containerColor = Palette.surfaceRaised,
             contentColor = Palette.textPrimary,
         ) {
-            SleepMetricDetailSheetContent(vm = vm, key = currentDetailKey)
+            SleepMetricDetailSheetContent(
+                vm = vm,
+                key = currentDetailKey,
+                imported = imported,
+                napSleepMinByDay = napSleepMinByDay,
+            )
         }
     }
 
@@ -405,13 +488,6 @@ fun SleepScreen(
         sleeps.groupBy { localDayString(it.endTs) }
             .toSortedMap(reverseOrder())                       // newest day first
             .map { (_, blocks) -> blocks.sortedBy { it.effectiveStartTs } }
-    }
-
-    // Debt credit is the canonical main-night DailyMetric total PLUS actual asleep minutes from blocks
-    // outside that main-night group. Keep the nap sum separate: Rest, the hero and daily total deliberately
-    // remain main-night-only. Stage-less naps add no guessed in-bed time. Mirrors Swift SleepView. (#525)
-    val napSleepMinByDay = remember(sleeps, habitualMidsleep) {
-        napSleepMinutesByDay(sleeps, habitualMidsleep)
     }
 
     // The navigated night, decoded once per (offset, data) change — chevron taps re-pick
@@ -439,6 +515,24 @@ fun SleepScreen(
             napSleepMinByDay = napSleepMinByDay, sessions = sleeps)
     }
     val display = remember(model, night) { heroDisplay(model, night) }
+
+    val sleepFreshness = remember(sleeps, freshnessLive) {
+        val zone = ZoneId.systemDefault()
+        val now = Instant.now().atZone(zone)
+        val latestWake = sleeps.maxOfOrNull { it.endTs }
+        val current = latestWake?.let {
+            Instant.ofEpochSecond(it).atZone(zone).toLocalDate() == now.toLocalDate()
+        } ?: false
+        val dayStart = now.toLocalDate().atStartOfDay(zone).toEpochSecond()
+        resolveSleepFreshness(
+            hasCurrentNight = current,
+            morningReady = now.hour >= 6,
+            syncing = freshnessLive.backfilling,
+            calculating = freshnessLive.analyzing,
+            syncedSinceDayStart = (freshnessLive.lastSyncAt ?: 0L) >= dayStart,
+            syncFailed = freshnessLive.syncFailed,
+        )
+    }
 
     // #940: ONE stage-less SELECTED day (typically the newest, after an impossible hand-edit staged
     // it all-awake) must not hide the whole tab's history. The tiles / ledger / trends are
@@ -542,13 +636,14 @@ fun SleepScreen(
                 )
             }
         }
+        sleepFreshness?.let { status ->
+            item { SleepFreshnessNote(status, backfillNote ?: 0) }
+        }
         // #940: the empty state is ONLY for a truly empty history. A newest day that merely fails
         // to merge (the phantom-edit shape) keeps the hero (night != null) and the full-history
         // tiles (tilesModel != null), so intact older nights are never hidden behind "no nights".
         if (tilesModel == null && night == null) {
-            // While the strap is mid-offload, say so — "No nights" reads as final otherwise (#77).
             item {
-                if (backfillNote != null) SyncingHistoryNote(chunks = backfillNote!!)
                 SleepEmptyState()
             }
         } else {
@@ -751,6 +846,32 @@ fun SleepScreen(
                 // selected day's model failed to build, exactly as iOS keeps them while browsing. Each
                 // `tilesModel?.let { m -> ... }` binds a non-null local so the smart-cast carries across
                 // the item {} lambda boundary — same guard the old `if (tilesModel != null)` block used.
+                // The 24 h body-clock dial (#1680). Drawn only for a fit that is at least WIDE: an
+                // UNREADABLE rhythm has no phase to compare a night against, and an empty ring would read
+                // as a broken chart rather than as "not enough data". It is a reorderable Sleep section,
+                // so anyone who does not want it hides it in Arrange — the same affordance every other
+                // card here already has, rather than a setting of its own. Mirrors SleepView.
+                SleepSection.BODY_CLOCK -> {
+                    val phase = v5Signals?.bodyClock
+                    val session = night?.session
+                    if (phase != null &&
+                        phase.confidence != CircadianEngine.PhaseConfidence.UNREADABLE &&
+                        session != null
+                    ) {
+                        item(key = k) {
+                            SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
+                                Column {
+                                    Spacer(Modifier.height(Metrics.selectorTopUp))
+                                    BodyClockDialCard(
+                                        estimate = phase,
+                                        actualBedHour = localClockHour(session.effectiveStartTs),
+                                        actualWakeHour = localClockHour(session.endTs),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 SleepSection.NIGHT_DETAIL -> tilesModel?.let { m ->
                     item(key = k) {
                         SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
@@ -2166,5 +2287,3 @@ private fun MotionStrip(epochs: List<Double>) {
 // MARK: - Sleep window and night navigation UI lives in SleepNightNavUi.kt
 // MARK: - Sleep metric cards, debt ledger, stages, trends + chart helpers live in SleepMetricCardsUi.kt
 // MARK: - Sleep metric detail sheet UI lives in SleepMetricDetailSheet.kt
-
-

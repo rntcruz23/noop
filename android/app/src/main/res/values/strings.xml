@@ -212,6 +212,8 @@
     <string name="trends_hrv_full">Heart rate variability</string>
     <string name="trends_resting_hr_full">Resting heart rate</string>
     <string name="trends_coverage">%1$d of %2$d nights</string>
+    <string name="trends_coverage_days">%1$d of %2$d days</string>
+    <string name="trends_show_all_history">Show all available history</string>
     <string name="trends_no_reading">No reading</string>
     <string name="trends_your_typical_range">Your typical range · %1$s</string>
     <string name="trends_general_range">General range · %1$s</string>

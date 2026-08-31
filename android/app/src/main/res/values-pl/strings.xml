@@ -108,6 +108,8 @@
     <string name="trends_hrv_full">Zmienność tętna</string>
     <string name="trends_resting_hr_full">Tętno spoczynkowe</string>
     <string name="trends_coverage">%1$d z %2$d nocy</string>
+    <string name="trends_coverage_days">%1$d z %2$d dni</string>
+    <string name="trends_show_all_history">Pokaż całą dostępną historię</string>
     <string name="trends_no_reading">Brak odczytu</string>
     <string name="trends_your_typical_range">Twój typowy zakres · %1$s</string>
     <string name="trends_general_range">Zakres ogólny · %1$s</string>

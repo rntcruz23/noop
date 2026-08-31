@@ -119,6 +119,8 @@
     <string name="trends_hrv_full">Herzfrequenzvariabilität</string>
     <string name="trends_resting_hr_full">Ruheherzfrequenz</string>
     <string name="trends_coverage">%1$d von %2$d Nächten</string>
+    <string name="trends_coverage_days">%1$d von %2$d Tagen</string>
+    <string name="trends_show_all_history">Gesamten verfügbaren Verlauf anzeigen</string>
     <string name="trends_no_reading">Kein Messwert</string>
     <string name="trends_your_typical_range">Dein typischer Bereich · %1$s</string>
     <string name="trends_general_range">Allgemeiner Bereich · %1$s</string>

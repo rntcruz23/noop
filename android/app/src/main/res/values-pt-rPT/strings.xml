@@ -108,6 +108,8 @@
     <string name="trends_hrv_full">Variabilidade da frequência cardíaca</string>
     <string name="trends_resting_hr_full">Frequência cardíaca em repouso</string>
     <string name="trends_coverage">%1$d de %2$d noites</string>
+    <string name="trends_coverage_days">%1$d de %2$d dias</string>
+    <string name="trends_show_all_history">Mostrar todo o histórico disponível</string>
     <string name="trends_no_reading">Sem leitura</string>
     <string name="trends_your_typical_range">O teu intervalo habitual · %1$s</string>
     <string name="trends_general_range">Intervalo geral · %1$s</string>

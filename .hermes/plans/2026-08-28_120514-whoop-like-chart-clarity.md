@@ -345,7 +345,7 @@ Plus both Apple app builds from Phase 1.
 # Phase 3: Period honesty, coverage, and missing data across Trends
 
 **Priority:** P0  
-**Status:** Not started  
+**Status:** Source implementation complete; executable and native visual/accessibility verification pending
 **Depends on:** Phase 2
 
 **Objective:** Migrate every remaining Trends card to the window, coverage, and gap behavior proven by HRV/RHR in Phase 2.
@@ -359,28 +359,33 @@ Plus both Apple app builds from Phase 1.
 
 ### Tasks
 
-- [ ] Replace Apple `Range.widening` / `resolve(_:)` and Android `resolveMetric` auto-widening with one global selected window.
-- [ ] Preserve sparse points in that window instead of substituting data from another period.
-- [ ] Add an explicit “Show all available history” action when the selected window has no usable samples.
-- [ ] Apply the Phase 2 coverage helper to each metric: observed days/nights versus expected days.
-- [ ] Apply the approved daily gap rule and Phase 1 date-derived segment IDs without modifying stored data. Cadence-specific intraday rules remain with their producers.
-- [ ] Pass the Phase 1 calendar positions through every migrated Android daily chart so missing days retain their elapsed width.
-- [ ] Keep x-axis boundaries aligned across cards in the same selected period.
-- [ ] Add tests for stale imports, one-point windows, no-data windows, and multi-day gaps.
+- [x] Replace Apple `Range.widening` / `resolve(_:)` and Android `resolveMetric` auto-widening with one global selected window.
+- [x] Preserve sparse points in that window instead of substituting data from another period.
+- [x] Add an explicit “Show all available history” action when the selected window has no usable samples.
+- [x] Apply the Phase 2 coverage helper to each metric: observed days/nights versus expected days.
+- [x] Apply the approved daily gap rule and Phase 1 date-derived segment IDs without modifying stored data. Cadence-specific intraday rules remain with their producers.
+- [x] Pass the Phase 1 calendar positions through every migrated Android daily chart so missing days retain their elapsed width.
+- [x] Keep x-axis boundaries aligned across cards in the same selected period.
+- [x] Add source-level regression fixtures for stale imports, one-point windows, no-data windows, and multi-day gaps. Execution remains pending under the no-build constraint.
 
 ### Acceptance criteria
 
-- [ ] Selecting `M` means the same date interval on every chart.
-- [ ] Sparse metrics say how sparse they are.
-- [ ] No card silently substitutes `3M`, `1Y`, or all-history data.
-- [ ] Lines do not bridge missing intervals.
-- [ ] Explicit all-history navigation remains available.
+- [x] Selecting `M` uses the same date interval on every Trends chart, including training load and the history calendar.
+- [x] Sparse metrics report observed versus expected coverage.
+- [x] No card silently substitutes `3M`, `1Y`, or all-history data.
+- [x] Daily line charts use date-derived segments and do not bridge missing intervals.
+- [x] Explicit all-history navigation remains available when a selected window is empty but older data exists.
 
 ### Completion evidence
 
-- Apple tests: _pending_
-- Android tests: _pending_
-- Screenshot comparison: _pending_
+- Source contract: mirrored `TrendWindow` projections retain exact inclusive calendar bounds, exclude future/non-finite rows, preserve sparse dates, report observed/expected coverage, and expose older-history state.
+- Apple integration: `TrendsView` uses one selected domain for Charge, HRV, resting HR, Effort, Rest, training load display, and the history calendar; `TrendChart` uses daily gap segments and singleton markers.
+- Android integration: `TrendsScreen` projects the same metrics through `TrendWindow`, shares fixed/all-history bounds, carries calendar positions into line and bar rendering, and clips training load/history display to the selected period.
+- Explicit fallback: both platforms expose “Show all available history” only for empty selected windows with older readings.
+- Static review: independent Apple, Android, and parity reviews were completed; reported future-date, source-switch, singleton, calendar, all-history-domain, range-label, and chart-style issues were remediated.
+- Static validation: `git diff --check`, Apple string-catalog JSON parsing, and all Android string-resource XML parsing passed.
+- Tests/builds: not executed after Phase 3 changes because the user prohibited build/test execution. Existing test sources were expanded, but executable verification remains pending.
+- Screenshots/native accessibility: pending; requires macOS/iOS and Android runtime environments.
 
 ---
 

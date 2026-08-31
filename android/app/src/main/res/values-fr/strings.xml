@@ -1656,6 +1656,8 @@
     <string name="trends_hrv_full">Variabilité de la fréquence cardiaque</string>
     <string name="trends_resting_hr_full">Fréquence cardiaque au repos</string>
     <string name="trends_coverage">%1$d nuits sur %2$d</string>
+    <string name="trends_coverage_days">%1$d jours sur %2$d</string>
+    <string name="trends_show_all_history">Afficher tout l’historique disponible</string>
     <string name="trends_no_reading">Aucune mesure</string>
     <string name="trends_your_typical_range">Votre plage habituelle · %1$s</string>
     <string name="trends_general_range">Plage générale · %1$s</string>

@@ -13,13 +13,14 @@ import WhoopStore
 // TSB / "form" (CTL − ATL), surfaced as the headline number and a footer stat.
 //
 // Descriptive only: CTL/ATL/TSB never feed the Readiness level or any score, and the loads are NOOP's
-// daily Effort/strain — NOT TRIMP. Long-horizon by nature, so the card models the full history rather
-// than the Trends range window (14+ contiguous days are needed before anything is drawn).
+// daily Effort/strain — NOT TRIMP. The model consumes full history for warm-up, while the displayed
+// points are clipped to the Trends range window (14+ contiguous days are needed before anything is drawn).
 //
 // Isolated in its own file on purpose: TrendsView already sits near the iOS type-check budget, so this
 // keeps its own inference cost out of that body.
 struct TrainingLoadCard: View {
     let days: [DailyMetric]
+    let displayDomain: ClosedRange<Date>?
 
     // yyyy-MM-dd → Date (en_US_POSIX, UTC) — same keying TrendsView uses so the x-axis matches.
     private static let dayParser: DateFormatter = {
@@ -34,6 +35,7 @@ struct TrainingLoadCard: View {
         let date: Date
         let ctl: Double
         let atl: Double
+        let balance: Double
         var id: Date { date }
     }
 
@@ -41,7 +43,8 @@ struct TrainingLoadCard: View {
     private var rows: [Row] {
         result.points.compactMap { p in
             guard let d = Self.dayParser.date(from: p.day) else { return nil }
-            return Row(date: d, ctl: p.chronicLoad, atl: p.acuteLoad)
+            if let displayDomain, !displayDomain.contains(d) { return nil }
+            return Row(date: d, ctl: p.chronicLoad, atl: p.acuteLoad, balance: p.balance)
         }
     }
 
@@ -62,8 +65,10 @@ struct TrainingLoadCard: View {
         let tl = result
         if !tl.isAvailable {
             unavailableCard(contiguousDays: tl.contiguousDays)
+        } else if rows.isEmpty {
+            noReadingsCard
         } else {
-            let latest = tl.points.last
+            let latest = rows.last
             ChartCard(
                 title: "Training Load",
                 subtitle: subtitle(for: tl),
@@ -77,8 +82,8 @@ struct TrainingLoadCard: View {
                 },
                 footer: {
                     ChartFooter([
-                        ("CTL", latest.map { fmt($0.chronicLoad) } ?? "—"),
-                        ("ATL", latest.map { fmt($0.acuteLoad) } ?? "—"),
+                        ("CTL", latest.map { fmt($0.ctl) } ?? "—"),
+                        ("ATL", latest.map { fmt($0.atl) } ?? "—"),
                         ("Form", latest.map { signed($0.balance) } ?? "—"),
                         ("Days", "\(tl.contiguousDays)"),
                     ])
@@ -105,8 +110,15 @@ struct TrainingLoadCard: View {
                     .foregroundStyle(StrandPalette.strain100)
                     .interpolationMethod(.catmullRom)
             }
+            if rows.count == 1, let row = rows.first {
+                PointMark(x: .value("Day", row.date), y: .value("CTL", row.ctl))
+                    .foregroundStyle(StrandPalette.gold)
+                PointMark(x: .value("Day", row.date), y: .value("ATL", row.atl))
+                    .foregroundStyle(StrandPalette.strain100)
+            }
         }
         .chartYScale(domain: 0...(maxY * 1.08))
+        .modifier(TrainingLoadXDomain(domain: displayDomain))
         .chartYAxis { AxisMarks(position: .leading) }
         .accessibilityLabel(Text("Training load: chronic vs acute"))
     }
@@ -137,6 +149,15 @@ struct TrainingLoadCard: View {
         }
     }
 
+    private var noReadingsCard: some View {
+        ChartCard(
+            title: "Training Load",
+            subtitle: String(localized: "No readings in this window."),
+            chart: { EmptyView() },
+            footer: { EmptyView() }
+        )
+    }
+
     // Honest empty state: name exactly how many consecutive Effort days are still needed.
     private func unavailableCard(contiguousDays: Int) -> some View {
         ChartCard(
@@ -153,5 +174,13 @@ struct TrainingLoadCard: View {
             },
             footer: { EmptyView() }
         )
+    }
+}
+
+private struct TrainingLoadXDomain: ViewModifier {
+    let domain: ClosedRange<Date>?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let domain { content.chartXScale(domain: domain) } else { content }
     }
 }

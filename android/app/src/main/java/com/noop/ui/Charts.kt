@@ -794,6 +794,9 @@ fun BarChart(
     // non-integer — so a metric whose headline is rounded answered "72.4" on tap against a "72" beside
     // it. Same parameter, same default, same fallback as LineChart's.
     formatValue: ((Double) -> String)? = null,
+    // Preserve every observation's calendar position. Dense unpositioned charts may still downsample;
+    // positioned charts keep every bar because collapsing values would desynchronise their dates.
+    xPositions: List<Float>? = null,
 ) {
     val cleanValues = remember(values) { values.map { if (it.isFinite() && it > 0.0) it else 0.0 } }
     // cleanValues ZEROES (never drops) non-finite bars, so indices stay aligned with [values] and the
@@ -861,7 +864,7 @@ fun BarChart(
                 // would desync the highlight + label. Interactive charts carry small bounded counts
                 // (days), so they never hit this path anyway; the downsample targets dense static bars.
                 val maxBars = w.toInt().coerceAtLeast(1)
-                val clean = if (!selectionEnabled && cleanValues.size > maxBars && maxBars >= 1) {
+                val clean = if (xPositions == null && !selectionEnabled && cleanValues.size > maxBars && maxBars >= 1) {
                     meanBucketDownsample(cleanValues, maxBars)
                 } else {
                     cleanValues
@@ -872,7 +875,13 @@ fun BarChart(
                 } else {
                     val topPad = 4f
                     val usableH = (h - topPad).coerceAtLeast(1f)
-                    val slot = w / clean.size
+                    val normalizedPositions = xPositions?.takeIf { it.size == clean.size }
+                    val slot = if (normalizedPositions != null && clean.size > 1) {
+                        normalizedPositions.zipWithNext { a, b -> b - a }
+                            .filter { it > 0f }.minOrNull()?.times(w) ?: (w / clean.size)
+                    } else {
+                        w / clean.size
+                    }
                     val barWidth = (slot * 0.64f).coerceAtLeast(1f)
                     val capRadius = (barWidth / 2f)
                     // Precompute each bar's x centre + top y once.
@@ -882,7 +891,7 @@ fun BarChart(
                         val norm = (v / maxV).toFloat().coerceIn(0f, 1f)
                         val barHeight = (norm * usableH).coerceAtLeast(if (v > 0.0) 1f else 0f)
                         if (barHeight <= 0f) return@forEachIndexed
-                        val cx = slot * i + slot / 2f
+                        val cx = normalizedPositions?.getOrNull(i)?.times(w) ?: (slot * i + slot / 2f)
                         val top = h - barHeight
                         bars.add(BarSeg(cx, top))
                     }

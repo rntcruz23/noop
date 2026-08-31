@@ -142108,6 +142108,18 @@
         }
       }
     },
+    "Show all available history": { "localizations": {
+      "de": { "stringUnit": { "state": "translated", "value": "Gesamten verfügbaren Verlauf anzeigen" } },
+      "en": { "stringUnit": { "state": "translated", "value": "Show all available history" } },
+      "es": { "stringUnit": { "state": "translated", "value": "Mostrar todo el historial disponible" } },
+      "fr": { "stringUnit": { "state": "translated", "value": "Afficher tout l’historique disponible" } },
+      "it": { "stringUnit": { "state": "translated", "value": "Mostra tutta la cronologia disponibile" } },
+      "pl": { "stringUnit": { "state": "translated", "value": "Pokaż całą dostępną historię" } },
+      "pt-PT": { "stringUnit": { "state": "translated", "value": "Mostrar todo o histórico disponível" } },
+      "ru": { "stringUnit": { "state": "translated", "value": "Показать всю доступную историю" } },
+      "zh-Hans": { "stringUnit": { "state": "translated", "value": "显示所有可用历史记录" } },
+      "zh-Hant": { "stringUnit": { "state": "translated", "value": "顯示所有可用歷史記錄" } }
+    } },
     "Show all metrics": {
       "localizations": {
         "de": {

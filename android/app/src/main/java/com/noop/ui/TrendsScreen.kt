@@ -18,10 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.IosShare
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -57,10 +54,16 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.R
+import com.noop.analytics.Baselines
+import com.noop.analytics.MetricCfg
+import com.noop.analytics.TrendWindow
+import com.noop.analytics.VitalBands
 import com.noop.analytics.WeeklyDigestEngine
+import com.noop.ble.SourceCoordinator
 import com.noop.data.DailyMetric
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -72,9 +75,8 @@ import kotlin.math.roundToInt
 // ChartCard, and a uniform set of HRV / Resting HR / Day-strain ChartCards (all
 // Metrics.chartHeight tall), followed by a recovery history strip.
 //
-// Windows are taken relative to the phone's actual local day, with the macOS auto-expand
-// rule: if the selected window holds zero points for a metric, the smallest larger range
-// that does is used and the card caption notes the widening.
+// Windows are taken relative to the phone's actual local day. HRV and resting HR honor the exact
+// selected window; the remaining legacy cards retain the auto-expand behavior until their migration.
 //
 // Data: full history is loaded once via repo.days("my-whoop"); until it arrives the
 // reactive recentDays flow backs the charts, so the screen is never empty when data exists.
@@ -96,25 +98,36 @@ private val LIQUID_HERO_RADIUS: Dp = 26.dp
 fun TrendsScreen(vm: AppViewModel) {
     // Reactive cache (oldest → newest) as the immediate backing.
     val reactiveDays by vm.recentDays.collectAsStateWithLifecycle()
+    val publishedActiveStrapId by vm.activeStrapIdFlow.collectAsStateWithLifecycle()
+    val activeStrapId = publishedActiveStrapId ?: vm.activeStrapId
+    var hrvHistory by remember { mutableStateOf<List<Pair<String, Double?>>>(emptyList()) }
+    var rhrHistory by remember { mutableStateOf<List<Pair<String, Double?>>>(emptyList()) }
+    var activeIsWhoop by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(activeStrapId) {
+        activeIsWhoop = null
+        hrvHistory = emptyList()
+        rhrHistory = emptyList()
+        activeIsWhoop = SourceCoordinator.isWhoop(activeStrapId, vm.pairedDevices())
+    }
 
     // Full history loaded once for the long (1Y / ALL) ranges; falls back to the flow
     // until it lands so the screen is populated on first frame when any data exists.
     var fullHistory by remember { mutableStateOf<List<DailyMetric>?>(null) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(activeStrapId) {
         // Merged: imported WHOOP days win; on-device computed days gap-fill the trends. Reads the registry's
         // ACTIVE strap id so daysMerged resolves the active-id ∪ canonical "my-whoop" union (SPINE / #814) ,
         // a re-added strap's data and the canonical import both surface; a single-WHOOP install is unchanged.
-        fullHistory = vm.repo.daysMerged(vm.activeStrapId)
+        fullHistory = vm.repo.daysMerged(activeStrapId)
     }
     val days = fullHistory ?: reactiveDays
 
     // Effort display scale (#268) , routes the Effort small-multiple's numbers + unit. Display-only.
-    val effortScale = UnitPrefs.effortScale(LocalContext.current)
+    val trendsCtx = LocalContext.current
+    val effortScale = UnitPrefs.effortScale(trendsCtx)
 
     // Day-cycle sky backdrop (#698). Default ON. When off, Trends drops the liquid sky and the scaffold
     // paints the plain dark surface canvas instead. SharedPreferences isn't reactive, so this is read once
     // into local state (mirrors Today's showDayCycleBackground gate).
-    val trendsCtx = LocalContext.current
     val showDayCycleBackground = remember { NoopPrefs.showDayCycleBackground(trendsCtx) }
     // Sky-behind-cards (#434 family): when on, the sky fills the whole viewport so the transparent
     // cards reveal it the whole way down, exactly like Today and the metric-detail screens.
@@ -137,8 +150,38 @@ fun TrendsScreen(vm: AppViewModel) {
     // cheap memoized resolves (no-ops over an empty `days`), so the empty branch below simply ignores
     // them , same as Intelligence's hoisted range/filter. Mirrors the eager body's per-composition resolve.
     val recovery = remember(days, range) { resolveMetric(days, range) { it.recovery } }
-    val hrv = remember(days, range) { resolveMetric(days, range) { it.avgHrv } }
-    val rhr = remember(days, range) { resolveMetric(days, range) { it.restingHr?.toDouble() } }
+    // HRV/RHR are the Phase-2 reference cards: these project the exact selected calendar window
+    // ending today and never widen to make a sparse chart look fuller.
+    val todayKey = LocalDate.now().toString()
+    val hrvEpoch = NoopPrefs.of(trendsCtx).getLong(Baselines.hrvBaselineEpochKey, 0L).toDouble()
+    val recoveryEpoch = NoopPrefs.of(trendsCtx).getLong(Baselines.recoveryBaselineEpochKey, 0L).toDouble()
+    LaunchedEffect(activeStrapId, activeIsWhoop, days) {
+        if (activeIsWhoop != true) {
+            hrvHistory = emptyList()
+            rhrHistory = emptyList()
+        } else {
+            hrvHistory = runCatching {
+                vm.repo.resolvedSeries("hrv", "my-whoop", "0000-00-00", "9999-99-99",
+                    strapDeviceId = activeStrapId).values.map { it.first to it.second }
+            }.getOrDefault(emptyList())
+            rhrHistory = runCatching {
+                vm.repo.resolvedSeries("rhr", "my-whoop", "0000-00-00", "9999-99-99",
+                    strapDeviceId = activeStrapId).values.map { it.first to it.second }
+            }.getOrDefault(emptyList())
+        }
+    }
+    val hrvTrend = remember(hrvHistory, range, todayKey, hrvEpoch) {
+        vitalTrendSummary(
+            hrvHistory, todayKey, range.days,
+            40.0..120.0, Baselines.hrvCfg, hrvEpoch,
+        )
+    }
+    val rhrTrend = remember(rhrHistory, range, todayKey, recoveryEpoch) {
+        vitalTrendSummary(
+            rhrHistory, todayKey, range.days,
+            40.0..60.0, Baselines.restingHRCfg, recoveryEpoch,
+        )
+    }
     val strain = remember(days, range) { resolveMetric(days, range) { it.strain } }
     // Rest = the sleep_performance COMPOSITE (0–100) , the SAME metric the Today Rest score/tile and the
     // Sleep Rest-detail plot (#614 follow-up), NOT raw efficiency, which is a different number under the
@@ -174,7 +217,7 @@ fun TrendsScreen(vm: AppViewModel) {
         // (Today / metric-detail parity — the same two prefs drive the same two behaviours everywhere).
         fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
-        if (days.isEmpty()) {
+        if (days.isEmpty() && hrvHistory.isEmpty() && rhrHistory.isEmpty()) {
             item { EmptyTrends() }
             return@LazyScreenScaffold
         }
@@ -280,18 +323,16 @@ fun TrendsScreen(vm: AppViewModel) {
                 verticalArrangement = Arrangement.spacedBy(Metrics.gap),
             ) {
                 SectionHeader(stringResource(R.string.trends_daily_signals), overline = stringResource(R.string.nav_trends))
-                MetricTrendCard(
+                VitalTrendCard(
                     title = stringResource(R.string.trends_hrv_full), unit = "ms",
                     color = Palette.metricPurple,
-                    higherIsBetter = true,
-                    resolved = hrv,
+                    summary = hrvTrend,
                     fmt = { "${it.roundToInt()}" },
                 )
-                MetricTrendCard(
+                VitalTrendCard(
                     title = stringResource(R.string.trends_resting_hr_full), unit = "bpm",
                     color = Palette.metricRose,
-                    higherIsBetter = false,
-                    resolved = rhr,
+                    summary = rhrTrend,
                     fmt = { "${it.roundToInt()}" },
                 )
                 MetricTrendCard(
@@ -951,9 +992,174 @@ internal fun trendAxisLabels(dates: List<String>): List<TrendAxisLabel> = when {
 /** ISO "yyyy-MM-dd" → "d MMM"; falls back to the raw string (or "" when null) if it doesn't parse. */
 private fun prettyAxisDate(day: String?): String =
     day?.let {
-        runCatching { LocalDate.parse(it).format(DateTimeFormatter.ofPattern("d MMM", Locale.US)) }
+        runCatching { LocalDate.parse(it).format(DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())) }
             .getOrDefault(it)
     }.orEmpty()
+
+internal data class VitalTrendSummary(
+    val window: TrendWindow.Result,
+    val presentations: List<VitalBands.Presentation>,
+    val xPositions: List<Float>?,
+    val previousPoints: List<TrendWindow.Point>,
+    val allHistory: Boolean,
+)
+
+/** Pure UI projection for the HRV/RHR reference cards. Every point's range is evaluated from
+ * calendar-padded history strictly before that point, so selecting an older reading cannot leak future
+ * observations into its personal context. */
+internal fun vitalTrendSummary(
+    rows: List<Pair<String, Double?>>,
+    todayKey: String,
+    dayCount: Int?,
+    populationRange: ClosedFloatingPointRange<Double>,
+    cfg: MetricCfg,
+    baselineEpoch: Double = 0.0,
+): VitalTrendSummary {
+    val window = TrendWindow.project(rows, todayKey, dayCount)
+    val presentations = window.points.map { point ->
+        VitalBands.presentation(point.value, rows, point.day, populationRange, cfg, baselineEpoch)
+    }
+    val positions = window.startDay?.let { start ->
+        normalizedCalendarXPositions(window.points.map { it.day }, start, window.endDay)
+    }
+    return VitalTrendSummary(
+        window, presentations, positions, TrendWindow.previousPoints(rows, todayKey, dayCount), dayCount == null,
+    )
+}
+
+/** Labels summary charts at the selected calendar boundaries, not merely at observed samples. */
+internal fun vitalAxisLabels(startDay: String?, endDay: String): List<TrendAxisLabel> {
+    val start = startDay?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return emptyList()
+    val end = runCatching { LocalDate.parse(endDay) }.getOrNull() ?: return emptyList()
+    if (end.isBefore(start)) return emptyList()
+    if (start == end) return listOf(TrendAxisLabel(start.toString(), TrendAxisAnchor.CENTER))
+    val span = ChronoUnit.DAYS.between(start, end)
+    if (span == 1L) return listOf(
+        TrendAxisLabel(start.toString(), TrendAxisAnchor.START),
+        TrendAxisLabel(end.toString(), TrendAxisAnchor.END),
+    )
+    return listOf(
+        TrendAxisLabel(start.toString(), TrendAxisAnchor.START),
+        TrendAxisLabel(start.plusDays(span / 2).toString(), TrendAxisAnchor.CENTER),
+        TrendAxisLabel(end.toString(), TrendAxisAnchor.END),
+    )
+}
+
+/** HRV/RHR summary grammar: latest (or selected) reading first, explicit range context, compact
+ * observed/expected coverage, a calendar-spaced gap-safe summary line, and no stats footer. */
+@Composable
+private fun VitalTrendCard(
+    title: String,
+    unit: String,
+    color: Color,
+    summary: VitalTrendSummary,
+    fmt: (Double) -> String,
+) {
+    var selectedIndex by remember(summary.window.points) { mutableStateOf<Int?>(null) }
+    val points = summary.window.points
+    val displayIndex = selectedIndex?.takeIf { it in points.indices } ?: points.lastIndex
+    val displayed = points.getOrNull(displayIndex)
+    val presentation = summary.presentations.getOrNull(displayIndex)
+    val values = points.map { it.value }
+    val dates = points.map { it.day }
+    val displayedDate = displayed?.day?.let(::prettyAxisDate)
+    val state = presentation?.let { vitalStateText(it.position) }
+    val coverage = if (summary.allHistory) {
+        stringResource(R.string.trends_coverage_all, summary.window.observed, summary.window.expected)
+    } else {
+        stringResource(R.string.trends_coverage, summary.window.observed, summary.window.expected)
+    }
+    NoopCard(padding = Metrics.cardPadding) {
+        Column(verticalArrangement = Arrangement.spacedBy(Metrics.space10)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Overline(title)
+                    Text(
+                        displayedDate ?: stringResource(R.string.trends_no_reading),
+                        style = NoopType.footnote,
+                        color = Palette.textTertiary,
+                    )
+                }
+                Text(
+                    displayed?.let { stringResource(R.string.trends_value_with_unit, fmt(it.value), unit) } ?: EM_DASH,
+                    style = NoopType.bodyNumber,
+                    color = Palette.textPrimary,
+                )
+            }
+            if (presentation != null) {
+                val bounds = "${fmt(presentation.lowerBound)}–${fmt(presentation.upperBound)} $unit"
+                Text(
+                    "$state · " + stringResource(
+                        if (presentation.basis == VitalBands.Basis.PERSONAL) R.string.trends_your_typical_range
+                        else R.string.trends_general_range,
+                        bounds,
+                    ),
+                    style = NoopType.footnote,
+                    color = Palette.textSecondary,
+                )
+            }
+            Text(
+                coverage,
+                style = NoopType.footnote,
+                color = Palette.textTertiary,
+            )
+            if (values.isNotEmpty()) {
+                LineChart(
+                    values = values,
+                    modifier = Modifier.fillMaxWidth().height(Metrics.chartHeight),
+                    color = color,
+                    selectionEnabled = true,
+                    selectionLabels = dates.map(::prettyAxisDate),
+                    formatValue = fmt,
+                    xPositions = summary.xPositions,
+                    dayKeys = dates,
+                    gapPolicyDaily = true,
+                    rangeBand = presentation?.let { it.lowerBound..it.upperBound },
+                    mode = LineChartMode.SUMMARY,
+                    accessibilitySummary = stringResource(
+                        R.string.trends_chart_accessibility,
+                        title,
+                        displayed?.let { stringResource(R.string.trends_value_with_unit, fmt(it.value), unit) }
+                            ?: stringResource(R.string.trends_no_reading),
+                        displayedDate ?: stringResource(R.string.trends_no_reading),
+                        state ?: stringResource(R.string.trends_no_reading),
+                        coverage,
+                    ),
+                    onSelectionChange = { selectedIndex = it },
+                )
+                val axisLabels = vitalAxisLabels(summary.window.startDay, summary.window.endDay)
+                if (axisLabels.isNotEmpty()) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        axisLabels.forEach { label ->
+                            Text(
+                                prettyAxisDate(label.day),
+                                style = NoopType.footnote,
+                                color = Palette.textTertiary,
+                                modifier = Modifier.weight(1f),
+                                textAlign = when (label.anchor) {
+                                    TrendAxisAnchor.START -> TextAlign.Start
+                                    TrendAxisAnchor.CENTER -> TextAlign.Center
+                                    TrendAxisAnchor.END -> TextAlign.End
+                                },
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
+            } else {
+                SparsePlaceholder()
+            }
+        }
+    }
+}
+
+@Composable
+internal fun vitalStateText(position: VitalBands.Position): String = stringResource(when (position) {
+    VitalBands.Position.BELOW -> R.string.trends_state_below
+    VitalBands.Position.WITHIN -> R.string.trends_state_within
+    VitalBands.Position.ABOVE -> R.string.trends_state_above
+    VitalBands.Position.NO_DATA -> R.string.trends_no_reading
+})
 
 /** A labelled metric-trend card built from a [ResolvedMetric] with mean / min / max. */
 @Composable

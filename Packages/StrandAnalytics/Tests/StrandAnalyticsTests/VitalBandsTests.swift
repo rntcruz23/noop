@@ -94,7 +94,149 @@ final class VitalBandsTests: XCTestCase {
 
     func testCalendarSeriesDropsMalformedKeysEmptyIsEmpty() {
         XCTAssertEqual(VitalBands.calendarSeries([]), [])
-        let rows: [(day: String, value: Double?)] = [("not-a-date", 1.0), ("2026-06-01", 50.0)]
+        let rows: [(day: String, value: Double?)] = [
+            ("not-a-date", 1.0), ("2026-6-01", 2.0), ("2026-02-30", 3.0),
+            ("2026-06-01T00:00:00Z", 4.0), ("2026-06-01", 50.0),
+        ]
         XCTAssertEqual(VitalBands.calendarSeries(rows), [50.0])
+    }
+
+    func testCalendarSeriesDuplicateDaysUseLastWriteIncludingNil() {
+        let rows: [(day: String, value: Double?)] = [
+            ("2026-06-01", 40), ("2026-06-01", 41), ("2026-06-02", 42),
+            ("2026-06-02", nil),
+        ]
+        XCTAssertEqual(VitalBands.calendarSeries(rows), [41, nil])
+    }
+
+    func testNonfiniteCurrentIsOutOfRangeButNeverPresentedWithin() {
+        for value in [Double.nan, .infinity, -.infinity] {
+            let result = VitalBands.presentation(value: value, history: Array(repeating: 50, count: 14),
+                                                 populationRange: hrvPop, cfg: hrvCfg)
+            XCTAssertEqual(result.band, .outOfRange)
+            XCTAssertEqual(result.position, .noData)
+            XCTAssertEqual(VitalBands.presentation(value: value, history: [],
+                                                   populationRange: 95...100, cfg: nil).position, .noData)
+        }
+    }
+
+    func testNonfiniteHistoryDoesNotCountTowardBaseline() {
+        let history: [Double?] = Array(repeating: 50, count: 13) + [.nan, .infinity, -.infinity]
+        let result = VitalBands.presentation(value: 50, history: history,
+                                             populationRange: hrvPop, cfg: hrvCfg)
+        XCTAssertEqual(result.nights, 13)
+        XCTAssertEqual(result.basis, .population)
+    }
+
+    func testRestingHeartRateLowAndHighDirections() {
+        let history: [Double?] = Array(repeating: 50, count: 14)
+        XCTAssertEqual(VitalBands.presentation(value: 40, history: history,
+                                               populationRange: 40...60,
+                                               cfg: Baselines.restingHRCfg).position, .below)
+        XCTAssertEqual(VitalBands.presentation(value: 60, history: history,
+                                               populationRange: 40...60,
+                                               cfg: Baselines.restingHRCfg).position, .above)
+    }
+
+    func testRestingHeartRatePhysiologicalBoundariesAreInclusive() {
+        for value in [30.0, 120.0] {
+            XCTAssertEqual(VitalBands.band(value: value, history: [], populationRange: 30...120,
+                                           cfg: Baselines.restingHRCfg).band, .inRange)
+        }
+        for value in [29.0, 121.0] {
+            XCTAssertEqual(VitalBands.band(value: value, history: [], populationRange: 30...120,
+                                           cfg: Baselines.restingHRCfg).band, .outOfRange)
+        }
+    }
+
+    func testPresentationExposesTrustedPersonalBoundsAndDirection() {
+        let history: [Double?] = Array(repeating: 50.0, count: 14)
+        let result = VitalBands.presentation(value: 55, history: history,
+                                             populationRange: hrvPop, cfg: hrvCfg)
+        XCTAssertEqual(result.basis, .personal)
+        XCTAssertEqual(result.status, .trusted)
+        XCTAssertEqual(result.center!, 50, accuracy: 0.000_001)
+        XCTAssertEqual(result.lowerBound, 37.47, accuracy: 0.000_001)
+        XCTAssertEqual(result.upperBound, 62.53, accuracy: 0.000_001)
+        XCTAssertEqual(result.position, .within)
+        XCTAssertEqual(result.nights, 14)
+    }
+
+    func testPresentationUsesNamedPopulationFallbackWhileProvisional() {
+        let result = VitalBands.presentation(value: 35, history: Array(repeating: 35.0, count: 10),
+                                             populationRange: hrvPop, cfg: hrvCfg)
+        XCTAssertEqual(result.basis, .population)
+        XCTAssertEqual(result.status, .provisional)
+        XCTAssertNil(result.center)
+        XCTAssertEqual(result.lowerBound, 40)
+        XCTAssertEqual(result.upperBound, 120)
+        XCTAssertEqual(result.position, .below)
+    }
+
+    func testPresentationPadsTrailingGapThroughDisplayedDay() {
+        let rows = (1...20).map { day in
+            (day: String(format: "2026-06-%02d", day), value: Optional(50.0))
+        }
+        let result = VitalBands.presentation(value: 50, historyRows: rows,
+                                             displayedDay: "2026-07-06",
+                                             populationRange: hrvPop, cfg: hrvCfg)
+        XCTAssertEqual(result.status, .stale)
+        XCTAssertEqual(result.basis, .population)
+    }
+
+    func testPresentationMatchesSharedExpectedFixture() {
+        let cases: [(String, VitalBands.Presentation)] = [
+            ("cold", VitalBands.presentation(value: 35, history: Array(repeating: 35, count: 3),
+                                              populationRange: hrvPop, cfg: hrvCfg)),
+            ("provisional", VitalBands.presentation(value: 35, history: Array(repeating: 35, count: 10),
+                                                    populationRange: hrvPop, cfg: hrvCfg)),
+            ("trusted", VitalBands.presentation(value: 55, history: Array(repeating: 50, count: 14),
+                                                populationRange: hrvPop, cfg: hrvCfg)),
+            ("stale", VitalBands.presentation(value: 50,
+                                              history: Array(repeating: 50, count: 20) + Array(repeating: nil, count: 15),
+                                              populationRange: hrvPop, cfg: hrvCfg)),
+        ]
+        let actual = cases.map { name, value in
+            [name, value.band.rawValue, value.basis.rawValue, value.status?.rawValue ?? "null",
+             value.center.map { String(format: "%.3f", $0) } ?? "null",
+             String(format: "%.3f", value.lowerBound), String(format: "%.3f", value.upperBound),
+             value.position.rawValue, String(value.nights)].joined(separator: "|")
+        }.joined(separator: "\n")
+        let expected = """
+        cold|outOfRange|population|calibrating|null|40.000|120.000|below|3
+        provisional|outOfRange|population|provisional|null|40.000|120.000|below|10
+        trusted|inRange|personal|trusted|50.000|37.470|62.530|within|14
+        stale|inRange|population|stale|null|40.000|120.000|within|20
+        """
+        XCTAssertEqual(actual, expected)
+    }
+
+    func testPresentationDoesNotOverwritePreviousNightWhenPadding() {
+        let rows = (1...14).map { day in
+            (day: String(format: "2026-06-%02d", day), value: Optional(50.0))
+        }
+        let result = VitalBands.presentation(value: 50, historyRows: rows,
+                                             displayedDay: "2026-06-15",
+                                             populationRange: hrvPop, cfg: hrvCfg)
+        XCTAssertEqual(result.status, .trusted)
+        XCTAssertEqual(result.nights, 14)
+        XCTAssertEqual(result.basis, .personal)
+    }
+
+    func testPresentationHonorsManualRecalibrationEpoch() {
+        let rows = (1...14).map { day in
+            (day: String(format: "2026-06-%02d", day), value: Optional(50.0))
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let epoch = calendar.date(from: DateComponents(year: 2026, month: 6, day: 10))!
+            .timeIntervalSince1970
+        let result = VitalBands.presentation(value: 50, historyRows: rows,
+                                             displayedDay: "2026-06-15",
+                                             populationRange: hrvPop, cfg: hrvCfg,
+                                             baselineEpoch: epoch)
+        XCTAssertEqual(result.status, .calibrating)
+        XCTAssertEqual(result.nights, 5)
+        XCTAssertEqual(result.basis, .population)
     }
 }

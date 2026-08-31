@@ -33,6 +33,20 @@ public enum VitalBands {
         }
     }
 
+    public enum Position: String, Equatable, Sendable { case below, within, above, noData }
+
+    /// Read-only context for presenting a vital without changing its scoring classification.
+    public struct Presentation: Equatable, Sendable {
+        public let band: Band
+        public let basis: Basis
+        public let status: BaselineStatus?
+        public let center: Double?
+        public let lowerBound: Double
+        public let upperBound: Double
+        public let position: Position
+        public let nights: Int
+    }
+
     /// |z| at or below this is in-range vs the personal baseline — about 95% of the user's
     /// own normal nights. `Baselines.deviation`'s own `inNormalRange` (|z| <= 1) would flag
     /// roughly a third of normal nights, which is far too noisy for a passive at-a-glance tile.
@@ -51,24 +65,113 @@ public enum VitalBands {
                             history: [Double?],
                             populationRange: ClosedRange<Double>,
                             cfg: MetricCfg?) -> Result {
-        guard let value else { return Result(band: .noData, basis: .population, nights: 0) }
+        let context = presentation(value: value, history: history,
+                                   populationRange: populationRange, cfg: cfg)
+        return Result(band: context.band, basis: context.basis, nights: context.nights)
+    }
+
+    /// Exposes the exact bounds and baseline state used by `band` for presentation-only context.
+    public static func presentation(value: Double?,
+                                    history: [Double?],
+                                    populationRange: ClosedRange<Double>,
+                                    cfg: MetricCfg?) -> Presentation {
+        guard let value else {
+            return Presentation(band: .noData, basis: .population, status: nil, center: nil,
+                                lowerBound: populationRange.lowerBound,
+                                upperBound: populationRange.upperBound,
+                                position: .noData, nights: 0)
+        }
         guard let cfg else {
-            return Result(band: populationRange.contains(value) ? .inRange : .outOfRange,
-                          basis: .population, nights: 0)
+            let position = position(of: value, in: populationRange)
+            return Presentation(band: position == .within ? .inRange : .outOfRange,
+                                basis: .population, status: nil, center: nil,
+                                lowerBound: populationRange.lowerBound,
+                                upperBound: populationRange.upperBound,
+                                position: position, nights: 0)
         }
         let state = Baselines.foldHistory(history, cfg: cfg)
-        // Absolute-plausibility outer guard: a value outside the physiological bounds is
-        // out-of-range no matter how wide the personal spread happens to be.
-        guard cfg.minVal <= value && value <= cfg.maxVal else {
-            return Result(band: .outOfRange, basis: .population, nights: state.nValid)
+        let physiologicallyValid = cfg.minVal <= value && value <= cfg.maxVal
+        if state.trusted && physiologicallyValid {
+            let radius = sigmaK * 1.253 * state.spread
+            let range = max(cfg.minVal, state.baseline - radius)...min(cfg.maxVal, state.baseline + radius)
+            let position = position(of: value, in: range)
+            return Presentation(band: position == .within ? .inRange : .outOfRange,
+                                basis: .personal, status: state.status, center: state.baseline,
+                                lowerBound: range.lowerBound, upperBound: range.upperBound,
+                                position: position, nights: state.nValid)
         }
-        if state.trusted {   // >= 14 valid nights and not stale
-            let z = Baselines.deviation(value, state: state).z
-            return Result(band: abs(z) <= sigmaK ? .inRange : .outOfRange,
-                          basis: .personal, nights: state.nValid)
+        let position = position(of: value, in: populationRange)
+        return Presentation(band: physiologicallyValid && position == .within ? .inRange : .outOfRange,
+                            basis: .population, status: state.status, center: nil,
+                            lowerBound: populationRange.lowerBound,
+                            upperBound: populationRange.upperBound,
+                            position: position, nights: state.nValid)
+    }
+
+    /// Calendar-pads resolved history strictly before `displayedDay`, including a trailing wear gap.
+    public static func presentation(value: Double?,
+                                    historyRows: [(day: String, value: Double?)],
+                                    displayedDay: String,
+                                    populationRange: ClosedRange<Double>,
+                                    cfg: MetricCfg?,
+                                    baselineEpoch: Double = 0) -> Presentation {
+        guard let displayed = parseDay(displayedDay),
+              let prior = utcCalendar.date(byAdding: .day, value: -1, to: displayed) else {
+            return presentation(value: value, history: [], populationRange: populationRange, cfg: cfg)
         }
-        return Result(band: populationRange.contains(value) ? .inRange : .outOfRange,
-                      basis: .population, nights: state.nValid)
+        let validRows = historyRows.filter { row in
+            guard let date = parseDay(row.day) else { return false }
+            return date < displayed
+        }
+        var paddedRows = validRows
+        let priorKey = dayFormatter.string(from: prior)
+        if !validRows.contains(where: { $0.day == priorKey }) {
+            paddedRows.append((day: priorKey, value: nil))
+        }
+        let rows = calendarRows(paddedRows)
+        guard let cfg, baselineEpoch > 0 else {
+            return presentation(value: value, history: rows.map { $0.value },
+                                populationRange: populationRange, cfg: cfg)
+        }
+        let state = Baselines.foldHistory(rows.map { $0.value }, dayKeys: rows.map { $0.day },
+                                          cfg: cfg, baselineEpoch: baselineEpoch)
+        return presentation(value: value, state: state,
+                            populationRange: populationRange, cfg: cfg)
+    }
+
+    private static func presentation(value: Double?, state: BaselineState,
+                                     populationRange: ClosedRange<Double>,
+                                     cfg: MetricCfg) -> Presentation {
+        guard let value else {
+            return Presentation(band: .noData, basis: .population, status: nil, center: nil,
+                                lowerBound: populationRange.lowerBound,
+                                upperBound: populationRange.upperBound,
+                                position: .noData, nights: 0)
+        }
+        let physiologicallyValid = cfg.minVal <= value && value <= cfg.maxVal
+        if state.trusted && physiologicallyValid {
+            let radius = sigmaK * 1.253 * state.spread
+            let range = max(cfg.minVal, state.baseline - radius)...min(cfg.maxVal, state.baseline + radius)
+            let pointPosition = position(of: value, in: range)
+            return Presentation(band: pointPosition == .within ? .inRange : .outOfRange,
+                                basis: .personal, status: state.status, center: state.baseline,
+                                lowerBound: range.lowerBound, upperBound: range.upperBound,
+                                position: pointPosition, nights: state.nValid)
+        }
+        let pointPosition = position(of: value, in: populationRange)
+        return Presentation(band: physiologicallyValid && pointPosition == .within ? .inRange : .outOfRange,
+                            basis: .population, status: state.status, center: nil,
+                            lowerBound: populationRange.lowerBound,
+                            upperBound: populationRange.upperBound,
+                            position: pointPosition, nights: state.nValid)
+    }
+
+    private static func position(of value: Double,
+                                 in range: ClosedRange<Double>) -> Position {
+        guard value.isFinite else { return .noData }
+        if value < range.lowerBound { return .below }
+        if value > range.upperBound { return .above }
+        return .within
     }
 
     // MARK: - Skin temp (mixed semantics: absolute °C from CSV import vs ±°C on-device deviation)
@@ -100,27 +203,48 @@ public enum VitalBands {
 
     // MARK: - Calendar padding
 
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.isLenient = false
+        return formatter
+    }()
+
+    private static func parseDay(_ key: String) -> Date? {
+        guard let date = dayFormatter.date(from: key), dayFormatter.string(from: date) == key else { return nil }
+        return date
+    }
+
+    private static var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
     /// Calendar-align (day, value) rows keyed "yyyy-MM-dd" into a nightly series with nil for
     /// every absent day, so the baseline's staleness logic actually sees wear gaps. Stored rows
     /// simply skip days the strap wasn't worn; without padding, a user returning after two months
     /// would be banded against an ancient still-"trusted" baseline. Malformed day keys are dropped.
     /// Pure: fixed UTC math over the day keys only (no device clock).
     public static func calendarSeries(_ rows: [(day: String, value: Double?)]) -> [Double?] {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(secondsFromGMT: 0)
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(secondsFromGMT: 0)!
-        let dates = rows.compactMap { f.date(from: $0.day) }
+        calendarRows(rows).map { $0.value }
+    }
+
+    private static func calendarRows(_ rows: [(day: String, value: Double?)]) -> [(day: String, value: Double?)] {
+        let f = dayFormatter
+        let cal = utcCalendar
+        let dates = rows.compactMap { parseDay($0.day) }
         guard let first = dates.min(), let last = dates.max() else { return [] }
         // Last write wins for a duplicated day key, matching the dictionary the Kotlin port builds.
         var byDay: [String: Double?] = [:]
-        for r in rows where f.date(from: r.day) != nil { byDay[r.day] = r.value }
-        var out: [Double?] = []
+        for r in rows where parseDay(r.day) != nil { byDay[r.day] = r.value }
+        var out: [(day: String, value: Double?)] = []
         var d = first
         while d <= last {
-            out.append(byDay[f.string(from: d)] ?? nil)
+            let day = f.string(from: d)
+            out.append((day: day, value: byDay[day] ?? nil))
             guard let next = cal.date(byAdding: .day, value: 1, to: d) else { break }
             d = next
         }

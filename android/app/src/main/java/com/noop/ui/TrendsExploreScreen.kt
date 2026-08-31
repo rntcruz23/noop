@@ -41,10 +41,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.R
+import com.noop.analytics.Baselines
+import com.noop.analytics.MetricCfg
+import com.noop.analytics.TrendWindow
+import com.noop.analytics.VitalBands
+import com.noop.ble.SourceCoordinator
 import com.noop.data.DailyMetric
 import com.noop.data.MoodStore
 import com.noop.data.WhoopRepository
@@ -68,10 +74,9 @@ import kotlin.math.roundToInt
 // We expose exactly those as the picker, so there is no faked data: every chartable
 // metric maps to a real cached series.
 //
-// macOS "sparse-window" rule preserved: a window is taken RELATIVE TO THE LATEST data
-// point (not "now"); if the selected window holds ≥1 point we show it, and only when it
-// holds ZERO points do we auto-widen to the smallest larger range that does. The hero
-// always reads the latest available point + "as of <day>".
+// The legacy metrics preserve macOS's latest-relative sparse-window rule. HRV/RHR use the
+// Phase-2 detail contract instead: an exact calendar window ending today with no widening,
+// and selection replaces the hero value/date.
 
 // MARK: - Window range (W / M / 3M / 6M / 1Y / ALL)
 
@@ -250,7 +255,8 @@ fun TrendsExploreScreen(vm: AppViewModel) {
     // The registry's ACTIVE strap id (SPINE / #814): the daysMerged / metricKeys reads resolve the
     // active-id ∪ canonical "my-whoop" union, so a re-added strap's data and the canonical import both
     // surface. A single-WHOOP install resolves this to "my-whoop", so the reads are byte-identical there.
-    val deviceId = vm.activeStrapId
+    val publishedActiveStrapId by vm.activeStrapIdFlow.collectAsStateWithLifecycle()
+    val deviceId = publishedActiveStrapId ?: vm.activeStrapId
     val recentDays by vm.recentDays.collectAsStateWithLifecycle()
 
     // #797 follow-up (Explore 'All' truncation): `recentDays` is the BOUNDED dashboard flow (capped at
@@ -310,7 +316,8 @@ fun TrendsExploreScreen(vm: AppViewModel) {
 
     // Effort display scale (#268) , carried on the selected spec so the Effort column's value + unit
     // follow the toggle through every read-out (hero, footer stats, Y-axis). Display-only.
-    val effortScale = UnitPrefs.effortScale(LocalContext.current)
+    val context = LocalContext.current
+    val effortScale = UnitPrefs.effortScale(context)
 
     var selectedKey by remember { mutableStateOf(builtInMetrics.first().key) }
     var range by remember { mutableStateOf(ExploreRange.Month) }
@@ -327,9 +334,25 @@ fun TrendsExploreScreen(vm: AppViewModel) {
     val builtInDays = if (range.reachesDeep) (fullHistory ?: recentDays) else recentDays
     var seriesKeyLoaded by remember { mutableStateOf<String?>(null) }
     var loadedSeries by remember { mutableStateOf<List<SeriesPoint>>(emptyList()) }
-    LaunchedEffect(selected.key, builtInDays) {
+    var activeIsWhoop by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(deviceId) {
+        activeIsWhoop = null
+        loadedSeries = emptyList()
+        seriesKeyLoaded = null
+        activeIsWhoop = SourceCoordinator.isWhoop(deviceId, vm.pairedDevices())
+    }
+    val phaseTwoVital = activeIsWhoop == true && exploreVitalConfig(selected.key) != null
+    LaunchedEffect(selected.key, builtInDays, deviceId, phaseTwoVital) {
         val pick = selected.dailyPick
-        if (pick != null) {
+        if (phaseTwoVital) {
+            loadedSeries = runCatching {
+                vm.repo.resolvedSeries(
+                    selected.key, "my-whoop", "0000-00-00", "9999-99-99",
+                    strapDeviceId = deviceId,
+                ).values.map { SeriesPoint(it.first, it.second) }
+            }.getOrDefault(emptyList())
+            seriesKeyLoaded = selected.key
+        } else if (pick != null) {
             loadedSeries = builtInDays.mapNotNull { d ->
                 pick(d)?.takeIf { it.isFinite() }?.let { SeriesPoint(d.day, it) }
             }
@@ -364,13 +387,32 @@ fun TrendsExploreScreen(vm: AppViewModel) {
         }
     }
 
-    // Resolve the active window with the macOS sparse-widen rule.
+    // HRV/RHR use an exact, today-anchored calendar window. Other metrics retain Explore's
+    // established latest-relative point-count window and sparse widening behavior.
     val series = if (seriesKeyLoaded == selected.key) loadedSeries else emptyList()
-    val effectiveRange = remember(series, range) {
-        if (series.isEmpty()) range
+    val vitalConfig = if (phaseTwoVital) exploreVitalConfig(selected.key) else null
+    val todayKey = LocalDate.now().toString()
+    val vitalEpoch = vitalConfig?.let { NoopPrefs.of(context).getLong(it.epochKey, 0L).toDouble() }
+    val vitalSummary = remember(series, range, vitalConfig, todayKey, vitalEpoch) {
+        vitalConfig?.let { config ->
+            vitalTrendSummary(
+                rows = series.map { it.day to it.value },
+                todayKey = todayKey,
+                dayCount = range.days,
+                populationRange = config.populationRange,
+                cfg = config.cfg,
+                baselineEpoch = vitalEpoch ?: 0.0,
+            )
+        }
+    }
+    val effectiveRange = remember(series, range, vitalSummary) {
+        if (vitalSummary != null || series.isEmpty()) range
         else range.widening.firstOrNull { series.windowFor(it).isNotEmpty() } ?: ExploreRange.All
     }
-    val windowed = remember(series, effectiveRange) { series.windowFor(effectiveRange) }
+    val windowed = remember(series, effectiveRange, vitalSummary) {
+        vitalSummary?.window?.points?.map { SeriesPoint(it.day, it.value) }
+            ?: series.windowFor(effectiveRange)
+    }
     val fellBack = effectiveRange != range
 
     // PERF (#707): lazy scaffold so only the on-screen rows (the hero chart card especially) compose +
@@ -447,6 +489,7 @@ fun TrendsExploreScreen(vm: AppViewModel) {
             effectiveRange = effectiveRange,
             range = range,
             fellBack = fellBack,
+            vitalSummary = vitalSummary,
         )
         }
 
@@ -457,6 +500,8 @@ fun TrendsExploreScreen(vm: AppViewModel) {
             series = series,
             windowed = windowed,
             effectiveRange = effectiveRange,
+            latestFromWindow = vitalSummary != null,
+            previousOverride = vitalSummary?.previousPoints?.map { SeriesPoint(it.day, it.value) },
         )
         }
     }
@@ -610,12 +655,22 @@ private fun HeroChartCard(
     effectiveRange: ExploreRange,
     range: ExploreRange,
     fellBack: Boolean,
+    vitalSummary: VitalTrendSummary? = null,
 ) {
-    val heroValue = latest?.let { metric.format(it.value) } ?: ","
-    val asOf = latest?.let { "as of ${it.day}" } ?: "no readings yet"
+    var selectedIndex by remember(windowed) { mutableStateOf<Int?>(null) }
+    val displayedIndex = selectedIndex?.takeIf { it in windowed.indices } ?: windowed.lastIndex
+    val displayed = if (vitalSummary != null) windowed.getOrNull(displayedIndex) else latest
+    val presentation = vitalSummary?.presentations?.getOrNull(displayedIndex)
+    val heroValue = displayed?.let { metric.format(it.value) } ?: ","
+    val asOf = displayed?.let {
+        stringResource(R.string.explore_as_of, prettyExploreDate(it.day))
+    } ?: stringResource(R.string.explore_no_readings_yet)
     // The range bar above already prints the authoritative reading-count caption; the hero only
     // names its window so the count isn't doubled in one card height.
-    val subtitle = if (fellBack) {
+    val subtitle = if (vitalSummary != null) {
+        if (vitalSummary.allHistory) stringResource(R.string.trends_all_history)
+        else stringResource(R.string.trends_trailing_days, vitalSummary.window.expected)
+    } else if (fellBack) {
         "Trailing ${effectiveRange.windowName}"
     } else {
         "Trailing ${range.windowName}"
@@ -634,11 +689,33 @@ private fun HeroChartCard(
                 }
             }
 
-            if (windowed.size >= 2) {
-                // Chart flanked by a max/avg/min Y-axis column and a first/mid/last date X-axis row,
-                // so the line reads against real numbers and dates rather than a bare curve. The
-                // Y-labels reuse the metric's own formatter but drop the unit suffix to keep the
-                // narrow left gutter compact.
+            if (presentation != null) {
+                val bounds = "${metric.format(presentation.lowerBound)}–${metric.format(presentation.upperBound)}"
+                Text(
+                    "${vitalStateText(presentation.position)} · " + stringResource(
+                        if (presentation.basis == VitalBands.Basis.PERSONAL) R.string.trends_your_typical_range
+                        else R.string.trends_general_range,
+                        bounds,
+                    ),
+                    style = NoopType.footnote,
+                    color = Palette.textSecondary,
+                )
+            }
+            if (vitalSummary != null) {
+                Text(
+                    if (vitalSummary.allHistory) {
+                        stringResource(R.string.trends_coverage_all, vitalSummary.window.observed, vitalSummary.window.expected)
+                    } else {
+                        stringResource(R.string.trends_coverage, vitalSummary.window.observed, vitalSummary.window.expected)
+                    },
+                    style = NoopType.footnote,
+                    color = Palette.textTertiary,
+                )
+            }
+
+            if (windowed.size >= 2 || (vitalSummary != null && windowed.isNotEmpty())) {
+                // Classic detail charts keep their max/avg/min Y-axis. Migrated HRV/RHR omit it and use
+                // the visible typical range as context instead.
                 val values = windowed.map { it.value }
                 val maxV = values.max()
                 val avgV = values.average()
@@ -649,13 +726,15 @@ private fun HeroChartCard(
                         modifier = Modifier.height(IntrinsicSize.Min),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Column(
-                            modifier = Modifier.height(Metrics.chartHeight),
-                            verticalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(fmtY(maxV), style = NoopType.footnote, color = Palette.textTertiary, maxLines = 1)
-                            Text(fmtY(avgV), style = NoopType.footnote, color = Palette.textTertiary, maxLines = 1)
-                            Text(fmtY(minV), style = NoopType.footnote, color = Palette.textTertiary, maxLines = 1)
+                        if (vitalSummary == null) {
+                            Column(
+                                modifier = Modifier.height(Metrics.chartHeight),
+                                verticalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(fmtY(maxV), style = NoopType.footnote, color = Palette.textTertiary, maxLines = 1)
+                                Text(fmtY(avgV), style = NoopType.footnote, color = Palette.textTertiary, maxLines = 1)
+                                Text(fmtY(minV), style = NoopType.footnote, color = Palette.textTertiary, maxLines = 1)
+                            }
                         }
                         // The shared LineChart with a glowing "now" end-cap on its latest sample ,
                         // the Bevel idiom from Today's OverviewHRChart.
@@ -674,18 +753,49 @@ private fun HeroChartCard(
                                 // same point said 59. Routing the label through the same formatter makes
                                 // the chart agree with itself.
                                 formatValue = metric::format,
+                                xPositions = vitalSummary?.xPositions,
+                                dayKeys = if (vitalSummary != null) windowed.map { it.day } else null,
+                                gapPolicyDaily = vitalSummary != null,
+                                rangeBand = presentation?.let { it.lowerBound..it.upperBound },
+                                mode = if (vitalSummary != null) LineChartMode.SUMMARY else LineChartMode.CLASSIC,
+                                accessibilitySummary = vitalSummary?.let { summary ->
+                                    val coverage = if (summary.allHistory) {
+                                        stringResource(R.string.trends_coverage_all, summary.window.observed, summary.window.expected)
+                                    } else {
+                                        stringResource(R.string.trends_coverage, summary.window.observed, summary.window.expected)
+                                    }
+                                    stringResource(
+                                        R.string.trends_chart_accessibility, metric.title, heroValue,
+                                        displayed?.day?.let(::prettyExploreDate) ?: stringResource(R.string.trends_no_reading),
+                                        presentation?.let { vitalStateText(it.position) }
+                                            ?: stringResource(R.string.trends_no_reading),
+                                        coverage,
+                                    )
+                                },
+                                onSelectionChange = if (vitalSummary != null) {
+                                    { index -> selectedIndex = index }
+                                } else null,
                             )
-                            ExploreGlowEndCap(values = values, tipColor = metric.accent)
+                            if (vitalSummary == null) {
+                                ExploreGlowEndCap(values = values, tipColor = metric.accent)
+                            }
                         }
                     }
                     val days = windowed.map { it.day }
+                    val labels = vitalSummary?.let { vitalAxisLabels(it.window.startDay, it.window.endDay) }
+                        ?: trendAxisLabels(days)
                     Row(modifier = Modifier.fillMaxWidth()) {
-                        listOf(days.first(), days.getOrNull(days.lastIndex / 2), days.last()).forEach { d ->
+                        labels.forEach { label ->
                             Text(
-                                prettyExploreDate(d),
+                                prettyExploreDate(label.day),
                                 style = NoopType.footnote,
                                 color = Palette.textTertiary,
                                 modifier = Modifier.weight(1f),
+                                textAlign = when (label.anchor) {
+                                    TrendAxisAnchor.START -> TextAlign.Start
+                                    TrendAxisAnchor.CENTER -> TextAlign.Center
+                                    TrendAxisAnchor.END -> TextAlign.End
+                                },
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -711,11 +821,14 @@ private fun HeroChartCard(
                 }
             }
 
-            // Footer chips, mirroring the macOS ChartFooter (Window / Points / Latest).
-            Row(horizontalArrangement = Arrangement.spacedBy(Metrics.sectionGap)) {
-                ChartFootItem(stringResource(R.string.explore_chart_window), effectiveRange.label)
-                ChartFootItem(stringResource(R.string.explore_chart_points), "${windowed.size}")
-                ChartFootItem(stringResource(R.string.explore_latest), heroValue)
+            // Migrated vitals keep their detailed statistics below instead of duplicating the primary
+            // reading in a persistent chart footer. Legacy metrics retain the established footer.
+            if (vitalSummary == null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Metrics.sectionGap)) {
+                    ChartFootItem(stringResource(R.string.explore_chart_window), effectiveRange.label)
+                    ChartFootItem(stringResource(R.string.explore_chart_points), "${windowed.size}")
+                    ChartFootItem(stringResource(R.string.explore_latest), heroValue)
+                }
             }
         }
     }
@@ -724,7 +837,7 @@ private fun HeroChartCard(
 /** ISO "yyyy-MM-dd" to the same compact date used by both the axis and selection label. */
 private fun prettyExploreDate(day: String?): String =
     day?.let {
-        runCatching { LocalDate.parse(it).format(DateTimeFormatter.ofPattern("d MMM", Locale.US)) }
+        runCatching { LocalDate.parse(it).format(DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())) }
             .getOrDefault(it)
     }.orEmpty()
 
@@ -777,13 +890,17 @@ private fun StatRow(
     series: List<SeriesPoint>,
     windowed: List<SeriesPoint>,
     effectiveRange: ExploreRange,
+    latestFromWindow: Boolean = false,
+    previousOverride: List<SeriesPoint>? = null,
 ) {
     val values = windowed.map { it.value }
     val s = statOf(values)
-    val latest = series.lastOrNull()
+    val latest = if (latestFromWindow) windowed.lastOrNull() else series.lastOrNull()
 
-    // Δ vs the previous equal-length window (by point count), tinted by higherIsBetter.
-    val prev = remember(series, windowed) { previousWindow(series, windowed) }
+    // Δ vs the previous equal calendar interval for HRV/RHR; legacy metrics retain point-count comparison.
+    val prev = remember(series, windowed, previousOverride) {
+        previousOverride ?: previousWindow(series, windowed)
+    }
     val prevStat = statOf(prev.map { it.value })
     val hasDelta = s.n > 0 && prevStat.n > 0
     val delta = if (hasDelta) s.mean - prevStat.mean else Double.NaN
@@ -847,6 +964,19 @@ private fun StatRow(
             )
         }
     }
+}
+
+private data class ExploreVitalConfig(
+    val populationRange: ClosedFloatingPointRange<Double>,
+    val cfg: MetricCfg,
+    val epochKey: String,
+)
+
+/** Only HRV and resting HR opt into the Phase-2 metric-detail presentation. */
+private fun exploreVitalConfig(key: String): ExploreVitalConfig? = when (key) {
+    "hrv" -> ExploreVitalConfig(40.0..120.0, Baselines.hrvCfg, Baselines.hrvBaselineEpochKey)
+    "rhr" -> ExploreVitalConfig(40.0..60.0, Baselines.restingHRCfg, Baselines.recoveryBaselineEpochKey)
+    else -> null
 }
 
 // MARK: - Window / formatting helpers

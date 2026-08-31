@@ -103,7 +103,146 @@ class VitalBandsTest {
     @Test
     fun calendarSeries_dropsMalformedKeys_emptyIsEmpty() {
         assertEquals(emptyList<Double?>(), VitalBands.calendarSeries(emptyList()))
-        val rows = listOf<Pair<String, Double?>>("not-a-date" to 1.0, "2026-06-01" to 50.0)
+        val rows = listOf<Pair<String, Double?>>(
+            "not-a-date" to 1.0, "2026-6-01" to 2.0, "2026-02-30" to 3.0,
+            "2026-06-01T00:00:00Z" to 4.0, "2026-06-01" to 50.0,
+        )
         assertEquals(listOf(50.0), VitalBands.calendarSeries(rows))
+    }
+
+    @Test
+    fun calendarSeries_duplicateDaysUseLastWriteIncludingNull() {
+        val rows = listOf<Pair<String, Double?>>(
+            "2026-06-01" to 40.0, "2026-06-01" to 41.0,
+            "2026-06-02" to 42.0, "2026-06-02" to null,
+        )
+        assertEquals(listOf(41.0, null), VitalBands.calendarSeries(rows))
+    }
+
+    @Test
+    fun nonfiniteCurrent_isOutOfRangeButNeverPresentedWithin() {
+        listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY).forEach { value ->
+            val result = VitalBands.presentation(value, List(14) { 50.0 }, hrvPop, hrvCfg)
+            assertEquals(VitalBands.Band.OUT_OF_RANGE, result.band)
+            assertEquals(VitalBands.Position.NO_DATA, result.position)
+            assertEquals(
+                VitalBands.Position.NO_DATA,
+                VitalBands.presentation(value, emptyList(), 95.0..100.0, null).position,
+            )
+        }
+    }
+
+    @Test
+    fun nonfiniteHistory_doesNotCountTowardBaseline() {
+        val history: List<Double?> = List(13) { 50.0 } +
+            listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)
+        val result = VitalBands.presentation(50.0, history, hrvPop, hrvCfg)
+        assertEquals(13, result.nights)
+        assertEquals(VitalBands.Basis.POPULATION, result.basis)
+    }
+
+    @Test
+    fun restingHeartRate_lowAndHighDirections() {
+        val history: List<Double?> = List(14) { 50.0 }
+        assertEquals(
+            VitalBands.Position.BELOW,
+            VitalBands.presentation(40.0, history, 40.0..60.0, Baselines.restingHRCfg).position,
+        )
+        assertEquals(
+            VitalBands.Position.ABOVE,
+            VitalBands.presentation(60.0, history, 40.0..60.0, Baselines.restingHRCfg).position,
+        )
+    }
+
+    @Test
+    fun restingHeartRate_physiologicalBoundariesAreInclusive() {
+        listOf(30.0, 120.0).forEach { value ->
+            assertEquals(
+                VitalBands.Band.IN_RANGE,
+                VitalBands.band(value, emptyList(), 30.0..120.0, Baselines.restingHRCfg).band,
+            )
+        }
+        listOf(29.0, 121.0).forEach { value ->
+            assertEquals(
+                VitalBands.Band.OUT_OF_RANGE,
+                VitalBands.band(value, emptyList(), 30.0..120.0, Baselines.restingHRCfg).band,
+            )
+        }
+    }
+
+    @Test
+    fun presentation_exposesTrustedPersonalBoundsAndDirection() {
+        val result = VitalBands.presentation(55.0, List(14) { 50.0 }, hrvPop, hrvCfg)
+        assertEquals(VitalBands.Basis.PERSONAL, result.basis)
+        assertEquals(BaselineStatus.TRUSTED, result.status)
+        assertEquals(50.0, result.center!!, 0.000_001)
+        assertEquals(37.47, result.lowerBound, 0.000_001)
+        assertEquals(62.53, result.upperBound, 0.000_001)
+        assertEquals(VitalBands.Position.WITHIN, result.position)
+        assertEquals(14, result.nights)
+    }
+
+    @Test
+    fun presentation_usesNamedPopulationFallbackWhileProvisional() {
+        val result = VitalBands.presentation(35.0, List(10) { 35.0 }, hrvPop, hrvCfg)
+        assertEquals(VitalBands.Basis.POPULATION, result.basis)
+        assertEquals(BaselineStatus.PROVISIONAL, result.status)
+        assertEquals(null, result.center)
+        assertEquals(40.0, result.lowerBound, 0.0)
+        assertEquals(120.0, result.upperBound, 0.0)
+        assertEquals(VitalBands.Position.BELOW, result.position)
+    }
+
+    @Test
+    fun presentation_padsTrailingGapThroughDisplayedDay() {
+        val rows = (1..20).map { day -> "2026-06-${day.toString().padStart(2, '0')}" to 50.0 }
+        val result = VitalBands.presentation(50.0, rows, "2026-07-06", hrvPop, hrvCfg)
+        assertEquals(BaselineStatus.STALE, result.status)
+        assertEquals(VitalBands.Basis.POPULATION, result.basis)
+    }
+
+    @Test
+    fun presentation_matchesSharedExpectedFixture() {
+        val cases = listOf(
+            "cold" to VitalBands.presentation(35.0, List(3) { 35.0 }, hrvPop, hrvCfg),
+            "provisional" to VitalBands.presentation(35.0, List(10) { 35.0 }, hrvPop, hrvCfg),
+            "trusted" to VitalBands.presentation(55.0, List(14) { 50.0 }, hrvPop, hrvCfg),
+            "stale" to VitalBands.presentation(50.0, List(20) { 50.0 } + List(15) { null }, hrvPop, hrvCfg),
+        )
+        val actual = cases.joinToString("\n") { (name, value) ->
+            listOf(
+                name, value.band.raw, value.basis.raw, value.status?.raw ?: "null",
+                value.center?.let { String.format(java.util.Locale.US, "%.3f", it) } ?: "null",
+                String.format(java.util.Locale.US, "%.3f", value.lowerBound),
+                String.format(java.util.Locale.US, "%.3f", value.upperBound),
+                value.position.raw, value.nights.toString(),
+            ).joinToString("|")
+        }
+        val expectedFixture = """cold|outOfRange|population|calibrating|null|40.000|120.000|below|3
+provisional|outOfRange|population|provisional|null|40.000|120.000|below|10
+trusted|inRange|personal|trusted|50.000|37.470|62.530|within|14
+stale|inRange|population|stale|null|40.000|120.000|within|20"""
+        assertEquals(expectedFixture, actual)
+    }
+
+    @Test
+    fun presentation_doesNotOverwritePreviousNightWhenPadding() {
+        val rows = (1..14).map { day -> "2026-06-${day.toString().padStart(2, '0')}" to 50.0 }
+        val result = VitalBands.presentation(50.0, rows, "2026-06-15", hrvPop, hrvCfg)
+        assertEquals(BaselineStatus.TRUSTED, result.status)
+        assertEquals(14, result.nights)
+        assertEquals(VitalBands.Basis.PERSONAL, result.basis)
+    }
+
+    @Test
+    fun presentation_honorsManualRecalibrationEpoch() {
+        val rows = (1..14).map { day -> "2026-06-${day.toString().padStart(2, '0')}" to 50.0 }
+        val epoch = java.time.Instant.parse("2026-06-10T00:00:00Z").epochSecond.toDouble()
+        val result = VitalBands.presentation(
+            50.0, rows, "2026-06-15", hrvPop, hrvCfg, baselineEpoch = epoch,
+        )
+        assertEquals(BaselineStatus.CALIBRATING, result.status)
+        assertEquals(5, result.nights)
+        assertEquals(VitalBands.Basis.POPULATION, result.basis)
     }
 }

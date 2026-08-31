@@ -171,6 +171,12 @@ public struct TrendChart: View {
     /// accessibility stay on the full-resolution `points` so those readouts are unchanged.
     private let displayPoints: [TrendPoint]
 
+    /// Isolated daily runs have no drawable line segment; retain one marker for each in summary mode.
+    private var singletonSegmentPoints: [TrendPoint] {
+        let counts = Dictionary(grouping: displayPoints, by: \.segment).mapValues(\.count)
+        return displayPoints.filter { counts[$0.segment] == 1 }
+    }
+
     private static let sharedDateFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "EEE d MMM"; return f
     }()
@@ -230,7 +236,7 @@ public struct TrendChart: View {
 
     private var summaryAxisDates: [Date] {
         guard chrome == .summary, let resolvedXDomain else { return [] }
-        return ChartGeometry.summaryAxisDates(domain: resolvedXDomain)
+        return ChartGeometry.summaryAxisDates(domain: resolvedXDomain, calendar: calendar)
     }
 
     public var body: some View {
@@ -301,6 +307,16 @@ public struct TrendChart: View {
                         .foregroundStyle(StrandPalette.sample(stops: gradient.toStops(), at: unit(p.value)))
                     }
                 }
+                if chrome == .summary && !rendersAllPointMarkers {
+                    ForEach(singletonSegmentPoints) { p in
+                        PointMark(
+                            x: .value("Date", p.date),
+                            y: .value("Value", p.value)
+                        )
+                        .symbolSize(18)
+                        .foregroundStyle(StrandPalette.sample(stops: gradient.toStops(), at: unit(p.value)))
+                    }
+                }
             }
         }
         // Domain drives BOTH the axis extent and the plot clip. A caller that wants a top-of-range
@@ -346,6 +362,7 @@ public struct TrendChart: View {
         .chartOverlay { proxy in
             GeometryReader { geo in
                 let plot = proxy.plotRectCompat(in: geo)
+                let selectedPoint = hoverX.flatMap { nearestPoint(toX: $0, proxy: proxy, plot: plot) }
                 ZStack(alignment: .topLeading) {
                     if showsHover,
                        let hx = hoverX,
@@ -359,9 +376,12 @@ public struct TrendChart: View {
                         // Vertical crosshair at the nearest x.
                         CrosshairRule(x: cx, height: geo.size.height)
 
-                        // Highlighted dot on the line.
-                        HighlightDot(color: color)
-                            .position(x: cx, y: cy)
+                        // Detail charts use their inspection highlight. Summary charts use the single
+                        // selected-or-latest cap below, avoiding two coincident selection markers.
+                        if chrome == .detail {
+                            HighlightDot(color: color)
+                                .position(x: cx, y: cy)
+                        }
 
                         // Tooltip near the point, kept in bounds.
                         if rendersTooltip {
@@ -382,7 +402,8 @@ public struct TrendChart: View {
                     // not via a sibling overlay guessing the axis insets, which floated it left/below.
                     if !showsBars,
                        let capColor = nowCapColor ?? (chrome == .summary ? contextRangeColor : nil),
-                       let last = ChartGeometry.selectedOrLatestPoint(selectedDate: nil, points: points),
+                       let last = ChartGeometry.selectedOrLatestPoint(selectedDate: selectedPoint?.date,
+                                                                      points: points),
                        let px = proxy.position(forX: last.date),
                        let py = proxy.position(forY: last.value) {
                         NowCapDot(color: capColor)

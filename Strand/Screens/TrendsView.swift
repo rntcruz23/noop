@@ -44,6 +44,12 @@ struct TrendsView: View {
     }
 
     @State private var range: Range = .quarter
+    @State private var selectedHRVDate: Date?
+    @State private var selectedRHRDate: Date?
+    /// Canonically resolved, full-history vital series. These deliberately do not ride `repo.days`:
+    /// that cache follows the active device and can omit imported/computed fallback days.
+    @State private var hrvHistory: [(day: String, value: Double)] = []
+    @State private var rhrHistory: [(day: String, value: Double)] = []
 
     // #436 — shareable offline trends report (PDF over a date range). The sheet owns its
     // own range picker; this just presents it with the loaded history.
@@ -127,6 +133,29 @@ struct TrendsView: View {
         var effective: Range
         var widened: Bool
         var caption: String
+    }
+
+    /// Exact, today-anchored window used by the Phase 2 HRV/RHR summary cards. Unlike the legacy
+    /// `ResolvedMetric`, this never widens a sparse selected period.
+    private struct VitalTrendMetric {
+        var points: [TrendPoint]
+        var result: TrendWindow.Result
+        var xDomain: ClosedRange<Date>?
+    }
+
+    private func vitalTrend(_ rows: [(day: String, value: Double)]) -> VitalTrendMetric {
+        let result = TrendWindow.project(
+            rows: rows.map { ($0.day, Optional($0.value)) },
+            todayKey: Repository.localDayKey(Date()),
+            dayCount: range.days
+        )
+        let points = result.points.compactMap { point in
+            date(point.day).map { TrendPoint(date: $0, value: point.value) }
+        }
+        let domain = result.startDay.flatMap(date).flatMap { start in
+            date(result.endDay).map { start...$0 }
+        }
+        return VitalTrendMetric(points: points, result: result, xDomain: domain)
     }
 
     private func resolve(_ value: (DailyMetric) -> Double?) -> ResolvedMetric {
@@ -276,7 +305,7 @@ struct TrendsView: View {
                        onRefresh: { await repo.refresh() },
                        lazy: true,
                        topBackground: liquidScaffoldSky()) {
-            if repo.days.isEmpty {
+            if repo.days.isEmpty && hrvHistory.isEmpty && rhrHistory.isEmpty {
                 ComingSoon(what: repo.loaded
                     ? "Trends need history to draw. Import your WHOOP export in Data Sources to see weeks, months and years instantly."
                     : "Loading your history…")
@@ -286,8 +315,8 @@ struct TrendsView: View {
                 // instead of re-filtering repo.days through caption/widened/
                 // windowPoints on every render (hover, animation, 1 Hz HR tick).
                 let recovery = resolve { $0.recovery }
-                let hrv = resolve { $0.avgHrv }
-                let rhr = resolve { $0.restingHr.map(Double.init) }
+                let hrv = vitalTrend(hrvHistory)
+                let rhr = vitalTrend(rhrHistory)
                 let strain = resolve { $0.strain }
                 // Rest = the sleep_performance composite — the same number the Today Rest score shows
                 // (#732); see sleepPerfByDay. resolve() still does the windowing/widening.
@@ -327,11 +356,35 @@ struct TrendsView: View {
         }
         // #732 — load the resolved sleep_performance series so Rest plots the SAME composite the Today
         // Rest score uses (not raw efficiency). Mirrors TodayView's restScore read. Keyed on the day
-        // count so a newly-banked/-scored night refreshes Rest reactively, like the other metrics that
-        // read `repo.days` directly (and like the Android LaunchedEffect(days) twin).
-        .task(id: repo.days.count) {
+        // repository generation so a newly-banked/-scored night or source switch refreshes every series.
+        .task(id: "\(repo.deviceId)|\(repo.refreshSeq)") {
+            hrvHistory = []
+            rhrHistory = []
             let s = await repo.exploreSeries(key: "sleep_performance", source: "my-whoop")
             sleepPerfByDay = Dictionary(s.map { ($0.day, $0.value) }, uniquingKeysWith: { _, last in last })
+            // Phase 2 belongs to canonical WHOOP cards only. Classify the active registry row rather than
+            // excluding one known alternate source: Oura, Apple Watch, and generic straps must not inherit
+            // canonical WHOOP history merely because they expose an HRV/RHR-shaped metric.
+            let activeIsWhoop: Bool
+            if let store = await repo.storeHandle() {
+                let devices = (try? DeviceRegistryStore(dbQueue: store.registryWriter).all()) ?? []
+                activeIsWhoop = devices.first(where: { $0.id == repo.deviceId })
+                    .map(SourceCoordinator.isWhoop) ?? true
+            } else {
+                activeIsWhoop = true
+            }
+            guard activeIsWhoop else {
+                hrvHistory = []
+                rhrHistory = []
+                return
+            }
+            async let hrv = repo.resolvedSeries(key: "hrv", source: Repository.whoopSource,
+                                                fullHistory: true)
+            async let rhr = repo.resolvedSeries(key: "rhr", source: Repository.whoopSource,
+                                                fullHistory: true)
+            let (hrvResolution, rhrResolution) = await (hrv, rhr)
+            hrvHistory = hrvResolution.values
+            rhrHistory = rhrResolution.values
         }
     }
 
@@ -648,41 +701,27 @@ struct TrendsView: View {
 
     // MARK: Small multiples — HRV / Resting HR / Day Strain
 
-    private func smallMultiples(hrv: ResolvedMetric, rhr: ResolvedMetric, strain: ResolvedMetric) -> some View {
+    private func smallMultiples(hrv: VitalTrendMetric, rhr: VitalTrendMetric, strain: ResolvedMetric) -> some View {
         let cols = [GridItem(.adaptive(minimum: 320), spacing: NoopMetrics.gap)]
-        let hrvPts = hrv.points
-        let rhrPts = rhr.points
         let strainPts = strain.points
 
         return VStack(alignment: .leading, spacing: NoopMetrics.gap) {
             // No trailing window label — the range bar's overline already states it.
             SectionHeader("Daily signals", overline: "Trends")
             LazyVGrid(columns: cols, alignment: .leading, spacing: NoopMetrics.gap) {
-                // HRV / Resting HR are Charge sub-signals → the Charge (green) card world, each line
-                // keeping its established metric hue for legibility. Effort is the WHOOP blue strain world.
-                metricChart(
+                vitalTrendCard(
                     title: "Heart rate variability", unit: "ms",
                     accessibilityTitle: String(localized: "Heart rate variability"),
-                    metricKey: "hrv",
-                    points: hrvPts,
-                    gradient: gradient(StrandPalette.metricPurple),
-                    tip: StrandPalette.metricPurple,
-                    tint: nil,
-                    higherIsBetter: true,
-                    range: valueRange(hrvPts, fallback: 20...120),
-                    fmt: { "\(Int($0.rounded()))" }
+                    metricKey: "hrv", metric: hrv, selectedDate: $selectedHRVDate,
+                    populationRange: 40...120, cfg: Baselines.hrvCfg,
+                    color: StrandPalette.metricPurple
                 )
-                metricChart(
+                vitalTrendCard(
                     title: "Resting heart rate", unit: "bpm",
                     accessibilityTitle: String(localized: "Resting heart rate"),
-                    metricKey: "rhr",
-                    points: rhrPts,
-                    gradient: gradient(StrandPalette.metricRose),
-                    tip: StrandPalette.metricRose,
-                    tint: nil,
-                    higherIsBetter: false,
-                    range: valueRange(rhrPts, fallback: 40...80),
-                    fmt: { "\(Int($0.rounded()))" }
+                    metricKey: "rhr", metric: rhr, selectedDate: $selectedRHRDate,
+                    populationRange: 40...60, cfg: Baselines.restingHRCfg,
+                    color: StrandPalette.metricRose
                 )
                 metricChart(
                     // Plotted points + range stay on the stored 0–100 scale (line shape unchanged); only the
@@ -701,6 +740,131 @@ struct TrendsView: View {
                 )
             }
         }
+    }
+
+    @ViewBuilder
+    private func vitalTrendCard(
+        title: LocalizedStringKey,
+        unit: String,
+        accessibilityTitle: String,
+        metricKey: String,
+        metric: VitalTrendMetric,
+        selectedDate: Binding<Date?>,
+        populationRange: ClosedRange<Double>,
+        cfg: MetricCfg,
+        color: Color
+    ) -> some View {
+        let displayed = selectedDate.wrappedValue.flatMap { selected in
+            metric.points.first { $0.date == selected }
+        } ?? metric.points.last
+        let displayedDay = displayed.map { Self.dayParser.string(from: $0.date) }
+        let presentation = displayedDay.map { day in
+            VitalBands.presentation(
+                value: displayed?.value,
+                historyRows: (metricKey == "hrv" ? hrvHistory : rhrHistory)
+                    .map { ($0.day, Optional($0.value)) },
+                displayedDay: day,
+                populationRange: populationRange,
+                cfg: cfg,
+                baselineEpoch: metricKey == "hrv"
+                    ? Baselines.hrvBaselineEpoch() : Baselines.recoveryBaselineEpoch()
+            )
+        }
+        let context = presentation.map { vitalContext($0, unit: unit) }
+        let coverage = vitalCoverage(metric.result)
+        let dateLabel = displayed.map { vitalDateLabel($0.date) }
+        let valueLabel = displayed.map { "\(Int($0.value.rounded()))" } ?? "—"
+        let a11y = String(localized: "\(dateLabel ?? String(localized: "No reading")) · \(context ?? String(localized: "No reading")) · \(coverage)")
+
+        let card = NoopCard(tint: color) {
+            VStack(alignment: .leading, spacing: NoopMetrics.cardInnerSpacing) {
+                Text(title).strandOverline()
+                HStack(alignment: .firstTextBaseline, spacing: NoopMetrics.space2) {
+                    Text(valueLabel)
+                        .font(StrandFont.number(30, weight: .bold))
+                        .foregroundStyle(StrandPalette.textPrimary)
+                    if displayed != nil {
+                        Text(unit)
+                            .font(StrandFont.subhead)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                    }
+                    Spacer()
+                    Text(dateLabel ?? String(localized: "No reading"))
+                        .font(StrandFont.footnote)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+                if let context {
+                    Text(context)
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textSecondary)
+                }
+                if metric.points.isEmpty {
+                    sparsePlaceholder.frame(height: NoopMetrics.chartHeight)
+                } else {
+                    TrendChart(
+                        points: metric.points,
+                        gradient: gradient(color),
+                        valueRange: valueRange(metric.points, fallback: populationRange),
+                        showsArea: false,
+                        showsBars: false,
+                        height: NoopMetrics.chartHeight,
+                        valueFormat: { "\(Int($0.rounded())) \(unit)" },
+                        accessibilityLabel: String(localized: "\(accessibilityTitle) trend"),
+                        chrome: .summary,
+                        contextRange: presentation.map { $0.lowerBound...$0.upperBound },
+                        contextRangeColor: color,
+                        xDomain: metric.xDomain,
+                        gapPolicy: .daily,
+                        calendar: Self.utcCalendar,
+                        onSelectionChange: { selectedDate.wrappedValue = $0?.date },
+                        accessibilityValue: String(localized: "\(valueLabel) \(unit). \(a11y)")
+                    )
+                }
+                Text(coverage)
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textTertiary)
+            }
+        }
+        NavigationLink(value: TabRoute.metric(metricKey)) { card }
+            .buttonStyle(LiquidPressStyle())
+            .accessibilityHint(Text("Opens metric details."))
+    }
+
+    private static var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private func vitalCoverage(_ result: TrendWindow.Result) -> String {
+        let coverage = String(localized: "\(result.observed) of \(result.expected) nights")
+        if range == .all {
+            return "\(String(localized: "All history")) · \(coverage)"
+        }
+        return coverage
+    }
+
+    private func vitalDateLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = AppLanguage.activeLocale
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.setLocalizedDateFormatFromTemplate("dMMM")
+        return formatter.string(from: date)
+    }
+
+    private func vitalContext(_ presentation: VitalBands.Presentation, unit: String) -> String {
+        let bounds = "\(Int(presentation.lowerBound.rounded()))–\(Int(presentation.upperBound.rounded())) \(unit)"
+        let rangeName = presentation.basis == .personal
+            ? String(localized: "Your typical range")
+            : String(localized: "General range")
+        let position: String
+        switch presentation.position {
+        case .below: position = String(localized: "Below")
+        case .within: position = String(localized: "Within")
+        case .above: position = String(localized: "Above")
+        case .noData: return String(localized: "\(rangeName) · \(bounds)")
+        }
+        return String(localized: "\(position) · \(rangeName) · \(bounds)")
     }
 
     @ViewBuilder

@@ -594,10 +594,16 @@ fun LineChart(
                             }
                             // The line itself.
                             for (path in linePaths) drawPath(path = path, color = color, style = lineStroke)
-                            // A one-reading segment has no visible stroke. Method-segmented trends retain
-                            // a small point so neither side of a method transition disappears.
-                            if (cleanSegmentIds != null && mode == LineChartMode.CLASSIC) {
-                                for (point in pts) drawCircle(color = color, radius = 2.5f, center = point)
+                            // A one-reading segment has no visible stroke. Always retain isolated points;
+                            // classic mode also keeps its established markers for every segmented point.
+                            if (cleanSegmentIds != null) {
+                                for (range in segments) {
+                                    if (mode == LineChartMode.CLASSIC || range.first == range.last) {
+                                        for (index in range) {
+                                            drawCircle(color = color, radius = 2.5f, center = pts[index])
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

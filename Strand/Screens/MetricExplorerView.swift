@@ -12,7 +12,8 @@ import WhoopStore
 // locked StrandDesign components (NoopCard / ChartCard / StatTile / InsightCard /
 // SegmentedPillControl). No custom card heights, paddings, or surfaces anywhere.
 //
-// Sparse-metric rule (owner saw "no data" on metrics that HAVE data): a series may
+// Sparse-metric rule (owner saw "no data" on metrics that HAVE data): except for HRV/RHR's exact
+// today-anchored Phase 2 windows, a series may
 // be sampled weekly (weight / body fat). The window is taken RELATIVE TO THE LATEST
 // data point — not "now" — so a stale-but-present series still resolves. If the
 // selected window holds ≥1 point we SHOW THAT WINDOW (so W/M/3M stay visibly
@@ -548,11 +549,15 @@ struct MetricDetailView: View {
     }
 
     @State private var range: ExploreRange = .month
+    /// HRV/RHR chart inspection replaces the existing hero read-out instead of adding a tooltip.
+    @State private var selectedVitalDate: Date?
     /// Draw-in fraction for the hero ring gauge (0–100 scores). Set to the real fraction
     /// in `.onAppear` with a soft ease, exactly as TodayView animates its rings.
     @State private var heroAnimatedFraction: Double = 0
     /// Full ascending series for this metric — ALL history.
     @State private var series: [(day: String, value: Double)] = []
+    /// Registry-backed eligibility for WHOOP-only Phase-2 presentation. False until the active row is known.
+    @State private var phaseTwoSourceEligible = false
     /// day → the RAW source id that supplied that day's value (task #8). Loaded from `resolvedSeries`
     /// alongside `series` and used ONLY for the readings-table provenance column, so the plotted line
     /// (which rides `series`/`exploreSeries`) is never changed by adding source labels.
@@ -576,13 +581,35 @@ struct MetricDetailView: View {
     @State private var correlationCache: [CorrRow] = []
     /// The (metricID, range) the cache was built for; nil means "not yet computed".
     @State private var correlationKey: String? = nil
-    private var loadTaskID: String { "\(metric.id)|\(repo.refreshSeq)" }
+    private var loadTaskID: String { "\(metric.id)|\(repo.deviceId)|\(repo.refreshSeq)" }
 
     // MARK: Derived
 
-    /// The trailing-N-days slice for a given range, taken RELATIVE TO THE LATEST data
-    /// point (not "now") — `.all` returns everything.
+    /// Phase 2's date-aware treatment is deliberately narrow; other metric details stay unchanged.
+    private var isPhaseTwoVital: Bool {
+        phaseTwoSourceEligible && metric.source == Repository.whoopSource &&
+            (metric.key == "hrv" || metric.key == "rhr")
+    }
+
+    private static var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    /// Exact selected calendar window ending today. Missing observations remain missing; there is no
+    /// latest-reading anchoring and no sparse-window widening for HRV/RHR.
+    private func vitalWindow(for r: ExploreRange) -> TrendWindow.Result {
+        TrendWindow.project(rows: series.map { ($0.day, Optional($0.value)) },
+                            todayKey: Repository.localDayKey(Date()), dayCount: r.days)
+    }
+
+    /// The trailing-N-days slice for a given range. HRV/RHR use an exact today-anchored calendar
+    /// window; every other metric remains relative to its latest point. `.all` returns everything.
     private func slice(for r: ExploreRange) -> [(day: String, value: Double)] {
+        if isPhaseTwoVital {
+            return vitalWindow(for: r).points.map { (day: $0.day, value: $0.value) }
+        }
         guard let days = r.days else { return series }
         guard let lastDay = series.last?.day, let last = parseDay(lastDay) else { return [] }
         let cutoff = last.addingTimeInterval(-Double(days - 1) * 86_400)
@@ -592,9 +619,8 @@ struct MetricDetailView: View {
         }
     }
 
-    /// The range actually shown: the SELECTED range whenever its window holds ≥1
-    /// point, otherwise the smallest LARGER range that does. So switching ranges is
-    /// always visibly distinct when data allows, and only sparse windows widen.
+    /// The range actually shown: HRV/RHR always use the exact selection. For every other metric, use the
+    /// selected range whenever it has a point, otherwise the smallest larger nonempty range.
     /// The range the chips + caption ACTUALLY describe, resolved NON-DESTRUCTIVELY from the stored
     /// `range` (#943, true cross-platform lockstep with Android's effectiveVitalRange). We never
     /// overwrite the @State selection - a locked default (`range == .month` with under a week of
@@ -614,6 +640,7 @@ struct MetricDetailView: View {
     }
 
     private var effectiveRange: ExploreRange {
+        if isPhaseTwoVital { return range }
         guard !series.isEmpty else { return coercedSelection }
         for r in coercedSelection.widening where !slice(for: r).isEmpty { return r }
         return .all
@@ -636,6 +663,7 @@ struct MetricDetailView: View {
     /// user always has a selectable range; until the series loads (or with no history at all)
     /// nothing is gated, since the empty state deliberately keeps the full range bar for context.
     private func isUnlocked(_ r: ExploreRange) -> Bool {
+        if isPhaseTwoVital { return true }
         guard loaded, !series.isEmpty else { return true }
         switch r {
         case .week, .all: return true
@@ -652,10 +680,17 @@ struct MetricDetailView: View {
     /// the caption, so the dimmed chips read as "not yet" rather than broken.
     private var hasLockedRanges: Bool { !ExploreRange.allCases.allSatisfy(isUnlocked) }
 
-    /// The window immediately preceding the active one (equal length, by day count).
+    /// The window immediately preceding the active one. HRV/RHR compare the preceding equal CALENDAR
+    /// interval; other metrics retain the established equal-observation-count comparison.
     private func previousWindow(effectiveRange: ExploreRange,
                                 windowed: [(day: String, value: Double)]) -> [(day: String, value: Double)] {
         guard effectiveRange != .all else { return [] }
+        if isPhaseTwoVital, let days = effectiveRange.days {
+            return TrendWindow.previousPoints(
+                rows: series.map { ($0.day, Optional($0.value)) },
+                todayKey: Repository.localDayKey(Date()), dayCount: days
+            ).map { (day: $0.day, value: $0.value) }
+        }
         let size = windowed.count
         guard size > 0 else { return [] }
         // Index of the active window's first row, then step back `size` rows.
@@ -686,6 +721,53 @@ struct MetricDetailView: View {
     }
 
     private var latest: (day: String, value: Double)? { series.last }
+
+    /// Inspection temporarily replaces the HRV/RHR hero's visible-window latest value/date.
+    private func displayedPoint(windowed: [(day: String, value: Double)]) -> (day: String, value: Double)? {
+        guard isPhaseTwoVital else { return latest }
+        if let selectedVitalDate {
+            return windowed.first { parseDay($0.day) == selectedVitalDate } ?? windowed.last
+        }
+        return windowed.last
+    }
+
+    private func vitalPresentation(windowed: [(day: String, value: Double)]) -> VitalBands.Presentation? {
+        guard isPhaseTwoVital, let displayed = displayedPoint(windowed: windowed) else { return nil }
+        let populationRange: ClosedRange<Double> = metric.key == "hrv" ? 40...120 : 40...60
+        let cfg = metric.key == "hrv" ? Baselines.hrvCfg : Baselines.restingHRCfg
+        return VitalBands.presentation(value: displayed.value,
+            historyRows: series.map { ($0.day, Optional($0.value)) }, displayedDay: displayed.day,
+            populationRange: populationRange, cfg: cfg,
+            baselineEpoch: metric.key == "hrv"
+                ? Baselines.hrvBaselineEpoch() : Baselines.recoveryBaselineEpoch())
+    }
+
+    private func vitalContext(_ presentation: VitalBands.Presentation) -> String {
+        let bounds = "\(Int(presentation.lowerBound.rounded()))–\(Int(presentation.upperBound.rounded())) \(metric.unit)"
+        let rangeName = presentation.basis == .personal
+            ? String(localized: "Your typical range") : String(localized: "General range")
+        let position: String
+        switch presentation.position {
+        case .below: position = String(localized: "Below")
+        case .within: position = String(localized: "Within")
+        case .above: position = String(localized: "Above")
+        case .noData: return String(localized: "\(rangeName) · \(bounds)")
+        }
+        return String(localized: "\(position) · \(rangeName) · \(bounds)")
+    }
+
+    private func vitalCoverage(_ result: TrendWindow.Result) -> String {
+        let coverage = String(localized: "\(result.observed) of \(result.expected) nights")
+        return range == .all ? String(localized: "\(String(localized: "All history")) · \(coverage)") : coverage
+    }
+
+    private func vitalXDomain(for r: ExploreRange) -> ClosedRange<Date>? {
+        guard isPhaseTwoVital else { return nil }
+        let projection = vitalWindow(for: r)
+        guard let startDay = projection.startDay, let start = parseDay(startDay),
+              let end = parseDay(projection.endDay) else { return nil }
+        return start...end
+    }
 
     // MARK: Body
 
@@ -802,12 +884,34 @@ struct MetricDetailView: View {
     /// flips there. Phase 2 is the catalog scan, awaited afterwards, and only the correlation card waits
     /// on it. Same reads, same results, same order; only the gate moved.
     private func load() async {
-        // Phase 1 — what the screen actually draws.
-        series = await repo.exploreSeries(key: metric.key, source: metric.source)
+        phaseTwoSourceEligible = false
+        series = []
+        if metric.source == Repository.whoopSource,
+           (metric.key == "hrv" || metric.key == "rhr") {
+            if let store = await repo.storeHandle() {
+                let devices = (try? DeviceRegistryStore(dbQueue: store.registryWriter).all()) ?? []
+                phaseTwoSourceEligible = devices.first(where: { $0.id == repo.deviceId })
+                    .map(SourceCoordinator.isWhoop) ?? true
+            } else {
+                phaseTwoSourceEligible = true
+            }
+        } else {
+            phaseTwoSourceEligible = false
+        }
+        // Phase 1 — what the screen actually draws. HRV/RHR display the canonical cross-source
+        // resolution itself, so chart, hero, statistics and readings agree with provenance. Other metrics
+        // retain Explore's established input. Full vital history supports an honest ALL window and a
+        // baseline strictly before whichever day the reader inspects.
+        let resolution: MetricSeriesResolution
+        if isPhaseTwoVital {
+            resolution = await repo.resolvedSeries(key: metric.key, source: metric.source, fullHistory: true)
+            series = resolution.values
+        } else {
+            series = await repo.exploreSeries(key: metric.key, source: metric.source)
+            resolution = await repo.resolvedSeries(key: metric.key, source: metric.source)
+        }
         // Per-day provenance for the readings table (task #8). resolvedSeries names the source that
-        // actually supplied each day (imported strap / on-device / Apple Health / Health Connect); the
-        // chart still rides `series` above, so this only ADDS the source column, never moves the line.
-        let resolution = await repo.resolvedSeries(key: metric.key, source: metric.source)
+        // actually supplied each day (imported strap / on-device / Apple Health / Health Connect).
         if metric.key == "vo2max_est" {
             var attributed: [String: String] = [:]
             for point in resolution.points {
@@ -893,13 +997,15 @@ struct MetricDetailView: View {
                             windowed: [(day: String, value: Double)],
                             windowFellBack: Bool) -> some View {
         let domain = metricDomain(metric)
-        let value = latest?.value
-        let heroValue = latest.map { fmt($0.value) } ?? "—"
+        let displayed = displayedPoint(windowed: windowed)
+        let value = displayed?.value
+        let heroValue = displayed.map { fmt($0.value) } ?? "—"
         let asOf: String = {
-            guard let day = latest?.day, let d = parseDay(day) else { return "—" }
+            guard let day = displayed?.day, let d = parseDay(day) else { return "—" }
             return String(localized: "as of \(longDate(d))")
         }()
         let fraction = value.flatMap { metricGaugeFraction(metric, value: $0) }
+        let context = vitalPresentation(windowed: windowed).map { vitalContext($0) }
 
         // Gap fix (2026-07-02): draw the starfield as the content's BACKGROUND, not as a
         // stretching ZStack sibling — an unconstrained ScenicHeroBackground inside a ScrollView filled
@@ -967,6 +1073,11 @@ struct MetricDetailView: View {
                             Text(asOf)
                                 .font(StrandFont.footnote)
                                 .foregroundStyle(StrandPalette.textTertiary)
+                            if let context {
+                                Text(context)
+                                    .font(StrandFont.subhead)
+                                    .foregroundStyle(StrandPalette.textSecondary)
+                            }
                         }
                         .padding(.vertical, 18)
                     } else {
@@ -1063,28 +1174,51 @@ struct MetricDetailView: View {
     private func heroChart(effectiveRange: ExploreRange,
                            windowed: [(day: String, value: Double)],
                            windowFellBack: Bool) -> some View {
+        let displayed = displayedPoint(windowed: windowed)
+        let projection = isPhaseTwoVital ? vitalWindow(for: effectiveRange) : nil
         let asOf: String = {
-            guard let day = latest?.day, let d = parseDay(day) else { return "—" }
+            guard let day = displayed?.day, let d = parseDay(day) else { return "—" }
             return String(localized: "as of \(longDate(d))")
         }()
-        let heroValue = latest.map { fmt($0.value) } ?? "—"
+        let heroValue = displayed.map { fmt($0.value) } ?? "—"
+        let presentation = vitalPresentation(windowed: windowed)
         let subtitle = windowFellBack
             ? String(localized: "Sparse, widened to \(effectiveRange.name) · \(windowed.count) readings")
             : String(localized: "\(windowed.count) readings · \(range.name)")
         return ChartCard(
             title: "\(metric.title)",
             subtitle: subtitle,
-            trailing: "\(heroValue) · \(asOf)",
+            // HRV/RHR already have one primary value/date in the hero above. Keep this card about the
+            // series rather than repeating that read-out in its header and footer.
+            trailing: isPhaseTwoVital ? nil : "\(heroValue) · \(asOf)",
             tint: metricDomain(metric).color
         ) {
-            TrendChart(
-                points: trendPoints(windowed),
-                gradient: metricGradient(metric),
-                valueRange: valueRange(windowed.map(\.value)),
-                showsArea: true,
-                height: NoopMetrics.chartHeight,
-                valueFormat: { fmt($0) }
-            )
+            if isPhaseTwoVital && windowed.isEmpty {
+                Text("No readings in this window.")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel(Text("No readings in this window."))
+            } else {
+                TrendChart(
+                    points: trendPoints(windowed),
+                    gradient: metricGradient(metric),
+                    valueRange: valueRange(windowed.map(\.value)),
+                    showsArea: !isPhaseTwoVital,
+                    height: NoopMetrics.chartHeight,
+                    valueFormat: { fmt($0) },
+                    chrome: isPhaseTwoVital ? .summary : .detail,
+                    contextRange: presentation.map { $0.lowerBound...$0.upperBound },
+                    contextRangeColor: metricAccent(metric),
+                    xDomain: vitalXDomain(for: effectiveRange),
+                    gapPolicy: isPhaseTwoVital ? .daily : .none,
+                    calendar: Self.utcCalendar,
+                    onSelectionChange: isPhaseTwoVital ? { selectedVitalDate = $0?.date } : nil,
+                    accessibilityValue: projection.map { result in
+                        String(localized: "\(presentation.map { vitalContext($0) } ?? String(localized: "No reading")) · \(vitalCoverage(result))")
+                    }
+                )
+            }
         } footer: {
             // #1662: the VO₂max line is SPLIT on purpose wherever the estimator changes, so two
             // non-adjacent Nes runs are never joined across an incompatible Uth stretch. Nothing said so,
@@ -1105,11 +1239,18 @@ struct MetricDetailView: View {
                         .foregroundStyle(StrandPalette.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                ChartFooter([
-                    ("Window", effectiveRange.label),
-                    ("Points", "\(windowed.count)"),
-                    ("Latest", heroValue),
-                ])
+                if let projection {
+                    ChartFooter([
+                        ("Window", effectiveRange.label),
+                        ("Coverage", vitalCoverage(projection)),
+                    ])
+                } else {
+                    ChartFooter([
+                        ("Window", effectiveRange.label),
+                        ("Points", "\(windowed.count)"),
+                        ("Latest", heroValue),
+                    ])
+                }
             }
         }
     }
@@ -1137,6 +1278,7 @@ struct MetricDetailView: View {
         }()
         let deltaCaption = hasDelta ? String(localized: "vs prev \(effectiveRange.name)")
             : (effectiveRange == .all ? String(localized: "all history") : String(localized: "no prior \(effectiveRange.name)"))
+        let windowLatest = isPhaseTwoVital ? windowed.last : latest
 
         #if os(iOS)
         return VStack(alignment: .leading, spacing: NoopMetrics.gap) {
@@ -1162,8 +1304,8 @@ struct MetricDetailView: View {
                          caption: deltaCaption, accent: StrandPalette.textPrimary,
                          delta: cmp.pctChange.map { "\($0 >= 0 ? "+" : "")\(String(format: "%.1f", $0))%" },
                          deltaColor: deltaColor)
-                StatTile(label: "Latest", value: latest.map { fmt($0.value) } ?? "—",
-                         caption: latestCaption, accent: accent)
+                StatTile(label: "Latest", value: windowLatest.map { fmt($0.value) } ?? "—",
+                         caption: windowLatest.flatMap { row in parseDay(row.day).map(longDate) }, accent: accent)
             }
         }
         #else
@@ -1184,19 +1326,14 @@ struct MetricDetailView: View {
                      accent: StrandPalette.textPrimary)
             StatTile(label: "Max", value: fmt(s.max),
                      accent: StrandPalette.textPrimary)
-            StatTile(label: "Latest", value: latest.map { fmt($0.value) } ?? "—",
-                     caption: latestCaption, accent: accent)
+            StatTile(label: "Latest", value: windowLatest.map { fmt($0.value) } ?? "—",
+                     caption: windowLatest.flatMap { row in parseDay(row.day).map(longDate) }, accent: accent)
             StatTile(label: "Δ vs prev", value: deltaText ?? "—",
                      caption: deltaCaption, accent: StrandPalette.textPrimary,
                      delta: cmp.pctChange.map { "\($0 >= 0 ? "+" : "")\(String(format: "%.1f", $0))%" },
                      deltaColor: deltaColor)
         }
         #endif
-    }
-
-    private var latestCaption: String? {
-        guard let day = latest?.day, let d = parseDay(day) else { return nil }
-        return longDate(d)
     }
 
     // MARK: Readings table (task #8)

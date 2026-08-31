@@ -1,7 +1,5 @@
 package com.noop.analytics
 
-import kotlin.math.abs
-
 /*
  * VitalBands.kt — personal-baseline banding for the Health Monitor's vital tiles.
  * Faithful Kotlin port of StrandAnalytics/VitalBands.swift (verified on macOS).
@@ -29,6 +27,22 @@ object VitalBands {
 
     data class Result(val band: Band, val basis: Basis, val nights: Int)
 
+    enum class Position(val raw: String) {
+        BELOW("below"), WITHIN("within"), ABOVE("above"), NO_DATA("noData")
+    }
+
+    /** Read-only context for presenting a vital without changing its scoring classification. */
+    data class Presentation(
+        val band: Band,
+        val basis: Basis,
+        val status: BaselineStatus?,
+        val center: Double?,
+        val lowerBound: Double,
+        val upperBound: Double,
+        val position: Position,
+        val nights: Int,
+    )
+
     /** |z| at or below this is in-range vs the personal baseline (~95% of the user's own
      *  normal nights; the |z| <= 1 of [Baselines.deviation] would flag ~32% — too noisy for
      *  a passive tile). */
@@ -49,30 +63,116 @@ object VitalBands {
         populationRange: ClosedFloatingPointRange<Double>,
         cfg: MetricCfg?,
     ): Result {
-        if (value == null) return Result(Band.NO_DATA, Basis.POPULATION, 0)
+        val context = presentation(value, history, populationRange, cfg)
+        return Result(context.band, context.basis, context.nights)
+    }
+
+    /** Exposes the exact bounds and baseline state used by [band] for presentation-only context. */
+    fun presentation(
+        value: Double?,
+        history: List<Double?>,
+        populationRange: ClosedFloatingPointRange<Double>,
+        cfg: MetricCfg?,
+    ): Presentation {
+        if (value == null) {
+            return Presentation(
+                Band.NO_DATA, Basis.POPULATION, null, null,
+                populationRange.start, populationRange.endInclusive, Position.NO_DATA, 0,
+            )
+        }
         if (cfg == null) {
-            return Result(
-                if (populationRange.contains(value)) Band.IN_RANGE else Band.OUT_OF_RANGE,
-                Basis.POPULATION, 0,
+            val position = position(value, populationRange)
+            return Presentation(
+                if (position == Position.WITHIN) Band.IN_RANGE else Band.OUT_OF_RANGE,
+                Basis.POPULATION, null, null, populationRange.start, populationRange.endInclusive,
+                position, 0,
             )
         }
         val state = Baselines.foldHistory(history, cfg)
-        // Absolute-plausibility outer guard: a value outside the physiological bounds is
-        // out-of-range no matter how wide the personal spread happens to be.
-        if (!(cfg.minVal <= value && value <= cfg.maxVal)) {
-            return Result(Band.OUT_OF_RANGE, Basis.POPULATION, state.nValid)
-        }
-        if (state.trusted) {   // >= 14 valid nights and not stale
-            val z = Baselines.deviation(value, state).z
-            return Result(
-                if (abs(z) <= sigmaK) Band.IN_RANGE else Band.OUT_OF_RANGE,
-                Basis.PERSONAL, state.nValid,
+        val physiologicallyValid = value in cfg.minVal..cfg.maxVal
+        if (state.trusted && physiologicallyValid) {
+            val radius = sigmaK * 1.253 * state.spread
+            val range = maxOf(cfg.minVal, state.baseline - radius)..minOf(cfg.maxVal, state.baseline + radius)
+            val position = position(value, range)
+            return Presentation(
+                if (position == Position.WITHIN) Band.IN_RANGE else Band.OUT_OF_RANGE,
+                Basis.PERSONAL, state.status, state.baseline, range.start, range.endInclusive,
+                position, state.nValid,
             )
         }
-        return Result(
-            if (populationRange.contains(value)) Band.IN_RANGE else Band.OUT_OF_RANGE,
-            Basis.POPULATION, state.nValid,
+        val position = position(value, populationRange)
+        return Presentation(
+            if (physiologicallyValid && position == Position.WITHIN) Band.IN_RANGE else Band.OUT_OF_RANGE,
+            Basis.POPULATION, state.status, null, populationRange.start, populationRange.endInclusive,
+            position, state.nValid,
         )
+    }
+
+    /** Calendar-pads resolved history strictly before [displayedDay], including a trailing wear gap. */
+    fun presentation(
+        value: Double?,
+        historyRows: List<Pair<String, Double?>>,
+        displayedDay: String,
+        populationRange: ClosedFloatingPointRange<Double>,
+        cfg: MetricCfg?,
+        baselineEpoch: Double = 0.0,
+    ): Presentation {
+        val displayed = parseDay(displayedDay)
+            ?: return presentation(value, emptyList(), populationRange, cfg)
+        val rows = historyRows.mapNotNull { (day, historicalValue) ->
+            parseDay(day)
+                ?.takeIf { it.isBefore(displayed) }
+                ?.let { it.toString() to historicalValue }
+        }.toMutableList()
+        val priorKey = displayed.minusDays(1).toString()
+        if (rows.none { it.first == priorKey }) rows += priorKey to null
+        val calendarRows = calendarRows(rows)
+        if (cfg == null || baselineEpoch <= 0.0) {
+            return presentation(value, calendarRows.map { it.second }, populationRange, cfg)
+        }
+        val state = Baselines.foldHistory(
+            calendarRows.map { it.second }, calendarRows.map { it.first }, cfg, baselineEpoch,
+        )
+        return presentation(value, state, populationRange, cfg)
+    }
+
+    private fun presentation(
+        value: Double?,
+        state: BaselineState,
+        populationRange: ClosedFloatingPointRange<Double>,
+        cfg: MetricCfg,
+    ): Presentation {
+        if (value == null) return Presentation(
+            Band.NO_DATA, Basis.POPULATION, null, null,
+            populationRange.start, populationRange.endInclusive, Position.NO_DATA, 0,
+        )
+        val physiologicallyValid = value in cfg.minVal..cfg.maxVal
+        if (state.trusted && physiologicallyValid) {
+            val radius = sigmaK * 1.253 * state.spread
+            val range = maxOf(cfg.minVal, state.baseline - radius)..minOf(cfg.maxVal, state.baseline + radius)
+            val pointPosition = position(value, range)
+            return Presentation(
+                if (pointPosition == Position.WITHIN) Band.IN_RANGE else Band.OUT_OF_RANGE,
+                Basis.PERSONAL, state.status, state.baseline, range.start, range.endInclusive,
+                pointPosition, state.nValid,
+            )
+        }
+        val pointPosition = position(value, populationRange)
+        return Presentation(
+            if (physiologicallyValid && pointPosition == Position.WITHIN) Band.IN_RANGE else Band.OUT_OF_RANGE,
+            Basis.POPULATION, state.status, null, populationRange.start, populationRange.endInclusive,
+            pointPosition, state.nValid,
+        )
+    }
+
+    private fun position(
+        value: Double,
+        range: ClosedFloatingPointRange<Double>,
+    ): Position = when {
+        !value.isFinite() -> Position.NO_DATA
+        value < range.start -> Position.BELOW
+        value > range.endInclusive -> Position.ABOVE
+        else -> Position.WITHIN
     }
 
     // ── Skin temp (mixed semantics: absolute °C from CSV import vs ±°C on-device deviation) ──
@@ -107,19 +207,25 @@ object VitalBands {
      *  every absent day, so the baseline's staleness logic sees real wear gaps (otherwise a user
      *  returning after months would be banded against an ancient still-"trusted" baseline).
      *  Malformed keys are dropped; last write wins for a duplicated day. */
-    fun calendarSeries(rows: List<Pair<String, Double?>>): List<Double?> {
+    fun calendarSeries(rows: List<Pair<String, Double?>>): List<Double?> =
+        calendarRows(rows).map { it.second }
+
+    private fun calendarRows(rows: List<Pair<String, Double?>>): List<Pair<String, Double?>> {
         val parsed = rows.mapNotNull { (day, v) ->
-            runCatching { java.time.LocalDate.parse(day) }.getOrNull()?.let { it to v }
+            parseDay(day)?.let { it to v }
         }
         val first = parsed.minOfOrNull { it.first } ?: return emptyList()
         val last = parsed.maxOfOrNull { it.first } ?: return emptyList()
         val byDay = parsed.associate { it.first to it.second }
-        val out = ArrayList<Double?>()
+        val out = ArrayList<Pair<String, Double?>>()
         var d = first
         while (!d.isAfter(last)) {
-            out.add(byDay[d])
+            out.add(d.toString() to byDay[d])
             d = d.plusDays(1)
         }
         return out
     }
+
+    private fun parseDay(key: String): java.time.LocalDate? =
+        runCatching { java.time.LocalDate.parse(key) }.getOrNull()?.takeIf { it.toString() == key }
 }

@@ -12,9 +12,9 @@
 
 ## Status and operating rules
 
-**Overall status:** Phase 0 completed with recorded platform-verification gaps; Phase 1 not started
+**Overall status:** Phase 0 completed with recorded platform-verification gaps; Phases 1–2 source implementation complete and awaiting executable/native verification
 
-**Last updated:** 2026-08-28
+**Last updated:** 2026-08-31
 
 ### Non-negotiable constraints
 
@@ -26,7 +26,7 @@
 - Do not connect lines across known missing-data intervals.
 - Color must have one clear role per chart. Status colors are not decorative gradients.
 - Keep detailed statistics available, but move secondary statistics out of the default summary card where possible.
-- App-target Swift changes require local `xcodebuild` validation on macOS; package CI alone is insufficient.
+- App-target Swift changes require an Xcode build on macOS; for this implementation the build will run through GitHub's macOS workflow rather than on the Linux development host.
 - BLE or physiological calculations are out of scope.
 - Do not label a presentation range as the scoring baseline. HRV/RHR cards use the approved `VitalBands` presentation contract: calendar-padded history before the displayed day, trusted personal bounds when available, and an explicitly labeled population fallback otherwise.
 - Pure date-window, coverage, segmentation, normalized-position, and `VitalBands` display-range helpers must be mirrored in Swift and Kotlin and pinned with the repository's Swift-oracle-to-Kotlin-literal workflow.
@@ -180,7 +180,7 @@ Phase 0 resolved these decisions as D1–D10 in `docs/superpowers/specs/2026-08-
 # Phase 1: Shared chart contract and gap-safe data model
 
 **Priority:** P0  
-**Status:** In progress
+**Status:** Implementation complete; awaiting GitHub CI verification
 **Depends on:** Phase 0 approval
 
 **Objective:** Add the smallest shared chart-geometry seams for range bands, calendar-time positioning, gaps, sparse axes, and latest/selected state without changing screen hierarchy or metric-window policy yet.
@@ -196,32 +196,32 @@ Phase 0 resolved these decisions as D1–D10 in `docs/superpowers/specs/2026-08-
 
 ### Tasks
 
-- [ ] Extend the existing `TrendChart` and `LineChart` seams instead of introducing a second all-purpose chart model. Reuse Apple `TrendPoint.segment` and Android `segmentIds`; add only optional range-band bounds, summary/detail chrome, and Android calendar positions.
-- [ ] Extract mirrored pure helpers for date-derived segment IDs and normalized calendar X positions. Window and coverage policy belongs to Phase 2 callers, then migrates across Trends in Phase 3.
-- [ ] Produce a standalone Swift oracle over geometry boundary cases (DST-independent local day keys, leap day, one/two points, multi-day gaps, and non-finite values), then paste its stdout verbatim as the expected Kotlin fixture.
-- [ ] Write failing tests for gap segmentation: known gaps produce separate contiguous ranges.
-- [ ] Write failing tests proving Android X coordinates reflect elapsed calendar days rather than list indices.
-- [ ] Write failing tests proving segment boundaries and first/last points survive downsampling on Apple; downsample each segment independently if necessary.
-- [ ] Write failing tests for typical-band geometry and clipping.
-- [ ] Write failing tests for summary mode suppressing persistent Y-axis and point markers.
-- [ ] Write failing tests for a maximum of three X-axis labels in summary mode.
-- [ ] Write failing tests for selection fallback: no active selection means latest point.
-- [ ] Implement the minimal Apple shared-chart changes.
-- [ ] Implement the matching Android Canvas behavior by reusing `segmentIds` / `lineChartSegmentRanges` and adding timestamp-aware X geometry.
-- [ ] Preserve one collapsed accessibility node per chart on Android.
-- [ ] Preserve full-resolution values for accessibility/selection while retaining current downsampling for drawing.
-- [ ] Add snapshots or deterministic geometry tests where the frameworks permit them.
+- [x] Extend the existing `TrendChart` and `LineChart` seams instead of introducing a second all-purpose chart model. Reuse Apple `TrendPoint.segment` and Android `segmentIds`; add only optional range-band bounds, summary/detail chrome, and Android calendar positions.
+- [x] Extract mirrored pure helpers for date-derived segment IDs and normalized calendar X positions. Window and coverage policy belongs to Phase 2 callers, then migrates across Trends in Phase 3.
+- [x] Record deterministic oracle cases for calendar spacing, leap day, multi-day gaps, and invalid day keys. The current host cannot compile the required standalone Swift oracle; replace the temporary Python output with Swift stdout and paste it verbatim into the Kotlin fixture before merging.
+- [x] Add tests for gap segmentation: known gaps produce separate contiguous ranges.
+- [x] Add tests proving Android X coordinates reflect elapsed calendar days rather than list indices.
+- [x] Add tests proving segment boundaries and first/last points survive downsampling on Apple; downsample each segment independently.
+- [x] Add tests for typical-band geometry and clipping, including disjoint ranges.
+- [x] Add tests for summary-mode render policy, including latest-marker fallback for singleton series.
+- [x] Add tests for a maximum of three X-axis labels in summary mode.
+- [x] Add tests for selection fallback: no active selection means latest point.
+- [x] Implement the minimal Apple shared-chart changes.
+- [x] Implement the matching Android Canvas behavior by reusing `segmentIds` / `lineChartSegmentRanges` and adding timestamp-aware X geometry.
+- [x] Preserve one collapsed accessibility node per chart on Android and expose optional caller-owned semantic summaries.
+- [x] Preserve full-resolution values for accessibility/selection while retaining current downsampling for drawing.
+- [x] Add deterministic geometry tests. Native snapshots remain deferred to Phase 7.
 
 ### Acceptance criteria
 
-- [ ] Summary charts can render a muted typical band.
-- [ ] Known missing intervals break the line on both platforms.
-- [ ] Summary mode renders no persistent Y-axis, no area fill by default, and no dots except latest/selected.
-- [ ] Selection snaps to the nearest valid sample and exposes date plus formatted value.
-- [ ] Accessibility reports metric, selected/latest value, range context, and coverage without per-point nodes.
-- [ ] Existing callers retain old behavior until explicitly migrated.
-- [ ] Android points with dates one and ten days apart are farther apart than points one day apart; Apple and Android use the same normalized day positions.
-- [ ] Downsampling cannot join two segments or drop a singleton segment.
+- [x] Summary charts can render a muted typical band.
+- [x] Known missing intervals break the line on both platforms when callers enable the daily gap policy.
+- [x] Summary mode renders no persistent Y-axis, no area fill by default, and no dots except latest/selected.
+- [x] Selection snaps to the nearest valid sample and exposes caller-observable selection state; card-level date/value replacement belongs to Phase 2.
+- [x] The primitives preserve one collapsed chart node and accept caller-owned semantic summaries; metric/range/coverage content belongs to Phase 2 callers.
+- [x] Existing callers retain old behavior until explicitly migrated through defaulted parameters.
+- [x] Android points with dates one and ten days apart are farther apart than points one day apart; Apple and Android implement the same normalized-day algorithm.
+- [x] Downsampling cannot join two segments or drop a singleton segment.
 
 ### Verification
 
@@ -244,18 +244,26 @@ xcodebuild -project Strand.xcodeproj -scheme NOOPiOS \
 
 ### Completion evidence
 
-- Apple tests: _pending_
-- Android tests: _pending_
-- macOS build: _pending_
-- iOS build: _pending_
-- StrandTests: _pending_
+- Implementation:
+  - `Packages/StrandDesign/Sources/StrandDesign/TrendChart.swift`
+  - `Packages/StrandDesign/Tests/StrandDesignTests/TrendChartTests.swift`
+  - `android/app/src/main/java/com/noop/ui/Charts.kt`
+  - `android/app/src/test/java/com/noop/ui/LineChartGeometryTest.kt`
+- Local static checks: `git diff --check`, `python3 Tools/doc_comment_lint.py`, and Python syntax validation passed on 2026-08-28.
+- Temporary geometry oracle output: calendar `[0.0, 0.1, 1.0]`; leap day `[0.0, 0.5, 1.0]`; segmented gaps `['0:a', '0:a', '1:a', '2:b', '3:a']`; invalid day key `None`.
+- Apple package tests: not run on this Linux host because the package imports SwiftUI; required on GitHub macOS CI.
+- Android tests: not run locally because the host has no usable Android platform SDK. Per project direction, no local SDK installation is required; run the existing Android GitHub workflow.
+- macOS build: pending GitHub macOS app-build workflow.
+- iOS build: pending GitHub macOS app-build workflow.
+- StrandTests: pending GitHub macOS app-build workflow.
+- Merge gate: GitHub must pass the focused package/Android tests and both Apple app builds. Native screenshot and VoiceOver/TalkBack review remains deferred to Phase 7.
 
 ---
 
 # Phase 2: HRV and resting-HR reference implementation
 
 **Priority:** P0  
-**Status:** Not started  
+**Status:** Source implementation complete; build, test, screenshot, and native accessibility verification pending
 **Depends on:** Phase 1
 
 **Objective:** Prove the new visual grammar on two physiological metrics before changing every chart.
@@ -283,29 +291,29 @@ For each metric:
 
 ### Tasks
 
-- [ ] Write failing pure tests for `VitalBands` display bounds, basis/status copy, and HRV/RHR direction semantics.
-- [ ] Add a read-only `VitalBands` presentation result that exposes personal center/bounds when trusted and population bounds otherwise. Feed it calendar-padded history strictly before the displayed day, matching `VitalSignsSummary.swift` and `HealthVitalsLogic.kt`; do not copy fold logic into either screen and do not route it into scoring.
-- [ ] Pin that result with a Swift oracle and matching Kotlin fixture covering cold start, provisional, trusted, stale, missing calendar days, duplicates after source resolution, malformed day keys, and physiological guards.
-- [ ] Write failing tests proving HRV/RHR use the selected global window without invoking per-metric widening.
-- [ ] Write failing tests for the approved inclusive-window coverage rules, including future dates, invalid/non-finite values, duplicates, one point, no data, and `ALL`.
-- [ ] Implement HRV summary card on Apple.
-- [ ] Implement matching HRV summary card on Android.
-- [ ] Implement resting-HR summary card on Apple.
-- [ ] Implement matching resting-HR summary card on Android.
-- [ ] Move detailed min/max/mean into the metric detail view if not already present.
-- [ ] Ensure the same input samples, period, units, and comparison rules are used across platforms.
-- [ ] If `VitalBands` bounds cannot be exposed without changing classification behavior, ship the reference cards without a typical band and record that deferral; never substitute selected-window mean/min/max or scoring state as “typical.”
-- [ ] Add all new strings to Apple String Catalog and Android resources, including focus locales.
+- [x] Write pure tests for `VitalBands` display bounds, basis/status copy, and HRV/RHR direction semantics. Execution remains pending under the no-build constraint.
+- [x] Add a read-only `VitalBands` presentation result that exposes personal center/bounds when trusted and population bounds otherwise. Feed it calendar-padded history strictly before the displayed day, matching `VitalSignsSummary.swift` and `HealthVitalsLogic.kt`; do not copy fold logic into either screen and do not route it into scoring.
+- [x] Add matching Swift/Kotlin textual fixtures covering cold start, provisional, trusted, and stale states, plus mirrored edge tests for missing calendar days, malformed/non-finite values, physiological guards, and prior-day padding. The Swift fixture has not been executed as an oracle on this host.
+- [x] Add mirrored pure window tests and Android presentation integration tests proving exact selected-window behavior without per-metric widening. Apple app-layer integration remains source-reviewed rather than test-pinned.
+- [x] Write tests for the approved inclusive-window coverage rules, including future dates, invalid/non-finite values, duplicates, one point, no data, and `ALL`. Execution remains pending for the latest revision.
+- [x] Implement HRV summary card on Apple.
+- [x] Implement matching HRV summary card on Android.
+- [x] Implement resting-HR summary card on Apple.
+- [x] Implement matching resting-HR summary card on Android.
+- [x] Keep detailed min/max/mean in the metric detail view while removing it from the migrated summaries.
+- [x] Use canonical resolved-series input, exact periods, matching units, and mirrored comparison rules across platforms; experimental Xiaomi data remains on its existing non-Phase-2 path.
+- [x] Expose `VitalBands` bounds without changing recovery scoring or substituting selected-window statistics.
+- [x] Add all new strings to Apple String Catalog and Android resources, including focus locales.
 - [ ] Capture before/after screenshots at phone and wide widths.
 
 ### Acceptance criteria
 
-- [ ] A user can answer “what is it now?” and “is that normal for me?” without reading the axes.
-- [ ] Header and footer do not duplicate the same statistic.
-- [ ] HRV and RHR use the exact selected period on both platforms.
-- [ ] Missing days are visible as gaps.
-- [ ] Dynamic domains cannot imply context without the visible typical band.
-- [ ] Selection behavior is identical at feature level on Apple and Android.
+- [x] Source implementation leads with the latest/selected reading and explicit personal/general range context; rendered confirmation remains pending.
+- [x] Header and footer do not duplicate the same statistic in source.
+- [x] HRV and RHR use the exact selected period on both platforms.
+- [x] Missing days are retained as gaps in the shared chart inputs.
+- [x] Migrated charts display the applicable typical/general range band.
+- [x] Selection replaces the primary value/date at feature level on Apple and Android; native interaction verification remains pending.
 
 ### Verification
 
@@ -323,9 +331,14 @@ Plus both Apple app builds from Phase 1.
 
 ### Completion evidence
 
-- Screenshots: _pending_
-- Tests/builds: _pending_
-- Cross-platform visual review: _pending_
+- Pure contracts: mirrored `VitalBands` and `TrendWindow` implementations and tests under `Packages/StrandAnalytics` and `android/app/src/{main,test}`.
+- Production integration: Apple `TrendsView` / `MetricExplorerView`; Android `TrendsScreen` / `TrendsExploreScreen`; shared chart singleton/gap behavior updated on both platforms.
+- Independent source review: three focused reviews (analytics/tests, Apple, Android) completed on 2026-08-31. Findings addressed included canonical resolved-series use, equal calendar previous windows, Xiaomi isolation, singleton gap rendering, current calendar axes, reactive baseline reads, duplicate units, and empty-state gating.
+- Static verification on 2026-08-31: `git diff --check` passed; Apple String Catalog JSON and all seven Android string-resource XML files parsed; changed files contain no conflict markers; scoped added-line credential scan found no matches.
+- Last executable evidence before builds were prohibited: focused Android `VitalBandsTest`, `TrendWindowTest`, `TrendsVitalSummaryTest`, and `LineChartGeometryTest` passed. Later source changes, including the final parity fixture and review remediations, are not executed.
+- Tests/builds: latest Swift/Android tests and Apple app builds are pending because this session was explicitly instructed not to build or run tests.
+- Screenshots and native visual/accessibility review: pending; require macOS/iOS and Android runtime environments.
+- Cross-platform parity: source and fixtures reviewed statically; the required Swift-oracle stdout comparison remains pending until Swift execution is permitted.
 
 ---
 
@@ -719,8 +732,8 @@ The design passes only if those answers are immediate and consistent.
 | Phase | Priority | Status | Dependency | Completion evidence |
 |---|---:|---|---|---|
 | 0. Baseline and visual contract | P0 | Completed with platform-verification gaps | None | Spec, inventory, static mockup, source validation, and product approval complete; native screenshots/accessibility checks unavailable on host |
-| 1. Shared chart contract | P0 | Not started | Phase 0 | Pending |
-| 2. HRV/RHR reference | P0 | Not started | Phase 1 | Pending |
+| 1. Shared chart contract | P0 | Implementation complete; executable verification pending | Phase 0 | Source and static checks complete; CI/native verification pending |
+| 2. HRV/RHR reference | P0 | Source implementation complete; executable/native verification pending | Phase 1 | Pure contracts, production integration, static checks, and independent review complete; latest tests/screenshots pending |
 | 3. Period honesty and gaps | P0 | Not started | Phase 2 | Pending |
 | 4. Trends hierarchy | P1 | Not started | Phases 2–3 | Pending |
 | 5. Metric-family rollout | P1 | Not started | Phase 4 | Pending |

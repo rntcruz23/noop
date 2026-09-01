@@ -576,7 +576,7 @@ Plus both Apple app builds from Phase 1.
 ### Completion evidence
 
 - Preference migration decision: remove the Line/Bars Settings control, enum, key constants, readers, and writers on both platforms. Preserve the old device-local stored value by performing no deletion or migration; older builds can still read it after a downgrade. Keep `ChartStyle` (global semantic color palette) and `SleepChartStyle` (specialized categorical sleep-stage presentation), which do not conflict with the Trends geometry contract.
-- Semantic geometry tests: `TrendsHierarchyTests.testEveryMetricUsesFixedSemanticGeometry` and `TrendsHierarchyTest.everyMetricUsesFixedSemanticGeometry` pin Charge = zone columns, Effort = bars, and HRV/RHR/Rest = lines.
+- Semantic geometry tests: `TrendsHierarchyTests.testEveryMetricUsesFixedSemanticGeometry` and `TrendsHierarchyTest.everyMetricUsesFixedSemanticGeometry` pin Charge = zone-colored daily marks, Effort = bars, and HRV/RHR/Rest = lines.
 - Backup compatibility tests: Apple and Android codec tests explicitly prove `trend.chart.style` remains excluded from `.noopbak`.
 - Source cleanup: repository search reports no remaining `TrendChartStyle`, `trendChartStyleKey`, `KEY_TREND_CHART_STYLE`, reader, writer, or Settings-state references.
 - Verification: Android production and unit-test Kotlin compilation passed after the cleanup. Full test execution, Apple app builds, and native rendered QA remain pending because this Linux host lacks executable `jlink`, Swift, and Xcode.
@@ -586,12 +586,15 @@ Plus both Apple app builds from Phase 1.
 # Phase 7: Final rendered QA and release gate
 
 **Priority:** P0 before release  
-**Status:** Not started  
+**Status:** In progress
 **Depends on:** All implementation phases selected for the release
 
 **Objective:** Verify that the new charts are clearer, truthful, accessible, responsive, and cross-platform consistent with real rendered output.
 
 ### Required datasets
+
+Dataset coverage is first established with deterministic tests. Rendered confirmation remains open
+until a native Apple host and Android emulator/device are available.
 
 - [ ] Dense 30-day data
 - [ ] Sparse 30-day data

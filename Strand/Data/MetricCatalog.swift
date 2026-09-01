@@ -1,5 +1,6 @@
 import Foundation
 import StrandAnalytics
+import StrandDesign
 
 /// One interrogable metric: how to fetch it (key+source), how to label/format it, and whether
 /// higher is better (drives delta tinting). The Metric Explorer + Compare are built from this list.

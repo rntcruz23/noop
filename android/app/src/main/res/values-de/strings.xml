@@ -127,6 +127,8 @@
     <string name="trends_value_with_unit">%1$s %2$s</string>
     <string name="trends_chart_accessibility">%1$s, %2$s am %3$s, %4$s, %5$s</string>
     <string name="trends_coverage_all">Gesamter Verlauf · %1$d Messwerte über %2$d Nächte</string>
+    <string name="trends_coverage_all_days">Gesamter Verlauf · %1$d Messwerte in %2$d Tagen</string>
+    <string name="trends_not_enough_comparison">Nicht genügend Daten für einen Vergleich</string>
     <string name="trends_state_below">Unter dem Bereich</string>
     <string name="trends_state_within">Im Bereich</string>
     <string name="trends_state_above">Über dem Bereich</string>
@@ -138,6 +140,8 @@
     <string name="trends_last_week">Letzte Woche</string>
     <string name="trends_previous_week">Vorherige Woche</string>
     <string name="trends_next_week">Nächste Woche</string>
+    <string name="trends_previous_reading">Vorheriger Messwert</string>
+    <string name="trends_next_reading">Nächster Messwert</string>
     <string name="trends_daily_signals">Tägliche Signale</string>
     <string name="trends_week_in_review">Woche im Rückblick</string>
     <string name="trends_charge_effort_rest">Ladung · Anstrengung · Ruhe</string>

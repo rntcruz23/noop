@@ -220,6 +220,8 @@
     <string name="trends_value_with_unit">%1$s %2$s</string>
     <string name="trends_chart_accessibility">%1$s, %2$s on %3$s, %4$s, %5$s</string>
     <string name="trends_coverage_all">All history · %1$d readings across %2$d nights</string>
+    <string name="trends_coverage_all_days">All history · %1$d readings across %2$d days</string>
+    <string name="trends_not_enough_comparison">Not enough data for comparison</string>
     <string name="trends_state_below">Below range</string>
     <string name="trends_state_within">Within range</string>
     <string name="trends_state_above">Above range</string>
@@ -231,6 +233,8 @@
     <string name="trends_last_week">Last week</string>
     <string name="trends_previous_week">Previous week</string>
     <string name="trends_next_week">Next week</string>
+    <string name="trends_previous_reading">Previous reading</string>
+    <string name="trends_next_reading">Next reading</string>
     <string name="trends_daily_signals">Daily signals</string>
     <string name="trends_week_in_review">Week in review</string>
     <string name="trends_charge_effort_rest">Charge · Effort · Rest</string>

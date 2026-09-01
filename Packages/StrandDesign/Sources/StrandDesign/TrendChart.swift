@@ -35,6 +35,9 @@ public struct TrendPoint: Identifiable, Sendable {
 public enum TrendChartChrome: Sendable, Equatable {
     case detail
     case summary
+    /// Sparkline chrome for dense hierarchy rows: no axes, area, detail markers, or tooltip. The
+    /// selected/latest marker and segmented daily line remain available.
+    case compact
 }
 
 public enum TrendChartGapPolicy: Sendable, Equatable {
@@ -164,6 +167,8 @@ public struct TrendChart: View {
 
     /// The x-position the cursor is hovering, in chart-local coordinates.
     @State private var hoverX: CGFloat? = nil
+    /// VoiceOver's independent cursor. Touch/hover selection remains transient.
+    @State private var accessibilityIndex: Int? = nil
 
     /// PERF: a 365-day (or longer) series feeds Swift Charts hundreds of LineMark/AreaMark vertices, each
     /// catmullRom-interpolated — far more than the ~360pt plot has pixels, so most are sub-pixel and pure
@@ -229,8 +234,10 @@ public struct TrendChart: View {
     }
 
     var rendersArea: Bool { chrome == .detail && showsArea }
+    var rendersPersistentXAxis: Bool { chrome != .compact }
     var rendersPersistentYAxis: Bool { chrome == .detail }
     var rendersAllPointMarkers: Bool { chrome == .detail && points.count <= 60 }
+    var rendersSingletonMarkers: Bool { chrome != .detail }
     var rendersTooltip: Bool { chrome == .detail && showsHover }
 
     private var resolvedXDomain: ClosedRange<Date>? {
@@ -310,7 +317,9 @@ public struct TrendChart: View {
                         .foregroundStyle(StrandPalette.sample(stops: gradient.toStops(), at: unit(p.value)))
                     }
                 }
-                if chrome == .summary && !rendersAllPointMarkers {
+                // Summary and compact charts retain a dot for each isolated run: without it a valid
+                // singleton observation would disappear because Swift Charts cannot draw a one-point line.
+                if rendersSingletonMarkers && !rendersAllPointMarkers {
                     ForEach(singletonSegmentPoints) { p in
                         PointMark(
                             x: .value("Date", p.date),
@@ -345,7 +354,7 @@ public struct TrendChart: View {
                     AxisValueLabel().foregroundStyle(StrandPalette.textTertiary)
                         .font(StrandFont.footnote)
                 }
-            } else {
+            } else if rendersPersistentXAxis {
                 AxisMarks(values: .automatic(desiredCount: 5)) { _ in
                     AxisGridLine().foregroundStyle(StrandPalette.hairline.opacity(0.4))
                     AxisValueLabel().foregroundStyle(StrandPalette.textTertiary)
@@ -464,6 +473,21 @@ public struct TrendChart: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel.map(Text.init) ?? Text("Trend", bundle: .module))
         .accessibilityValue(Text(accessibilityValue ?? a11ySummary))
+        .accessibilityAdjustableAction { direction in
+            guard chrome == .summary, !points.isEmpty, onSelectionChange != nil else { return }
+            let index = accessibilityIndex ?? points.index(before: points.endIndex)
+            let nextIndex: Int
+            switch direction {
+            case .increment:
+                nextIndex = min(index + 1, points.index(before: points.endIndex))
+            case .decrement:
+                nextIndex = max(index - 1, points.startIndex)
+            @unknown default:
+                return
+            }
+            accessibilityIndex = nextIndex
+            onSelectionChange?(points[nextIndex])
+        }
         .accessibilityHidden(!showsHover && accessibilityLabel == nil)
     }
 }

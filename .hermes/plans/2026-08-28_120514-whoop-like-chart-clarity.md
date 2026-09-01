@@ -12,9 +12,9 @@
 
 ## Status and operating rules
 
-**Overall status:** Phase 0 completed with recorded platform-verification gaps; Phases 1–2 source implementation complete and awaiting executable/native verification
+**Overall status:** Phase 0 completed with recorded platform-verification gaps; Phases 1–3 source implementation complete with verification debt; Phase 4 in progress
 
-**Last updated:** 2026-08-31
+**Last updated:** 2026-09-01
 
 ### Non-negotiable constraints
 
@@ -392,7 +392,7 @@ Plus both Apple app builds from Phase 1.
 # Phase 4: Simplify the Trends information hierarchy
 
 **Priority:** P1  
-**Status:** Not started  
+**Status:** Source implementation complete; native verification pending
 **Depends on:** Phases 2–3 and approved Phase 0 hierarchy
 
 **Objective:** Replace the equal-weight wall of chart cards with one clear primary chart and compact secondary metrics.
@@ -414,28 +414,28 @@ Plus both Apple app builds from Phase 1.
 
 ### Tasks
 
-- [ ] Build a compact metric row with label, primary value, comparison, coverage, and sparkline.
-- [ ] Make each row select the hero chart and retain tap-through to full metric detail.
-- [ ] Preserve keyboard, VoiceOver, TalkBack, and large-text navigation semantics.
-- [ ] Remove duplicate mean/min/max/trend summaries from the main Trends screen.
-- [ ] Keep deeper statistics in the existing metric detail screen.
-- [ ] Decide and implement the year heat-strip placement.
-- [ ] Test metric switching, selected state, navigation, empty state, and dynamic type/font scaling.
+- [x] Build a compact metric row with label, primary value, comparison, coverage, and sparkline.
+- [x] Make each row select the hero chart and retain tap-through to full metric detail.
+- [ ] Preserve keyboard, VoiceOver, TalkBack, and large-text navigation semantics. Source semantics are implemented; native review remains.
+- [x] Remove duplicate mean/min/max/trend summaries from the main Trends screen.
+- [x] Keep deeper statistics in the existing metric detail screen.
+- [x] Decide and implement the year heat-strip placement. Apple places it after export; Android retains its recovery-history equivalent near the bottom.
+- [ ] Test metric switching, selected state, navigation, empty state, and dynamic type/font scaling. Pure hierarchy/route/empty-state tests are implemented; native interaction and scaling checks remain.
 
 ### Acceptance criteria
 
-- [ ] There is one obvious primary visualization.
-- [ ] Secondary metrics are scannable without scrolling through several full-size charts.
-- [ ] Every compact row has one primary label and muted secondary context.
-- [ ] No metric identifier, period label, or average is repeated unnecessarily.
-- [ ] Metric detail remains one tap away.
+- [x] There is one obvious primary visualization in source on both platforms.
+- [x] Secondary metrics use four compact rows rather than full-size chart cards.
+- [x] Every compact row has one primary label and muted secondary context.
+- [x] The main hierarchy omits the former duplicate mean/min/max/trend summaries.
+- [x] Metric detail remains one tap away from the hero and each compact row.
 
 ### Completion evidence
 
 - Phone screenshots: _pending_
 - Tablet/desktop screenshots: _pending_
 - Accessibility review: _pending_
-- Tests/builds: _pending_
+- Tests/builds: Android production and unit-test Kotlin compile pass; `git diff --check`, detached-doc lint, and 108 Tools tests pass. Phase 4 adds matching hierarchy/route/selection/empty-state tests on both platforms. Full Android JVM test execution is blocked because this host's JDK lacks `jlink`; Swift tests and app builds are blocked because Swift/Xcode are unavailable. The repository-wide i18n gate still fails only on unrelated pre-existing literals outside the Phase 4 files; all focus locale catalogs pass and no Phase 4 source is reported.
 
 ---
 
@@ -739,8 +739,8 @@ The design passes only if those answers are immediate and consistent.
 | 0. Baseline and visual contract | P0 | Completed with platform-verification gaps | None | Spec, inventory, static mockup, source validation, and product approval complete; native screenshots/accessibility checks unavailable on host |
 | 1. Shared chart contract | P0 | Implementation complete; executable verification pending | Phase 0 | Source and static checks complete; CI/native verification pending |
 | 2. HRV/RHR reference | P0 | Source implementation complete; executable/native verification pending | Phase 1 | Pure contracts, production integration, static checks, and independent review complete; latest tests/screenshots pending |
-| 3. Period honesty and gaps | P0 | Not started | Phase 2 | Pending |
-| 4. Trends hierarchy | P1 | Not started | Phases 2–3 | Pending |
+| 3. Period honesty and gaps | P0 | Source implementation complete; executable/native verification pending | Phase 2 | Exact-window, coverage, gap, shared-domain, and all-history source implementation landed; tests/builds and native QA pending |
+| 4. Trends hierarchy | P1 | Source implementation complete; native verification pending | Phases 2–3 | Apple/Android hero, compact rows, detail routes, and pure hierarchy tests implemented; native screenshots/accessibility and full test execution pending |
 | 5. Metric-family rollout | P1 | Not started | Phase 4 | Pending |
 | 6. Legacy option cleanup | P2 | Not started | Phase 5 | Pending |
 | 7. Rendered QA and release gate | P0 | Not started | Selected implementation phases | Pending |

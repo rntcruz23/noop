@@ -3,6 +3,7 @@ package com.noop.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,6 +47,10 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,10 +74,8 @@ import kotlin.math.roundToInt
 // MARK: - Trends
 //
 // The longitudinal view, ported from Strand/Screens/TrendsView.swift onto the locked
-// Android component system so every surface, height and gap matches: one
-// SegmentedPillControl for the range (W / M / 3M / 6M / 1Y / ALL), a hero Recovery
-// ChartCard, and a uniform set of HRV / Resting HR / Day-strain ChartCards (all
-// Metrics.chartHeight tall), followed by a recovery history strip.
+// Android component system: one global range, one selectable hero, four compact peer rows,
+// the weekly narrative, and long-horizon context.
 //
 // Windows are taken relative to the phone's actual local day. Every selected-range metric honors the
 // exact same calendar interval; sparse data remains sparse and is never replaced with older history.
@@ -93,8 +96,22 @@ import kotlin.math.roundToInt
 // give it the frosted-glass edge. Mirrors the liquid Today heroCard (LiquidTodayView / TodayScreen).
 private val LIQUID_HERO_RADIUS: Dp = 26.dp
 
+internal enum class TrendsMetric(val detailKey: String) {
+    CHARGE("recovery"), HRV("hrv"), RHR("rhr"), REST("rest"), EFFORT("strain"),
+}
+
+internal fun defaultTrendsMetric(): TrendsMetric = TrendsMetric.CHARGE
+internal fun secondaryTrendMetrics(selected: TrendsMetric): List<TrendsMetric> =
+    TrendsMetric.entries.filterNot { it == selected }
+internal fun selectedOrLatestTrendIndex(selected: Int?, count: Int): Int? = when {
+    count <= 0 -> null
+    selected != null && selected in 0 until count -> selected
+    else -> count - 1
+}
+internal fun hasAnyTrendData(vararg counts: Int): Boolean = counts.any { it > 0 }
+
 @Composable
-fun TrendsScreen(vm: AppViewModel) {
+fun TrendsScreen(vm: AppViewModel, onOpenMetric: (String) -> Unit = {}) {
     // Reactive cache (oldest → newest) as the immediate backing.
     val reactiveDays by vm.recentDays.collectAsStateWithLifecycle()
     val publishedActiveStrapId by vm.activeStrapIdFlow.collectAsStateWithLifecycle()
@@ -134,6 +151,7 @@ fun TrendsScreen(vm: AppViewModel) {
     val skyBehindCards = remember { NoopPrefs.skyBehindCards(trendsCtx) }
 
     var range by remember { mutableStateOf(TrendsRange.Quarter) }
+    var selectedMetric by remember { mutableStateOf(defaultTrendsMetric()) }
 
     // #710 , browse previous weeks in the Week-in-review digest. 0 = the week containing today; each step
     // back is one Mon–Sun week earlier, clamped so it never runs past the earliest day we hold. The Trends
@@ -206,11 +224,15 @@ fun TrendsScreen(vm: AppViewModel) {
     val rest = remember(range, sleepPerfByDay, todayKey, sharedDomainStart) {
         metricTrendSummary(sleepPerfByDay.map { it.key to it.value }, todayKey, range.days, sharedDomainStart)
     }
-    val recAvg = recovery.values.averageOrNull()
+    val selectedWindow = when (selectedMetric) {
+        TrendsMetric.CHARGE -> recovery.window
+        TrendsMetric.HRV -> hrvTrend.window
+        TrendsMetric.RHR -> rhrTrend.window
+        TrendsMetric.REST -> rest.window
+        TrendsMetric.EFFORT -> strain.window
+    }
     val canShowAllHistory = range != TrendsRange.All &&
-        (listOf(recovery, strain, rest).any { it.window.observed == 0 && it.window.hasOlderHistory } ||
-            hrvTrend.window.observed == 0 && hrvTrend.window.hasOlderHistory ||
-            rhrTrend.window.observed == 0 && rhrTrend.window.hasOlderHistory)
+        selectedWindow.observed == 0 && selectedWindow.hasOlderHistory
     val rangeSubtitle = range.days?.let { dayCount ->
         stringResource(R.string.trends_trailing_days, dayCount)
     } ?: stringResource(R.string.trends_all_history)
@@ -227,7 +249,9 @@ fun TrendsScreen(vm: AppViewModel) {
         // (Today / metric-detail parity — the same two prefs drive the same two behaviours everywhere).
         fullBleedBackground = screenBackdropFullBleed(showDayCycleBackground, skyBehindCards),
     ) {
-        if (days.isEmpty() && hrvHistory.isEmpty() && rhrHistory.isEmpty()) {
+        val recoveryCount = days.count { it.recovery != null }
+        val effortCount = days.count { it.strain != null }
+        if (!hasAnyTrendData(recoveryCount, hrvHistory.size, rhrHistory.size, sleepPerfByDay.size, effortCount)) {
             item { EmptyTrends() }
             return@LazyScreenScaffold
         }
@@ -235,37 +259,10 @@ fun TrendsScreen(vm: AppViewModel) {
         // The main card list ripples in once on appear (Reduce-Motion safe), mirroring the iOS
         // staggeredAppear sequence , each top-level section is one staggered child.
 
-        // --- Week-in-review digest (#208) with prev/next week browsing (#710). Past weeks render in the
-        // same format; the chevrons stay visible on an empty PAST week so the user can step on. ---
-        item {
-            Column(modifier = Modifier.staggeredAppear(index = 0)) {
-                WeeklyDigestNav(
-                    days = days,
-                    weekOffset = weekOffset,
-                    minWeekOffset = minWeekOffset,
-                    onStep = { delta -> weekOffset = (weekOffset + delta).coerceIn(minWeekOffset, 0) },
-                )
-            }
-        }
-
-        // --- Week in review , the Charge / Effort / Rest trio in NOOP's pip language (PipBar +
-        // CountUpText), mirroring the iOS TrendsView.weekInReview card. White count-up numbers over
-        // segmented count-up bars; self-hides when none of the three carry a window mean. ---
-        item {
-            WeekInReviewCard(
-                charge = recovery,
-                effort = strain,
-                rest = rest,
-                effortScale = effortScale,
-                allHistory = range == TrendsRange.All,
-                modifier = Modifier.staggeredAppear(index = 1),
-            )
-        }
-
         // --- Range control ---
         item {
             Column(
-                modifier = Modifier.staggeredAppear(index = 2),
+                modifier = Modifier.staggeredAppear(index = 0),
                 verticalArrangement = Arrangement.spacedBy(Metrics.space8),
             ) {
                 Row(
@@ -281,11 +278,6 @@ fun TrendsScreen(vm: AppViewModel) {
                     Spacer(Modifier.weight(1f))
                     TrendsRangeCaption(range = range, fullSubtitle = rangeSubtitle)
                 }
-                Text(
-                    stringResource(R.string.trends_coverage_days, recovery.window.observed, recovery.window.expected),
-                    style = NoopType.footnote,
-                    color = Palette.textTertiary,
-                )
                 if (canShowAllHistory) {
                     NoopButton(
                         text = stringResource(R.string.trends_show_all_history),
@@ -296,43 +288,14 @@ fun TrendsScreen(vm: AppViewModel) {
             }
         }
 
-        // --- Hero , charge over time. Charge (green) world: domain card wash, a crisp flat line with a
-        // bright "now" end-cap, and a TrendChip for the window's move. ---
+        // The selected metric owns the one hero; its selected/latest reading replaces aggregate stats.
         item {
-            ChartCard(
-                modifier = Modifier.staggeredAppear(index = 3),
-                title = stringResource(R.string.trends_charge),
-                subtitle = stringResource(
-                    R.string.trends_coverage_days,
-                    recovery.window.observed,
-                    recovery.window.expected,
-                ),
-                trailing = recAvg?.let { "${it.roundToInt()}" },
-                // LIQUID hero: the translucent-black frosted wrapper + a small count-up Charge vessel accent
-                // in the header (the screen's one headline single value — the window-average Charge). The
-                // line chart below stays crisp. Small multiples pass liquidHero = false → untouched.
-                liquidHero = true,
-                headlineValue = recAvg,
-                color = Palette.chargeColor,
-                tipColor = Palette.chargeBright,
-                values = recovery.values,
-                dates = recovery.dates,
-                formatY = { "${it.roundToInt()}" },
-                change = periodChange(recovery.values),
-                higherIsBetter = true,
-                changeFmt = { "${it.roundToInt()}" },
-                // Lift the ceiling ~6% so a near-100 peak and the now-cap halo clear the top gridline ,
-                // mirrors the iOS hero's `valueRange: 0...106`.
-                chartHeadroom = 0.06f,
-                xPositions = recovery.xPositions,
-                windowStart = recovery.displayStartDay,
-                windowEnd = recovery.window.endDay,
-                footer = listOf(
-                    stringResource(R.string.trends_avg) to (recAvg?.let { "${it.roundToInt()}" } ?: EM_DASH),
-                    stringResource(R.string.trends_peak) to (recovery.values.maxOrNull()?.let { "${it.roundToInt()}" } ?: EM_DASH),
-                    stringResource(R.string.trends_low) to (recovery.values.minOrNull()?.let { "${it.roundToInt()}" } ?: EM_DASH),
-                    stringResource(R.string.trends_days) to "${recovery.values.size}",
-                ),
+            SelectableTrendHero(
+                metric = selectedMetric,
+                recovery = recovery, hrv = hrvTrend, rhr = rhrTrend, rest = rest, effort = strain,
+                effortScale = effortScale,
+                onOpenDetail = { onOpenMetric(selectedMetric.detailKey) },
+                modifier = Modifier.staggeredAppear(index = 1),
             )
         }
 
@@ -342,33 +305,30 @@ fun TrendsScreen(vm: AppViewModel) {
         // No trailing window label , the range bar's overline already states it.
         item {
             Column(
-                modifier = Modifier.staggeredAppear(index = 4),
+                modifier = Modifier.staggeredAppear(index = 2),
                 verticalArrangement = Arrangement.spacedBy(Metrics.gap),
             ) {
                 SectionHeader(stringResource(R.string.trends_daily_signals), overline = stringResource(R.string.nav_trends))
-                VitalTrendCard(
-                    title = stringResource(R.string.trends_hrv_full), unit = "ms",
-                    color = Palette.metricPurple,
-                    summary = hrvTrend,
-                    fmt = { "${it.roundToInt()}" },
-                )
-                VitalTrendCard(
-                    title = stringResource(R.string.trends_resting_hr_full), unit = "bpm",
-                    color = Palette.metricRose,
-                    summary = rhrTrend,
-                    fmt = { "${it.roundToInt()}" },
-                )
-                MetricTrendCard(
-                    // Plotted values stay on the stored 0–100 scale (line shape unchanged); only the displayed
-                    // numbers + unit follow the Effort-scale toggle, converted inside `fmt`. (#268)
-                    title = stringResource(R.string.trends_effort), unit = "/ ${UnitFormatter.effortScaleMax(effortScale)}",
-                    // WHOOP: Effort/Strain is always BLUE , a deep→bright blue line, not the amber ramp.
-                    color = Palette.effortColor,
-                    tint = Palette.effortColor,
-                    tipColor = Palette.effortBright,
-                    higherIsBetter = null,
-                    resolved = strain,
-                    fmt = { UnitFormatter.effortDisplay(it, effortScale) },
+                secondaryTrendMetrics(selectedMetric).forEach { metric ->
+                    CompactTrendRow(
+                        metric = metric,
+                        recovery = recovery, hrv = hrvTrend, rhr = rhrTrend, rest = rest, effort = strain,
+                        effortScale = effortScale,
+                        onSelect = { selectedMetric = metric },
+                        onOpenDetail = { onOpenMetric(metric.detailKey) },
+                    )
+                }
+            }
+        }
+
+        // The weekly narrative follows the metric comparison instead of competing with the hero.
+        item {
+            Column(modifier = Modifier.staggeredAppear(index = 3)) {
+                WeeklyDigestNav(
+                    days = days,
+                    weekOffset = weekOffset,
+                    minWeekOffset = minWeekOffset,
+                    onStep = { delta -> weekOffset = (weekOffset + delta).coerceIn(minWeekOffset, 0) },
                 )
             }
         }
@@ -380,13 +340,13 @@ fun TrendsScreen(vm: AppViewModel) {
                 days = days,
                 displayStartDay = recovery.displayStartDay,
                 displayEndDay = recovery.window.endDay,
-                modifier = Modifier.staggeredAppear(index = 5),
+                modifier = Modifier.staggeredAppear(index = 4),
             )
         }
 
         // --- Recovery history strip (stands in for the macOS YearHeatStrip) ---
         item {
-            Column(modifier = Modifier.staggeredAppear(index = 6)) {
+            Column(modifier = Modifier.staggeredAppear(index = 5)) {
                 RecoveryHistoryCard(resolved = recovery, allHistory = range == TrendsRange.All)
             }
         }
@@ -395,8 +355,298 @@ fun TrendsScreen(vm: AppViewModel) {
         // TrendsView.exportReportRow footer; the same composable Settings hosts, so both surfaces
         // offer it. Routed through NoopButton like every other CTA (no gold). ---
         item {
-            Column(modifier = Modifier.staggeredAppear(index = 7)) {
+            Column(modifier = Modifier.staggeredAppear(index = 6)) {
                 TrendsReportExportSection(vm)
+            }
+        }
+    }
+}
+
+@Composable
+private fun trendMetricLabel(metric: TrendsMetric): String = stringResource(when (metric) {
+    TrendsMetric.CHARGE -> R.string.trends_charge
+    TrendsMetric.HRV -> R.string.trends_hrv_full
+    TrendsMetric.RHR -> R.string.trends_resting_hr_full
+    TrendsMetric.REST -> R.string.trends_rest
+    TrendsMetric.EFFORT -> R.string.trends_effort
+})
+
+private fun metricColor(metric: TrendsMetric): Color = when (metric) {
+    TrendsMetric.CHARGE -> Palette.chargeColor
+    TrendsMetric.HRV -> Palette.metricPurple
+    TrendsMetric.RHR -> Palette.metricRose
+    TrendsMetric.REST -> Palette.restColor
+    TrendsMetric.EFFORT -> Palette.effortColor
+}
+
+private fun metricSummary(
+    metric: TrendsMetric,
+    recovery: MetricTrendSummary,
+    rest: MetricTrendSummary,
+    effort: MetricTrendSummary,
+): MetricTrendSummary = when (metric) {
+    TrendsMetric.CHARGE -> recovery
+    TrendsMetric.REST -> rest
+    TrendsMetric.EFFORT -> effort
+    else -> error("Vital metrics have a VitalTrendSummary")
+}
+
+@Composable
+private fun SelectableTrendHero(
+    metric: TrendsMetric,
+    recovery: MetricTrendSummary,
+    hrv: VitalTrendSummary,
+    rhr: VitalTrendSummary,
+    rest: MetricTrendSummary,
+    effort: MetricTrendSummary,
+    effortScale: EffortScale,
+    onOpenDetail: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val vital = when (metric) {
+        TrendsMetric.HRV -> hrv
+        TrendsMetric.RHR -> rhr
+        else -> null
+    }
+    val regular = if (vital == null) metricSummary(metric, recovery, rest, effort) else null
+    val points = vital?.window?.points ?: regular!!.window.points
+    var selectedIndex by remember(metric, points) { mutableStateOf<Int?>(null) }
+    val displayIndex = selectedOrLatestTrendIndex(selectedIndex, points.size)
+    val displayed = displayIndex?.let(points::get)
+    val presentation = displayIndex?.let { vital?.presentations?.getOrNull(it) }
+    val label = trendMetricLabel(metric)
+    val unit = when (metric) {
+        TrendsMetric.HRV -> "ms"
+        TrendsMetric.RHR -> "bpm"
+        TrendsMetric.EFFORT -> "/ ${UnitFormatter.effortScaleMax(effortScale)}"
+        else -> ""
+    }
+    val format: (Double) -> String = if (metric == TrendsMetric.EFFORT) {
+        { UnitFormatter.effortDisplay(it, effortScale) }
+    } else {
+        { "${it.roundToInt()}" }
+    }
+    val valueText = displayed?.let { point ->
+        val value = format(point.value)
+        if (unit.isEmpty()) value else "$value $unit"
+    } ?: EM_DASH
+    val coverage = if ((vital?.allHistory ?: regular?.allHistory) == true) {
+        stringResource(
+            if (metric == TrendsMetric.REST) R.string.trends_coverage_all
+            else R.string.trends_coverage_all_days,
+            points.size,
+            vital?.window?.expected ?: regular!!.window.expected,
+        )
+    } else {
+        stringResource(
+            if (metric == TrendsMetric.HRV || metric == TrendsMetric.RHR || metric == TrendsMetric.REST)
+                R.string.trends_coverage else R.string.trends_coverage_days,
+            points.size,
+            vital?.window?.expected ?: regular!!.window.expected,
+        )
+    }
+    val context = presentation?.let { p ->
+        val state = vitalStateText(p.position)
+        val bounds = "${format(p.lowerBound)}–${format(p.upperBound)} $unit"
+        stringResource(R.string.today_source_count_joiner, state, stringResource(
+            if (p.basis == VitalBands.Basis.PERSONAL) R.string.trends_your_typical_range
+            else R.string.trends_general_range,
+            bounds,
+        ))
+    } ?: periodChange(points.map { it.value })?.let { change ->
+        val sign = if (change >= 0) "+" else "−"
+        stringResource(R.string.trends_trend_a11y, "$sign${format(kotlin.math.abs(change))}")
+    }
+    val dates = points.map { it.day }
+    val values = points.map { it.value }
+    val xPositions = vital?.xPositions ?: regular?.xPositions
+    val previousReading = stringResource(R.string.trends_previous_reading)
+    val nextReading = stringResource(R.string.trends_next_reading)
+    val shape = RoundedCornerShape(LIQUID_HERO_RADIUS)
+    Box(
+        modifier = modifier.fillMaxWidth().clip(shape)
+            .background(Palette.heroFill.copy(alpha = Palette.heroFill.alpha * CardAppearance.opacity))
+            .border(Metrics.divider, Palette.heroBorder.copy(alpha = Palette.heroBorder.alpha * CardAppearance.opacity), shape)
+            .padding(Metrics.cardPadding)
+            .semantics(mergeDescendants = true) {
+                contentDescription = listOfNotNull(label, valueText, displayed?.day?.let(::prettyAxisDate), context, coverage)
+                    .joinToString(", ")
+                customActions = listOf(
+                    CustomAccessibilityAction(previousReading) {
+                        val current = selectedOrLatestTrendIndex(selectedIndex, points.size) ?: return@CustomAccessibilityAction false
+                        if (current <= 0) false else {
+                            selectedIndex = current - 1
+                            true
+                        }
+                    },
+                    CustomAccessibilityAction(nextReading) {
+                        val current = selectedOrLatestTrendIndex(selectedIndex, points.size) ?: return@CustomAccessibilityAction false
+                        if (current >= points.lastIndex) false else {
+                            selectedIndex = current + 1
+                            true
+                        }
+                    },
+                )
+            },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Overline(label)
+                    Text(displayed?.day?.let(::prettyAxisDate) ?: stringResource(R.string.trends_no_reading),
+                        style = NoopType.footnote, color = Palette.textTertiary)
+                }
+                Text(valueText, style = NoopType.title2, color = Palette.textPrimary)
+                IconButton(onClick = onOpenDetail) {
+                    Icon(Icons.Filled.ChevronRight, contentDescription = label, tint = Palette.accent)
+                }
+            }
+            if (context != null) Text(context, style = NoopType.footnote, color = Palette.textSecondary)
+            Text(coverage, style = NoopType.footnote, color = Palette.textTertiary)
+            if (values.isEmpty()) {
+                SparsePlaceholder()
+            } else {
+                LineChart(
+                    values = values,
+                    modifier = Modifier.fillMaxWidth().height(Metrics.chartHeight),
+                    color = metricColor(metric),
+                    fill = true,
+                    selectionEnabled = true,
+                    selectionLabels = dates.map(::prettyAxisDate),
+                    formatValue = format,
+                    xPositions = xPositions,
+                    dayKeys = dates,
+                    gapPolicyDaily = true,
+                    rangeBand = presentation?.let { it.lowerBound..it.upperBound },
+                    mode = LineChartMode.SUMMARY,
+                    onSelectionChange = { selectedIndex = it },
+                )
+                val axisLabels = vitalAxisLabels(
+                    vital?.window?.startDay ?: regular?.displayStartDay,
+                    vital?.window?.endDay ?: regular!!.window.endDay,
+                )
+                if (axisLabels.isNotEmpty()) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        axisLabels.forEach { axis ->
+                            Text(
+                                prettyAxisDate(axis.day), style = NoopType.footnote,
+                                color = Palette.textTertiary, modifier = Modifier.weight(1f),
+                                textAlign = when (axis.anchor) {
+                                    TrendAxisAnchor.START -> TextAlign.Start
+                                    TrendAxisAnchor.CENTER -> TextAlign.Center
+                                    TrendAxisAnchor.END -> TextAlign.End
+                                }, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactTrendRow(
+    metric: TrendsMetric,
+    recovery: MetricTrendSummary,
+    hrv: VitalTrendSummary,
+    rhr: VitalTrendSummary,
+    rest: MetricTrendSummary,
+    effort: MetricTrendSummary,
+    effortScale: EffortScale,
+    onSelect: () -> Unit,
+    onOpenDetail: () -> Unit,
+) {
+    val vital = when (metric) {
+        TrendsMetric.HRV -> hrv
+        TrendsMetric.RHR -> rhr
+        else -> null
+    }
+    val regular = if (vital == null) metricSummary(metric, recovery, rest, effort) else null
+    val points = vital?.window?.points ?: regular!!.window.points
+    val latest = points.lastOrNull()
+    val presentation = vital?.presentations?.lastOrNull()
+    val label = trendMetricLabel(metric)
+    val unit = when (metric) {
+        TrendsMetric.HRV -> " ms"
+        TrendsMetric.RHR -> " bpm"
+        TrendsMetric.EFFORT -> " / ${UnitFormatter.effortScaleMax(effortScale)}"
+        else -> ""
+    }
+    val format: (Double) -> String = if (metric == TrendsMetric.EFFORT) {
+        { UnitFormatter.effortDisplay(it, effortScale) }
+    } else { { "${it.roundToInt()}" } }
+    val valueText = latest?.let { format(it.value) + unit } ?: EM_DASH
+    val comparison = presentation?.let {
+        val state = vitalStateText(it.position)
+        val bounds = "${format(it.lowerBound)}–${format(it.upperBound)}${unit}"
+        stringResource(R.string.today_source_count_joiner, state, stringResource(
+            if (it.basis == VitalBands.Basis.PERSONAL) R.string.trends_your_typical_range
+            else R.string.trends_general_range,
+            bounds,
+        ))
+    }
+        ?: periodChange(points.map { it.value })?.let { change ->
+            val sign = if (change >= 0) "+" else "−"
+            stringResource(R.string.trends_trend_a11y, "$sign${format(kotlin.math.abs(change))}")
+        }
+        ?: stringResource(R.string.trends_not_enough_comparison)
+    val expected = vital?.window?.expected ?: regular!!.window.expected
+    val allHistory = vital?.allHistory ?: regular!!.allHistory
+    val coverage = stringResource(
+        when {
+            allHistory && metric == TrendsMetric.REST -> R.string.trends_coverage_all
+            allHistory -> R.string.trends_coverage_all_days
+            metric == TrendsMetric.REST -> R.string.trends_coverage
+            else -> R.string.trends_coverage_days
+        },
+        points.size, expected,
+    )
+    val accessibilitySummary = stringResource(
+        R.string.trends_chart_accessibility,
+        label,
+        valueText,
+        latest?.day?.let(::prettyAxisDate) ?: stringResource(R.string.trends_no_reading),
+        comparison,
+        coverage,
+    )
+    NoopCard(padding = Metrics.cardPadding) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.weight(1f)
+                    .clickable(role = Role.Button, onClickLabel = label, onClick = onSelect)
+                    .clearAndSetSemantics {
+                        contentDescription = accessibilitySummary
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Overline(label)
+                    Text(valueText, style = NoopType.bodyNumber, color = Palette.textPrimary)
+                    Text(comparison, style = NoopType.footnote, color = Palette.textSecondary)
+                    Text(coverage, style = NoopType.footnote, color = Palette.textTertiary)
+                }
+                if (points.isEmpty()) {
+                    Box(Modifier.size(Metrics.trendStripHeight, Metrics.sparklineHeight)) {
+                        SparsePlaceholder(height = Metrics.sparklineHeight)
+                    }
+                } else {
+                    LineChart(
+                        values = points.map { it.value },
+                        modifier = Modifier.size(Metrics.trendStripHeight, Metrics.sparklineHeight),
+                        color = metricColor(metric),
+                        selectionEnabled = false,
+                        formatValue = format,
+                        xPositions = vital?.xPositions ?: regular?.xPositions,
+                        dayKeys = points.map { it.day },
+                        gapPolicyDaily = true,
+                        rangeBand = presentation?.let { it.lowerBound..it.upperBound },
+                        mode = LineChartMode.SUMMARY,
+                    )
+                }
+            }
+            IconButton(onClick = onOpenDetail) {
+                Icon(Icons.Filled.ChevronRight, contentDescription = label, tint = Palette.accent)
             }
         }
     }
@@ -534,101 +784,6 @@ private fun WeekNavBar(weekOffset: Int, minWeekOffset: Int, onStep: (Int) -> Uni
                 tint = if (atNewest) Palette.textTertiary else Palette.accent,
             )
         }
-    }
-}
-
-// MARK: - Week in review , the Charge / Effort / Rest trio in pip language
-//
-// The three daily scores as NOOP pip rows over the resolved window: Charge (recovery, 0–100),
-// Effort (strain, shown on the WHOOP 0–21 / 0–100 scale per the unit toggle) and Rest (sleep
-// efficiency, 0–100). Each value ticks up via CountUpText; the segmented PipBar cascades on appear.
-// Self-hides when none of the three carry a window mean. Mirrors iOS TrendsView.weekInReview.
-
-@Composable
-private fun WeekInReviewCard(
-    charge: MetricTrendSummary,
-    effort: MetricTrendSummary,
-    rest: MetricTrendSummary,
-    effortScale: EffortScale,
-    allHistory: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val chargeAvg = charge.values.averageOrNull()
-    val effortAvg = effort.values.averageOrNull() // stored 0–100 internal Effort scale
-    val restAvg = rest.values.averageOrNull()
-    if (chargeAvg == null && effortAvg == null && restAvg == null) return
-    val allHistoryText = stringResource(R.string.trends_all_history)
-    @Composable
-    fun coverage(summary: MetricTrendSummary, nights: Boolean = false): String = when {
-        allHistory -> "$allHistoryText · " + if (nights) {
-            stringResource(R.string.trends_coverage, summary.window.observed, summary.window.expected)
-        } else {
-            stringResource(R.string.trends_coverage_days, summary.window.observed, summary.window.expected)
-        }
-        nights -> stringResource(R.string.trends_coverage, summary.window.observed, summary.window.expected)
-        else -> stringResource(R.string.trends_coverage_days, summary.window.observed, summary.window.expected)
-    }
-    NoopCard(modifier = modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SectionHeader(stringResource(R.string.trends_week_in_review), overline = stringResource(R.string.trends_charge_effort_rest))
-            PipScoreRow(
-                label = stringResource(R.string.trends_charge), value = chargeAvg, range = 0f..100f,
-                tint = Palette.chargeColor, format = { "${it.roundToInt()}" },
-                coverage = coverage(charge),
-            )
-            // Effort is stored 0–100 but reads on the user's chosen scale: convert the displayed
-            // number AND the bar position so the pip fill and the count-up value agree. On WHOOP's
-            // 0–21 scale Effort reads to one decimal; on 0–100 it's a whole number.
-            val effortDisplay = effortAvg?.let { UnitFormatter.effortValue(it, effortScale) }
-            val effortMax = UnitFormatter.effortValue(100.0, effortScale)
-            val effortOneDecimal = effortScale == EffortScale.WHOOP
-            PipScoreRow(
-                label = stringResource(R.string.trends_effort), value = effortDisplay, range = 0f..effortMax.toFloat(),
-                tint = Palette.effortColor,
-                format = { if (effortOneDecimal) String.format(Locale.US, "%.1f", it) else "${it.roundToInt()}" },
-                coverage = coverage(effort),
-            )
-            PipScoreRow(
-                label = stringResource(R.string.trends_rest), value = restAvg, range = 0f..100f,
-                tint = Palette.restColor, format = { "${it.roundToInt()}" },
-                coverage = coverage(rest, nights = true),
-            )
-        }
-    }
-}
-
-/**
- * One pip row matching PipBarRow's layout, but with the value driven by [CountUpText] so the big
- * number ticks up. UPPERCASE label + big white count-up value over the segmented count-up bar.
- * Mirrors iOS TrendsView.pipScoreRow.
- */
-@Composable
-private fun PipScoreRow(
-    label: String,
-    value: Double?,
-    range: ClosedFloatingPointRange<Float>,
-    tint: Color,
-    format: (Double) -> String,
-    coverage: String,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(Metrics.space8)) {
-        Text(
-            text = label.uppercase(),
-            style = NoopType.overline,
-            color = Palette.textSecondary,
-        )
-        if (value != null) {
-            CountUpText(
-                value = value,
-                format = format,
-                style = NoopType.number(30f, weight = FontWeight.Bold),
-                color = Palette.textPrimary,
-            )
-            PipBar(value = value.toFloat(), range = range, tint = tint)
-        } else {
-            Text(EM_DASH, style = NoopType.number(30f, weight = FontWeight.Bold), color = Palette.textPrimary)
-        }
-        Text(coverage, style = NoopType.footnote, color = Palette.textTertiary)
     }
 }
 
@@ -1090,11 +1245,11 @@ private fun VitalTrendCard(
             if (presentation != null) {
                 val bounds = "${fmt(presentation.lowerBound)}–${fmt(presentation.upperBound)} $unit"
                 Text(
-                    "$state · " + stringResource(
+                    stringResource(R.string.today_source_count_joiner, state ?: "", stringResource(
                         if (presentation.basis == VitalBands.Basis.PERSONAL) R.string.trends_your_typical_range
                         else R.string.trends_general_range,
                         bounds,
-                    ),
+                    )),
                     style = NoopType.footnote,
                     color = Palette.textSecondary,
                 )

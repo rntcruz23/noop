@@ -103,6 +103,41 @@ final class TrendChartTests: XCTestCase {
         XCTAssertFalse(summary.rendersTooltip)
     }
 
+    func testCompactChromeSuppressesAllAxesAndDetailMarks() {
+        let points = [
+            TrendPoint(date: Date(timeIntervalSince1970: 0), value: 10),
+            TrendPoint(date: Date(timeIntervalSince1970: day), value: 20),
+        ]
+        let compact = TrendChart(points: points, chrome: .compact)
+
+        XCTAssertFalse(compact.rendersArea)
+        XCTAssertFalse(compact.rendersPersistentXAxis)
+        XCTAssertFalse(compact.rendersPersistentYAxis)
+        XCTAssertFalse(compact.rendersAllPointMarkers)
+        XCTAssertTrue(compact.rendersSingletonMarkers)
+        XCTAssertFalse(compact.rendersTooltip)
+    }
+
+    func testCompactChromeKeepsCalendarGapsAndLatestFallback() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let dates = ["2026-01-01", "2026-01-02", "2026-01-05"].map {
+            ISO8601DateFormatter.dayDate($0, calendar: calendar)
+        }
+        let compact = TrendChart(
+            points: zip(dates, [10.0, 11.0, 20.0]).map { TrendPoint(date: $0.0, value: $0.1) },
+            chrome: .compact,
+            gapPolicy: .daily,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(compact.points.map(\.segment), ["0:default", "0:default", "1:default"])
+        XCTAssertEqual(
+            ChartGeometry.selectedOrLatestPoint(selectedDate: nil, points: compact.points)?.date,
+            dates.last
+        )
+    }
+
     func testSelectionFallsBackToLatestFullResolutionPoint() {
         let points = (0..<200).map {
             TrendPoint(date: Date(timeIntervalSince1970: Double($0) * day), value: Double($0))

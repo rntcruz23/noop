@@ -113,6 +113,8 @@
     <string name="trends_value_with_unit">%1$s %2$s</string>
     <string name="trends_chart_accessibility">%1$s，%3$s为%2$s，%4$s，%5$s</string>
     <string name="trends_coverage_all">全部历史 · %2$d 晚中有 %1$d 条读数</string>
+    <string name="trends_coverage_all_days">全部历史 · %2$d 天中有 %1$d 条读数</string>
+    <string name="trends_not_enough_comparison">数据不足，无法比较</string>
     <string name="trends_state_below">低于范围</string>
     <string name="trends_state_within">在范围内</string>
     <string name="trends_state_above">高于范围</string>
@@ -124,6 +126,8 @@
     <string name="trends_last_week">上周</string>
     <string name="trends_previous_week">上一周</string>
     <string name="trends_next_week">下一周</string>
+    <string name="trends_previous_reading">上一条读数</string>
+    <string name="trends_next_reading">下一条读数</string>
     <string name="trends_daily_signals">每日体征</string>
     <string name="trends_week_in_review">本周回顾</string>
     <string name="trends_charge_effort_rest">充能 · 负荷 · 恢复</string>

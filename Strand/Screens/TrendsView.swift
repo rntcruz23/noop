@@ -6,11 +6,42 @@ import Foundation
 
 // MARK: - Trends
 //
-// The longitudinal view, rebuilt on the locked Noop component system so every
-// surface, height and gap is identical: one SegmentedPillControl for the range,
-// a hero recovery ChartCard, a uniform grid of HRV / Resting HR / Day Strain
-// ChartCards (all NoopMetrics.chartHeight tall), and the whole history as a
-// recovery YearHeatStrip in a NoopCard. No hand-sized cards anywhere.
+// The longitudinal view has one selectable hero and four compact peer rows. The global period owns
+// every projection; compact charts retain calendar gaps but omit detail chrome and statistics.
+
+enum TrendsMetric: String, CaseIterable, Hashable {
+    case charge, hrv, rhr, rest, effort
+
+    static let defaultHero: TrendsMetric = .charge
+
+    static func secondary(to hero: TrendsMetric) -> [TrendsMetric] {
+        allCases.filter { $0 != hero }
+    }
+
+    static func selectedOrLatestIndex(selected: Int?, count: Int) -> Int? {
+        guard count > 0 else { return nil }
+        guard let selected, (0..<count).contains(selected) else { return count - 1 }
+        return selected
+    }
+
+    static func hasAnyData(_ counts: [Int]) -> Bool {
+        counts.contains { $0 > 0 }
+    }
+
+    static func hasAnyData(recovery: Int, hrv: Int, rhr: Int, rest: Int, effort: Int) -> Bool {
+        hasAnyData([recovery, hrv, rhr, rest, effort])
+    }
+
+    var detailKey: String {
+        switch self {
+        case .charge: return "recovery"
+        case .hrv: return "hrv"
+        case .rhr: return "rhr"
+        case .rest: return "sleep_performance"
+        case .effort: return "strain"
+        }
+    }
+}
 
 struct TrendsView: View {
     @EnvironmentObject var repo: Repository
@@ -36,8 +67,8 @@ struct TrendsView: View {
     }
 
     @State private var range: Range = .quarter
-    @State private var selectedHRVDate: Date?
-    @State private var selectedRHRDate: Date?
+    @State private var heroMetric: TrendsMetric = .defaultHero
+    @State private var selectedHeroDate: Date?
     /// Canonically resolved, full-history vital series. These deliberately do not ride `repo.days`:
     /// that cache follows the active device and can omit imported/computed fallback days.
     @State private var hrvHistory: [(day: String, value: Double)] = []
@@ -64,9 +95,6 @@ struct TrendsView: View {
 
     // Effort display scale (#268) — routes the Effort small-multiple's numbers + unit. Display-only.
     @AppStorage(UnitPrefs.effortScaleKey) private var effortScaleRaw = EffortScale.hundred.rawValue
-    // Trend chart style (line vs bar) — display-only; flips every trend card between the gradient line
-    // and value-ramp bars. Read here at the screen root so a Settings change re-renders on return.
-    @AppStorage(UnitPrefs.trendChartStyleKey) private var trendChartStyleRaw = TrendChartStyle.line.rawValue
     private var effortScale: EffortScale { UnitPrefs.resolveEffortScale(effortScaleRaw) }
 
     // yyyy-MM-dd → Date (en_US_POSIX, UTC), per task spec.
@@ -132,14 +160,9 @@ struct TrendsView: View {
         return (lo - span * pad)...(hi + span * pad)
     }
 
-    private func mean(_ pts: [TrendPoint]) -> Double? {
-        guard !pts.isEmpty else { return nil }
-        return pts.map(\.value).reduce(0, +) / Double(pts.count)
-    }
 
-    /// The window's trend as a signed mean-of-recent-half minus mean-of-earlier-half. Drives a
-    /// TrendChip so the card reads its direction at a glance, like Today's deltas. nil for a window
-    /// too short to split. `higherIsBetter == nil` (e.g. Effort) keeps the chip neutral.
+    /// The window's trend as a signed mean-of-recent-half minus mean-of-earlier-half. Supplies the
+    /// muted comparison beneath each primary reading; nil for a window too short to split.
     private func periodChange(_ pts: [TrendPoint]) -> Double? {
         guard pts.count >= 4 else { return nil }
         let mid = pts.count / 2
@@ -151,30 +174,6 @@ struct TrendsView: View {
         return r - e
     }
 
-    /// A TrendChip for a window's period change, coloured green/rose by whether the move is good for
-    /// THIS metric (`higherIsBetter`); neutral when direction has no valence or the change is flat.
-    @ViewBuilder
-    private func changeChip(_ pts: [TrendPoint], higherIsBetter: Bool?, fmt: @escaping (Double) -> String) -> some View {
-        if let d = periodChange(pts), abs(d) > 0.0001 {
-            let sign = d >= 0 ? "+" : "−"
-            let deltaText = "\(sign)\(fmt(abs(d)))"
-            let color: Color = {
-                guard let better = higherIsBetter else { return StrandPalette.textTertiary }
-                return (d > 0) == better ? StrandPalette.statusPositive : StrandPalette.metricRose
-            }()
-            VStack(alignment: .leading, spacing: NoopMetrics.spaceHalf) {
-                // Match the neighbouring ChartFooter columns so the delta is self-describing instead
-                // of appearing as an unlabeled pill at the edge of the statistics row.
-                Text("Trend")
-                    .textCase(.uppercase)
-                    .font(StrandFont.footnote)
-                    .foregroundStyle(StrandPalette.textTertiary)
-                TrendChip(text: deltaText, color: color)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text(verbatim: "\(String(localized: "Trend")): \(deltaText)"))
-        }
-    }
 
     /// "Trailing 90 days" / "All history" — used as a card subtitle.
     private var rangeSubtitle: String {
@@ -230,7 +229,12 @@ struct TrendsView: View {
                        onRefresh: { await repo.refresh() },
                        lazy: true,
                        topBackground: liquidScaffoldSky()) {
-            if repo.days.isEmpty && hrvHistory.isEmpty && rhrHistory.isEmpty {
+            let recoveryCount = repo.days.lazy.compactMap(\.recovery).count
+            let effortCount = repo.days.lazy.compactMap(\.strain).count
+            if !TrendsMetric.hasAnyData(
+                recovery: recoveryCount, hrv: hrvHistory.count, rhr: rhrHistory.count,
+                rest: sleepPerfByDay.count, effort: effortCount
+            ) {
                 ComingSoon(what: repo.loaded
                     ? "Trends need history to draw. Import your WHOOP export in Data Sources to see weeks, months and years instantly."
                     : "Loading your history…")
@@ -244,30 +248,29 @@ struct TrendsView: View {
                 // Rest = the sleep_performance composite — the same number the Today Rest score shows
                 // (#732); see sleepPerfByDay. Its sparse dates remain sparse in the selected window.
                 let rest = selectedTrend(sleepPerfByDay.map { ($0.key, Optional($0.value)) })
+                let metrics: [TrendsMetric: SelectedTrendMetric] = [
+                    .charge: recovery, .hrv: hrv, .rhr: rhr, .rest: rest, .effort: strain,
+                ]
                 VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
                     // The main card list ripples in once on appear (Reduce-Motion safe).
                     Group {
-                        // Week-in-review digest (#208) with prev/next week browsing (#710) — self-hides
-                        // only when NO week in history has data. Past weeks render in the same format.
-                        weeklyDigestNav
+                        rangeBar
                             .staggeredAppear(index: 0)
-                        // The Charge / Effort / Rest trio, presented in NOOP's pip language.
-                        weekInReview(charge: recovery, effort: strain, rest: rest)
+                        metricHero(metric: heroMetric, data: metrics[heroMetric]!)
                             .staggeredAppear(index: 1)
-                        rangeBar(recovery: recovery)
+                        compactMetricRows(metrics: metrics)
                             .staggeredAppear(index: 2)
-                        heroRecovery(recovery: recovery)
+                        // Weekly narrative follows the primary hierarchy instead of competing with it.
+                        weeklyDigestNav
                             .staggeredAppear(index: 3)
-                        smallMultiples(hrv: hrv, rhr: rhr, strain: strain)
-                            .staggeredAppear(index: 4)
                         // Training load keeps the selected display interval but receives full history
                         // as model warm-up so CTL/ATL remain mathematically valid at the left boundary.
                         TrainingLoadCard(days: repo.days, displayDomain: selectedXDomain)
+                            .staggeredAppear(index: 4)
+                        exportReportRow
                             .staggeredAppear(index: 5)
                         yearStrip
                             .staggeredAppear(index: 6)
-                        exportReportRow
-                            .staggeredAppear(index: 7)
                     }
                 }
             }
@@ -282,6 +285,7 @@ struct TrendsView: View {
         .task(id: "\(repo.deviceId)|\(repo.refreshSeq)") {
             hrvHistory = []
             rhrHistory = []
+            sleepPerfByDay = [:]
             let s = await repo.exploreSeries(key: "sleep_performance", source: "my-whoop", fullHistory: true)
             sleepPerfByDay = Dictionary(s.map { ($0.day, $0.value) }, uniquingKeysWith: { _, last in last })
             // Phase 2 belongs to canonical WHOOP cards only. Classify the active registry row rather than
@@ -437,89 +441,6 @@ struct TrendsView: View {
         return String(localized: "\(n) weeks ago")
     }
 
-    // MARK: Week in Review — the Charge / Effort / Rest trio in pip language
-
-    /// The three daily scores as NOOP pip rows over the exact selected window: Charge (recovery, 0–100),
-    /// Effort (strain, shown on the WHOOP 0–21 scale per the unit toggle) and Rest (sleep_performance
-    /// composite, 0–100 — the same metric the Today Rest score shows, #732). Each value ticks up via
-    /// `CountUpText`; the segmented `PipBar` cascades on appear. With no selected-window values it stays
-    /// visible only when older observations make the explicit all-history action useful.
-    @ViewBuilder
-    private func weekInReview(charge: SelectedTrendMetric, effort: SelectedTrendMetric,
-                              rest: SelectedTrendMetric) -> some View {
-        let chargeAvg = mean(charge.points)
-        let effortAvg = mean(effort.points)   // stored 0–100 internal Effort scale
-        let restAvg = mean(rest.points)
-        let hasOlderHistory = [charge, effort, rest].contains { showAllHistoryAvailable($0.result) }
-        if chargeAvg != nil || effortAvg != nil || restAvg != nil || hasOlderHistory {
-            NoopCard {
-                VStack(alignment: .leading, spacing: NoopMetrics.cardInnerSpacing) {
-                    SectionHeader("Week in review", overline: "Charge · Effort · Rest")
-                    if let v = chargeAvg {
-                        pipScoreRow(label: "Charge", value: v, range: 0...100,
-                                    tint: StrandPalette.chargeColor, frac: v / 100,
-                                    format: { "\(Int($0.rounded()))" })
-                    }
-                    metricCoverageRow(label: "Charge", result: charge.result)
-                    if let v = effortAvg {
-                        // Effort is stored 0–100 but reads on the WHOOP 0–21 scale per the unit toggle:
-                        // convert the displayed number + bar position to the user's chosen Effort scale so
-                        // the pip fill and the count-up value agree (both on the same scale).
-                        let display = UnitFormatter.effortValue(v, scale: effortScale)
-                        let maxV = UnitFormatter.effortValue(100, scale: effortScale)
-                        // On the 0–21 WHOOP scale Effort reads to one decimal (e.g. "9.0"); on the 0–100
-                        // scale it's a whole number — match `effortScaleMax` so the count-up format agrees.
-                        let oneDecimal = effortScale == .whoop
-                        // The vessel fills off the stored 0–100 internal scale (v), so it agrees with the
-                        // Charge/Rest vessels regardless of the displayed Effort unit.
-                        pipScoreRow(label: "Effort", value: display, range: 0...maxV,
-                                    tint: StrandPalette.effortColor, frac: v / 100,
-                                    format: { oneDecimal ? String(format: "%.1f", $0) : "\(Int($0.rounded()))" })
-                    }
-                    metricCoverageRow(label: "Effort", result: effort.result)
-                    if let v = restAvg {
-                        pipScoreRow(label: "Rest", value: v, range: 0...100,
-                                    tint: StrandPalette.restColor, frac: v / 100,
-                                    format: { "\(Int($0.rounded()))" })
-                    }
-                    metricCoverageRow(label: "Rest", result: rest.result, expectedUnit: "nights")
-                    if hasOlderHistory { showAllHistoryButton }
-                }
-            }
-            .accessibilityElement(children: .contain)
-        }
-    }
-
-    /// One pip row matching `PipBarRow`'s layout, but with the value driven by `CountUpText` so the big
-    /// number ticks up. UPPERCASE label + a small liquid vessel (the score as a fill) beside the big white
-    /// count-up value, over the segmented count-up bar. `frac` (0…1) is the score on the shared 0–100
-    /// internal scale so the three vessels read against the same fill — a small liquid accent on a single
-    /// headline metric, exactly where it reads well (not on a chart).
-    private func pipScoreRow(label: LocalizedStringKey, value: Double, range: ClosedRange<Double>,
-                             tint: Color, frac: Double, format: @escaping (Double) -> String) -> some View {
-        VStack(alignment: .leading, spacing: NoopMetrics.space2) {
-            Text(label)
-                .font(StrandFont.overline)
-                .tracking(StrandFont.overlineTracking)
-                .textCase(.uppercase)
-                .foregroundStyle(StrandPalette.textSecondary)
-            HStack(spacing: NoopMetrics.space3) {
-                // Static (posed) vessel — a small liquid gauge, not a live 60fps canvas, so the three
-                // in this card cost a single cached frame each (same call as Today's small vessels).
-                LiquidVessel(value: max(0, min(1, frac)), tint: tint, animated: false)
-                    .frame(width: 30, height: 30)
-                    .accessibilityHidden(true)
-                CountUpText(value: value, format: format,
-                            font: StrandFont.number(30, weight: .bold),
-                            color: StrandPalette.textPrimary)
-            }
-            PipBar(value: value, range: range, tint: tint)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(label))
-        .accessibilityValue(Text(format(value)))
-    }
 
     // MARK: Export trends report (#436)
 
@@ -553,9 +474,8 @@ struct TrendsView: View {
 
     // MARK: Range control
 
-    private func rangeBar(recovery: SelectedTrendMetric) -> some View {
-        let cap = String(localized: "Charge · \(coverage(recovery.result))")
-        return VStack(alignment: .leading, spacing: NoopMetrics.space2) {
+    private var rangeBar: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.space2) {
             HStack(spacing: NoopMetrics.space2) {
                 // Six ranges plus the trailing-window caption need to share a compact iPhone row.
                 // Let the segmented control collapse to equal-width cells instead of squeezing the
@@ -567,206 +487,238 @@ struct TrendsView: View {
                 Spacer(minLength: NoopMetrics.space2)
                 rangeCaption
             }
-            Text(cap)
-                .font(StrandFont.footnote)
-                .foregroundStyle(StrandPalette.textTertiary)
-                .accessibilityLabel(cap)
         }
     }
 
-    // MARK: Hero — recovery over time
+    // MARK: Selectable metric hierarchy
 
-    @ViewBuilder
-    private func heroRecovery(recovery: SelectedTrendMetric) -> some View {
-        let pts = recovery.points
-        let avg = mean(pts)
-        // Charge world — the WHOOP recovery value scale (red→yellow→green) drawn as a crisp flat line
-        // with a bright "now" cap. No glow.
-        let card = ChartCard(
-            title: "Charge",
-            // The range bar above already prints the authoritative reading-count caption;
-            // the hero only names its window so the count isn't doubled in one card height.
-            subtitle: rangeSubtitle,
-            trailing: avg.map { "\(Int($0.rounded()))" },
-            height: NoopMetrics.chartHeight,
-            chart: {
-                if !pts.isEmpty {
-                    glowChart(points: pts,
-                              gradient: StrandPalette.recoveryGradient,
-                              // Lift the ceiling ~6% so a near-100 peak and the now-cap halo
-                              // clear the top gridline, matching the padded small multiples.
-                              valueRange: 0...106,
-                              tip: StrandPalette.chargeBright,
-                              valueFormat: { "\(Int($0.rounded()))" },
-                              accessibilityLabel: String(localized: "Charge trend"),
-                              xDomain: recovery.xDomain)
-                } else {
-                    sparsePlaceholder
-                }
-            },
-            footer: {
-                VStack(alignment: .leading, spacing: NoopMetrics.space2) {
-                    HStack {
-                        ChartFooter([
-                            ("Avg", avg.map { "\(Int($0.rounded()))" } ?? "—"),
-                            ("Peak", pts.map(\.value).max().map { "\(Int($0.rounded()))" } ?? "—"),
-                            ("Low", pts.map(\.value).min().map { "\(Int($0.rounded()))" } ?? "—"),
-                            ("Days", "\(pts.count)"),
-                        ])
-                        changeChip(pts, higherIsBetter: true, fmt: { "\(Int($0.rounded()))" })
-                    }
-                    Text(coverage(recovery.result))
-                        .font(StrandFont.footnote)
-                        .foregroundStyle(StrandPalette.textTertiary)
-                }
-            }
-        )
-        // Tap the hero to open the full Charge (recovery) metric detail — matching Today's card taps.
-        // LiquidPressStyle gives the physical settle-inward on press (the liquid tap language). The card's
-        // own rich labels (title + chart series + footer stats) are surfaced by the link's button element,
-        // with a hint that a tap opens the detail.
-        VStack(alignment: .leading, spacing: NoopMetrics.space2) {
-            NavigationLink(value: TabRoute.metric("recovery")) { card }
-                .buttonStyle(LiquidPressStyle())
-                .accessibilityHint(Text(String(localized: "Opens the full Charge metric.")))
-            if showAllHistoryAvailable(recovery.result) { showAllHistoryButton }
+    private func metricTitle(_ metric: TrendsMetric) -> LocalizedStringKey {
+        switch metric {
+        case .charge: return "Charge"
+        case .hrv: return "Heart rate variability"
+        case .rhr: return "Resting heart rate"
+        case .rest: return "Rest"
+        case .effort: return "Effort"
         }
     }
 
-    // MARK: Small multiples — HRV / Resting HR / Day Strain
-
-    private func smallMultiples(hrv: SelectedTrendMetric, rhr: SelectedTrendMetric,
-                                strain: SelectedTrendMetric) -> some View {
-        let cols = [GridItem(.adaptive(minimum: 320), spacing: NoopMetrics.gap)]
-        let strainPts = strain.points
-
-        return VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            // No trailing window label — the range bar's overline already states it.
-            SectionHeader("Daily signals", overline: "Trends")
-            LazyVGrid(columns: cols, alignment: .leading, spacing: NoopMetrics.gap) {
-                vitalTrendCard(
-                    title: "Heart rate variability", unit: "ms",
-                    accessibilityTitle: String(localized: "Heart rate variability"),
-                    metricKey: "hrv", metric: hrv, selectedDate: $selectedHRVDate,
-                    populationRange: 40...120, cfg: Baselines.hrvCfg,
-                    color: StrandPalette.metricPurple
-                )
-                vitalTrendCard(
-                    title: "Resting heart rate", unit: "bpm",
-                    accessibilityTitle: String(localized: "Resting heart rate"),
-                    metricKey: "rhr", metric: rhr, selectedDate: $selectedRHRDate,
-                    populationRange: 40...60, cfg: Baselines.restingHRCfg,
-                    color: StrandPalette.metricRose
-                )
-                metricChart(
-                    // Plotted points + range stay on the stored 0–100 scale (line shape unchanged); only the
-                    // displayed numbers + unit follow the Effort-scale toggle, converted inside `fmt`. (#268)
-                    title: "Effort", unit: "/ \(UnitFormatter.effortScaleMax(effortScale))",
-                    accessibilityTitle: String(localized: "Effort"),
-                    metricKey: "strain",
-                    metric: strain,
-                    // WHOOP: Effort/Strain is always BLUE — a deep→bright blue line, not the amber ramp.
-                    gradient: gradient(StrandPalette.effortColor),
-                    tip: StrandPalette.effortColor,
-                    tint: StrandPalette.effortColor,
-                    higherIsBetter: nil,
-                    range: valueRange(strainPts, fallback: 0...100),
-                    fmt: { UnitFormatter.effortDisplay($0, scale: effortScale) }
-                )
-            }
+    private func metricUnit(_ metric: TrendsMetric) -> String {
+        switch metric {
+        case .hrv: return "ms"
+        case .rhr: return "bpm"
+        case .effort: return "/ \(UnitFormatter.effortScaleMax(effortScale))"
+        case .charge, .rest: return ""
         }
     }
 
-    @ViewBuilder
-    private func vitalTrendCard(
-        title: LocalizedStringKey,
-        unit: String,
-        accessibilityTitle: String,
-        metricKey: String,
-        metric: SelectedTrendMetric,
-        selectedDate: Binding<Date?>,
-        populationRange: ClosedRange<Double>,
-        cfg: MetricCfg,
-        color: Color
-    ) -> some View {
-        let displayed = selectedDate.wrappedValue.flatMap { selected in
-            metric.points.first { $0.date == selected }
-        } ?? metric.points.last
-        let displayedDay = displayed.map { Self.dayParser.string(from: $0.date) }
-        let presentation = displayedDay.map { day in
-            VitalBands.presentation(
-                value: displayed?.value,
-                historyRows: (metricKey == "hrv" ? hrvHistory : rhrHistory)
-                    .map { ($0.day, Optional($0.value)) },
-                displayedDay: day,
-                populationRange: populationRange,
-                cfg: cfg,
-                baselineEpoch: metricKey == "hrv"
-                    ? Baselines.hrvBaselineEpoch() : Baselines.recoveryBaselineEpoch()
+    private func metricColor(_ metric: TrendsMetric) -> Color {
+        switch metric {
+        case .charge: return StrandPalette.chargeColor
+        case .hrv: return StrandPalette.metricPurple
+        case .rhr: return StrandPalette.metricRose
+        case .rest: return StrandPalette.restColor
+        case .effort: return StrandPalette.effortColor
+        }
+    }
+
+    private func metricGradient(_ metric: TrendsMetric) -> Gradient {
+        metric == .charge ? StrandPalette.recoveryGradient : gradient(metricColor(metric))
+    }
+
+    private func formattedValue(_ value: Double, for metric: TrendsMetric) -> String {
+        metric == .effort
+            ? UnitFormatter.effortDisplay(value, scale: effortScale)
+            : "\(Int(value.rounded()))"
+    }
+
+    private func displayedPoint(in data: SelectedTrendMetric) -> TrendPoint? {
+        guard let index = TrendsMetric.selectedOrLatestIndex(
+            selected: selectedHeroDate.flatMap { date in data.points.firstIndex { $0.date == date } },
+            count: data.points.count
+        ) else { return nil }
+        return data.points[index]
+    }
+
+    private func metricContext(_ metric: TrendsMetric, data: SelectedTrendMetric,
+                               displayed: TrendPoint?) -> String {
+        if (metric == .hrv || metric == .rhr), let displayed {
+            let rows = metric == .hrv ? hrvHistory : rhrHistory
+            let population: ClosedRange<Double> = metric == .hrv ? 40...120 : 40...60
+            let cfg = metric == .hrv ? Baselines.hrvCfg : Baselines.restingHRCfg
+            let epoch = metric == .hrv ? Baselines.hrvBaselineEpoch() : Baselines.recoveryBaselineEpoch()
+            let presentation = VitalBands.presentation(
+                value: displayed.value, historyRows: rows.map { ($0.day, Optional($0.value)) },
+                displayedDay: Self.dayParser.string(from: displayed.date), populationRange: population,
+                cfg: cfg, baselineEpoch: epoch
             )
+            return vitalContext(presentation, unit: metricUnit(metric))
         }
-        let context = presentation.map { vitalContext($0, unit: unit) }
-        let coverage = vitalCoverage(metric.result)
-        let dateLabel = displayed.map { vitalDateLabel($0.date) }
-        let valueLabel = displayed.map { "\(Int($0.value.rounded()))" } ?? "—"
-        let a11y = String(localized: "\(dateLabel ?? String(localized: "No reading")) · \(context ?? String(localized: "No reading")) · \(coverage)")
+        guard let change = periodChange(data.points), abs(change) > 0.0001 else {
+            return String(localized: "Not enough data for comparison")
+        }
+        let sign = change >= 0 ? "+" : "−"
+        return String(localized: "\(sign)\(formattedValue(abs(change), for: metric)) vs earlier in period")
+    }
 
-        let card = NoopCard(tint: color) {
+    @ViewBuilder
+    private func metricHero(metric: TrendsMetric, data: SelectedTrendMetric) -> some View {
+        let displayed = displayedPoint(in: data)
+        let color = metricColor(metric)
+        NoopCard(tint: color) {
             VStack(alignment: .leading, spacing: NoopMetrics.cardInnerSpacing) {
-                Text(title).strandOverline()
                 HStack(alignment: .firstTextBaseline, spacing: NoopMetrics.space2) {
-                    Text(valueLabel)
-                        .font(StrandFont.number(30, weight: .bold))
-                        .foregroundStyle(StrandPalette.textPrimary)
-                    if displayed != nil {
-                        Text(unit)
-                            .font(StrandFont.subhead)
-                            .foregroundStyle(StrandPalette.textSecondary)
+                    VStack(alignment: .leading, spacing: NoopMetrics.space1) {
+                        Text(metricTitle(metric)).strandOverline()
+                        HStack(alignment: .firstTextBaseline, spacing: NoopMetrics.space1) {
+                            Text(displayed.map { formattedValue($0.value, for: metric) } ?? "—")
+                                .font(StrandFont.title1.monospacedDigit())
+                                .foregroundStyle(StrandPalette.textPrimary)
+                            if displayed != nil && !metricUnit(metric).isEmpty {
+                                Text(metricUnit(metric)).font(StrandFont.subhead)
+                                    .foregroundStyle(StrandPalette.textSecondary)
+                            }
+                        }
                     }
                     Spacer()
-                    Text(dateLabel ?? String(localized: "No reading"))
-                        .font(StrandFont.footnote)
-                        .foregroundStyle(StrandPalette.textTertiary)
+                    Text(displayed.map { vitalDateLabel($0.date) } ?? String(localized: "No reading"))
+                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
                 }
-                if let context {
-                    Text(context)
-                        .font(StrandFont.subhead)
-                        .foregroundStyle(StrandPalette.textSecondary)
-                }
-                if metric.points.isEmpty {
+                Text(metricContext(metric, data: data, displayed: displayed))
+                    .font(StrandFont.subhead).foregroundStyle(StrandPalette.textSecondary)
+                if data.points.isEmpty {
                     sparsePlaceholder.frame(height: NoopMetrics.chartHeight)
                 } else {
                     TrendChart(
-                        points: metric.points,
-                        gradient: gradient(color),
-                        valueRange: valueRange(metric.points, fallback: populationRange),
-                        showsArea: false,
-                        showsBars: false,
-                        height: NoopMetrics.chartHeight,
-                        valueFormat: { "\(Int($0.rounded())) \(unit)" },
-                        accessibilityLabel: String(localized: "\(accessibilityTitle) trend"),
-                        chrome: .summary,
-                        contextRange: presentation.map { $0.lowerBound...$0.upperBound },
-                        contextRangeColor: color,
-                        xDomain: metric.xDomain,
-                        gapPolicy: .daily,
+                        points: data.points, gradient: metricGradient(metric),
+                        valueRange: valueRange(data.points, fallback: 0...100), showsArea: false,
+                        showsBars: false, height: NoopMetrics.chartHeight,
+                        valueFormat: { formattedValue($0, for: metric) },
+                        accessibilityLabel: metricTitleText(metric),
+                        nowCapColor: color, chrome: .summary,
+                        contextRange: heroContextRange(metric, displayed: displayed),
+                        contextRangeColor: color, xDomain: data.xDomain, gapPolicy: .daily,
                         calendar: Self.utcCalendar,
-                        onSelectionChange: { selectedDate.wrappedValue = $0?.date },
-                        accessibilityValue: String(localized: "\(valueLabel) \(unit). \(a11y)")
+                        onSelectionChange: { selectedHeroDate = $0?.date },
+                        accessibilityValue: heroAccessibilityValue(
+                            metric, displayed: displayed, data: data
+                        )
                     )
                 }
-                Text(coverage)
-                    .font(StrandFont.footnote)
-                    .foregroundStyle(StrandPalette.textTertiary)
+                HStack {
+                    Text(coverage(data.result, expectedUnit: metric == .rest ? "nights" : "days"))
+                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                    Spacer()
+                    NavigationLink(value: TabRoute.metric(metric.detailKey)) {
+                        HStack(spacing: NoopMetrics.space1) {
+                            Text("Open")
+                            Image(systemName: "chevron.right")
+                        }
+                        .font(StrandFont.subhead).foregroundStyle(StrandPalette.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
-        VStack(alignment: .leading, spacing: NoopMetrics.space2) {
-            NavigationLink(value: TabRoute.metric(metricKey)) { card }
-                .buttonStyle(LiquidPressStyle())
-                .accessibilityHint(Text("Opens metric details."))
-            if showAllHistoryAvailable(metric.result) { showAllHistoryButton }
+        if showAllHistoryAvailable(data.result) { showAllHistoryButton }
+    }
+
+    private func heroContextRange(_ metric: TrendsMetric, displayed: TrendPoint?) -> ClosedRange<Double>? {
+        guard (metric == .hrv || metric == .rhr), let displayed else { return nil }
+        let rows = metric == .hrv ? hrvHistory : rhrHistory
+        let presentation = VitalBands.presentation(
+            value: displayed.value, historyRows: rows.map { ($0.day, Optional($0.value)) },
+            displayedDay: Self.dayParser.string(from: displayed.date),
+            populationRange: metric == .hrv ? 40...120 : 40...60,
+            cfg: metric == .hrv ? Baselines.hrvCfg : Baselines.restingHRCfg,
+            baselineEpoch: metric == .hrv ? Baselines.hrvBaselineEpoch() : Baselines.recoveryBaselineEpoch()
+        )
+        return presentation.lowerBound...presentation.upperBound
+    }
+
+    private func metricTitleText(_ metric: TrendsMetric) -> String {
+        switch metric {
+        case .charge: return String(localized: "Charge")
+        case .hrv: return String(localized: "Heart rate variability")
+        case .rhr: return String(localized: "Resting heart rate")
+        case .rest: return String(localized: "Rest")
+        case .effort: return String(localized: "Effort")
         }
     }
+
+    private func heroAccessibilityValue(
+        _ metric: TrendsMetric, displayed: TrendPoint?, data: SelectedTrendMetric
+    ) -> String {
+        guard let displayed else { return String(localized: "No reading") }
+        let value = "\(formattedValue(displayed.value, for: metric)) \(metricUnit(metric))"
+            .trimmingCharacters(in: .whitespaces)
+        return "\(value), \(vitalDateLabel(displayed.date)), \(metricContext(metric, data: data, displayed: displayed)), \(coverage(data.result, expectedUnit: metric == .rest ? "nights" : "days"))"
+    }
+
+    private func compactMetricRows(metrics: [TrendsMetric: SelectedTrendMetric]) -> some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            SectionHeader("Daily signals", overline: "Select a metric")
+            ForEach(TrendsMetric.secondary(to: heroMetric), id: \.self) { metric in
+                if let data = metrics[metric] { compactMetricRow(metric, data: data) }
+            }
+        }
+    }
+
+    private func compactMetricRow(_ metric: TrendsMetric, data: SelectedTrendMetric) -> some View {
+        let latest = data.points.last
+        let color = metricColor(metric)
+        return NoopCard(tint: color) {
+            HStack(spacing: NoopMetrics.cardInnerSpacing) {
+                Button {
+                    selectedHeroDate = nil
+                    heroMetric = metric
+                } label: {
+                    HStack(spacing: NoopMetrics.cardInnerSpacing) {
+                        VStack(alignment: .leading, spacing: NoopMetrics.space1) {
+                            Text(metricTitle(metric)).strandOverline()
+                            Text(latest.map { "\(formattedValue($0.value, for: metric)) \(metricUnit(metric))" } ?? "—")
+                                .font(StrandFont.title2.monospacedDigit())
+                                .foregroundStyle(StrandPalette.textPrimary)
+                            Text(metricContext(metric, data: data, displayed: latest))
+                                .font(StrandFont.footnote).foregroundStyle(StrandPalette.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(coverage(data.result, expectedUnit: metric == .rest ? "nights" : "days"))
+                                .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if data.points.isEmpty {
+                            sparsePlaceholder.frame(width: NoopMetrics.chartHeight / 2,
+                                                    height: NoopMetrics.controlHeight)
+                        } else {
+                            TrendChart(
+                                points: data.points, gradient: metricGradient(metric),
+                                valueRange: valueRange(data.points, fallback: 0...100), showsArea: false,
+                                showsBars: false, height: NoopMetrics.controlHeight, showsHover: false,
+                                accessibilityLabel: String(localized: "Compact metric trend"),
+                                nowCapColor: color, chrome: .compact, xDomain: data.xDomain,
+                                gapPolicy: .daily, calendar: Self.utcCalendar
+                            )
+                            .frame(width: NoopMetrics.chartHeight / 2)
+                            .accessibilityHidden(true)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityHint("Selects this metric as the primary chart.")
+                NavigationLink(value: TabRoute.metric(metric.detailKey)) {
+                    Image(systemName: "chevron.right")
+                        .font(StrandFont.headline).foregroundStyle(StrandPalette.accent)
+                        .frame(minWidth: NoopMetrics.controlHeight,
+                               minHeight: NoopMetrics.controlHeight)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(metricTitle(metric)))
+                .accessibilityHint("Opens metric details.")
+            }
+        }
+    }
+
 
     private static var utcCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -774,13 +726,6 @@ struct TrendsView: View {
         return calendar
     }
 
-    private func vitalCoverage(_ result: TrendWindow.Result) -> String {
-        let coverage = String(localized: "\(result.observed) of \(result.expected) nights")
-        if range == .all {
-            return "\(String(localized: "All history")) · \(coverage)"
-        }
-        return coverage
-    }
 
     private func coverage(_ result: TrendWindow.Result, expectedUnit: String = "days") -> String {
         let count = expectedUnit == "nights"
@@ -799,17 +744,6 @@ struct TrendsView: View {
         }
     }
 
-    private func metricCoverageRow(label: LocalizedStringKey, result: TrendWindow.Result,
-                                   expectedUnit: String = "days") -> some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(coverage(result, expectedUnit: expectedUnit))
-        }
-        .font(StrandFont.footnote)
-        .foregroundStyle(StrandPalette.textTertiary)
-        .accessibilityElement(children: .combine)
-    }
 
     private func vitalDateLabel(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -834,68 +768,6 @@ struct TrendsView: View {
         return String(localized: "\(position) · \(rangeName) · \(bounds)")
     }
 
-    @ViewBuilder
-    private func metricChart(
-        title: LocalizedStringKey, unit: String,
-        // Plain-string series name for VoiceOver (the `title` is a LocalizedStringKey and can't be
-        // re-read as a String); supplied by callers so the line announces e.g. "HRV trend".
-        accessibilityTitle: String,
-        // MetricCatalog key this small-multiple taps through to (its full MetricDetailView).
-        metricKey: String,
-        metric: SelectedTrendMetric,
-        subtitle: String? = nil,
-        gradient: Gradient,
-        tip: Color,
-        tint: Color?,
-        higherIsBetter: Bool?,
-        range: ClosedRange<Double>,
-        fmt: @escaping (Double) -> String
-    ) -> some View {
-        let pts = metric.points
-        let avg = mean(pts)
-        let card = ChartCard(
-            title: title,
-            subtitle: subtitle,
-            trailing: avg.map(fmt),
-            height: NoopMetrics.chartHeight,
-            tint: tint,
-            chart: {
-                if !pts.isEmpty {
-                    glowChart(points: pts, gradient: gradient, valueRange: range,
-                              tip: tip, valueFormat: { "\(fmt($0)) \(unit)" },
-                              accessibilityLabel: String(localized: "\(accessibilityTitle) trend"),
-                              xDomain: metric.xDomain)
-                } else {
-                    sparsePlaceholder
-                }
-            },
-            footer: {
-                VStack(alignment: .leading, spacing: NoopMetrics.space2) {
-                    HStack {
-                        ChartFooter([
-                            // Plain "MEAN" to match the bare MIN/MAX columns; the unit moves into
-                            // the value (e.g. "58 ms") so uppercasing can't render a shouty "MEAN MS".
-                            ("Mean", avg.map { "\(fmt($0)) \(unit)" } ?? "—"),
-                            ("Min", pts.map(\.value).min().map(fmt) ?? "—"),
-                            ("Max", pts.map(\.value).max().map(fmt) ?? "—"),
-                        ])
-                        changeChip(pts, higherIsBetter: higherIsBetter, fmt: fmt)
-                    }
-                    Text(coverage(metric.result))
-                        .font(StrandFont.footnote)
-                        .foregroundStyle(StrandPalette.textTertiary)
-                }
-            }
-        )
-        // Each small-multiple taps through to its own metric detail (like Today's cards / Explore's rows),
-        // with the liquid press settle. The chart itself is left uncluttered — no vessel over it (task).
-        VStack(alignment: .leading, spacing: NoopMetrics.space2) {
-            NavigationLink(value: TabRoute.metric(metricKey)) { card }
-                .buttonStyle(LiquidPressStyle())
-                .accessibilityHint(Text(String(localized: "Opens the full \(accessibilityTitle) metric.")))
-            if showAllHistoryAvailable(metric.result) { showAllHistoryButton }
-        }
-    }
 
     // MARK: Year heat-strip
 
@@ -968,27 +840,6 @@ struct TrendsView: View {
         ])
     }
 
-    /// A domain-tinted `TrendChart` with a crisp flat line and a bright end-cap dot at the latest
-    /// point. WHOOP-flat: no underglow blur layer — the single crisp line carries the data and the
-    /// fill contrast does the rest. The "now" end-cap is a small dot pinned to the final sample.
-    /// Pure presentation: it forwards every value to the locked `TrendChart` unchanged.
-    @ViewBuilder
-    private func glowChart(points pts: [TrendPoint], gradient: Gradient, valueRange: ClosedRange<Double>,
-                           tip: Color, valueFormat: @escaping (Double) -> String,
-                           accessibilityLabel: String,
-                           xDomain: ClosedRange<Date>?) -> some View {
-        // One crisp, interactive line + area — flat, no blurred glow copy underneath (WHOOP language).
-        // The "now" end-cap is drawn INSIDE this chart (nowCapColor) so it's mapped by the chart's own
-        // scales and lands on the line — the previous sibling overlay guessed the plot insets and
-        // floated the dot left/below the curve (#458).
-        TrendChart(points: pts, gradient: gradient, valueRange: valueRange,
-                   showsArea: true,
-                   showsBars: TrendChartStyle(rawValue: trendChartStyleRaw) == .bar,
-                   height: NoopMetrics.chartHeight, valueFormat: valueFormat,
-                   accessibilityLabel: accessibilityLabel, nowCapColor: tip,
-                   chrome: .summary, xDomain: xDomain, gapPolicy: .daily,
-                   calendar: Self.utcCalendar)
-    }
 
     private var sparsePlaceholder: some View {
         Text("Not enough data for this window.")

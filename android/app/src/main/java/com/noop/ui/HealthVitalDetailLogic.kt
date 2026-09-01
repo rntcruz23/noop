@@ -1,6 +1,7 @@
 package com.noop.ui
 
 import com.noop.data.Vo2MaxEstimator
+import com.noop.analytics.VitalBands
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -75,6 +76,18 @@ internal fun mergeStepsReadings(
 ): List<VitalReading> =
     (real.keys + imported.keys + est.keys).toSortedSet()
         .mapNotNull { d -> real[d] ?: imported[d] ?: est[d] }
+
+/** The reproducible personal/fallback band for a skin-temperature DEVIATION trend. */
+internal fun skinDeviationPresentation(readings: List<VitalReading>): VitalBands.Presentation? {
+    val latest = readings.lastOrNull() ?: return null
+    return VitalBands.presentation(
+        value = latest.value,
+        historyRows = readings.dropLast(1).map { it.day to it.value },
+        displayedDay = latest.day,
+        populationRange = -0.6..0.6,
+        cfg = VitalBands.skinTempDeviationCfg,
+    )
+}
 
 /** #616: per-day precedence merge for a metric with disjoint stores (first non-null per day wins),
  *  ascending. The N-store generalisation of [mergeStepsReadings]; calories reuse it as the two-store

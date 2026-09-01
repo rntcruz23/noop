@@ -149,6 +149,46 @@ final class TrendChartTests: XCTestCase {
             selected.date
         )
     }
+
+    func testSemanticDailyMarksKeepEveryPointAndFixedDomains() {
+        let points = (0..<90).map {
+            TrendPoint(date: Date(timeIntervalSince1970: Double($0) * day), value: Double($0))
+        }
+        let charge = TrendChart(points: points, markStyle: .chargeZones, yDomain: 0...100, chrome: .summary)
+        let effort = TrendChart(points: points, markStyle: .bars, yDomain: 0...100, chrome: .summary)
+
+        XCTAssertEqual(charge.renderedPointCount, points.count)
+        XCTAssertEqual(charge.plotYDomain, 0...100)
+        XCTAssertEqual(effort.renderedPointCount, points.count)
+        XCTAssertEqual(effort.plotYDomain, 0...100)
+    }
+
+    func testChargeZoneThresholdsAreDiscreteAndClamped() {
+        XCTAssertEqual(ChartSemantic.chargeZone(33.999), .low)
+        XCTAssertEqual(ChartSemantic.chargeZone(34), .medium)
+        XCTAssertEqual(ChartSemantic.chargeZone(66.999), .medium)
+        XCTAssertEqual(ChartSemantic.chargeZone(67), .high)
+        XCTAssertEqual(ChartSemantic.chargeZone(-10), .low)
+        XCTAssertEqual(ChartSemantic.chargeZone(200), .high)
+        XCTAssertNil(ChartSemantic.chargeZone(.nan))
+    }
+
+    func testStressStyleKeepsFixedZeroToThreeDomainAndReference() {
+        let chart = TrendChart(points: [TrendPoint(date: Date(), value: 1.7)],
+                               valueRange: 0...3, markStyle: .stressZones, referenceValue: 1.5)
+        XCTAssertEqual(chart.plotYDomain, 0...3)
+        XCTAssertEqual(chart.referenceValue, 1.5)
+        XCTAssertEqual(chart.renderedPointCount, 1)
+    }
+
+    func testReferenceValueExpandsDomainSoReferenceRemainsVisible() {
+        let chart = TrendChart(
+            points: [TrendPoint(date: Date(), value: 15)],
+            valueRange: 10...20,
+            referenceValue: 30
+        )
+        XCTAssertEqual(chart.plotYDomain, 10...30)
+    }
 }
 
 private extension ISO8601DateFormatter {

@@ -45,6 +45,24 @@ public enum TrendChartGapPolicy: Sendable, Equatable {
     case daily
 }
 
+public enum TrendChartMarkStyle: Sendable, Equatable {
+    case line
+    case bars
+    case chargeZones
+    case stressZones
+}
+
+public enum ChargeZone: Equatable, Sendable { case low, medium, high }
+
+public enum ChartSemantic {
+    public static func chargeZone(_ value: Double) -> ChargeZone? {
+        guard value.isFinite else { return nil }
+        if value < 34 { return .low }
+        if value < 67 { return .medium }
+        return .high
+    }
+}
+
 public struct TrendChart: View {
 
     public var points: [TrendPoint]
@@ -58,6 +76,8 @@ public struct TrendChart: View {
     /// filled `BarMark` per (down-sampled) sample. Display-only — the plotted series is identical; only
     /// the mark geometry changes. Default false (the classic line). `showsArea` is ignored in bar mode.
     public var showsBars: Bool
+    public var markStyle: TrendChartMarkStyle
+    public var markColor: Color?
     public var height: CGFloat
     /// Whether hovering reveals a crosshair + tooltip for the nearest point.
     public var showsHover: Bool
@@ -83,6 +103,9 @@ public struct TrendChart: View {
     /// Caller-owned context geometry; analytics meaning remains outside this primitive.
     public var contextRange: ClosedRange<Double>?
     public var contextRangeColor: Color
+    /// Optional caller-owned horizontal reference (need, personal average, or zero).
+    public var referenceValue: Double?
+    public var referenceColor: Color
     /// Optional full selected-window domain, including dates without observations.
     public var xDomain: ClosedRange<Date>?
     /// Calendar used consistently for daily segmentation and summary-axis boundaries.
@@ -105,6 +128,8 @@ public struct TrendChart: View {
         valueRange: ClosedRange<Double> = 0...100,
         showsArea: Bool = true,
         showsBars: Bool = false,
+        markStyle: TrendChartMarkStyle? = nil,
+        markColor: Color? = nil,
         height: CGFloat = 220,
         showsHover: Bool = true,
         valueFormat: @escaping (Double) -> String = { String(Int($0.rounded())) },
@@ -115,6 +140,8 @@ public struct TrendChart: View {
         chrome: TrendChartChrome = .detail,
         contextRange: ClosedRange<Double>? = nil,
         contextRangeColor: Color = StrandPalette.hairlineStrong,
+        referenceValue: Double? = nil,
+        referenceColor: Color = StrandPalette.textSecondary,
         xDomain: ClosedRange<Date>? = nil,
         gapPolicy: TrendChartGapPolicy = .none,
         calendar: Calendar = .current,
@@ -130,6 +157,8 @@ public struct TrendChart: View {
         self.valueRange = valueRange
         self.showsArea = showsArea
         self.showsBars = showsBars
+        self.markStyle = markStyle ?? (showsBars ? .bars : .line)
+        self.markColor = markColor
         self.height = height
         self.showsHover = showsHover
         self.valueFormat = valueFormat
@@ -140,6 +169,8 @@ public struct TrendChart: View {
         self.chrome = chrome
         self.contextRange = contextRange
         self.contextRangeColor = contextRangeColor
+        self.referenceValue = referenceValue
+        self.referenceColor = referenceColor
         self.xDomain = xDomain
         self.calendar = calendar
         self.onSelectionChange = onSelectionChange
@@ -229,8 +260,27 @@ public struct TrendChart: View {
     /// unaffected. Exposed internally alongside `resolvedYDomain` for the same test-without-rendering
     /// reason.
     var plotYDomain: ClosedRange<Double> {
-        let domain = ChartGeometry.expandingDomain(resolvedYDomain, toInclude: contextRange)
-        return showsBars ? min(0, domain.lowerBound)...domain.upperBound : domain
+        let contextDomain = ChartGeometry.expandingDomain(resolvedYDomain, toInclude: contextRange)
+        let domain = referenceValue.map { ChartGeometry.expandingDomain(contextDomain, toInclude: $0...$0) }
+            ?? contextDomain
+        return markStyle == .bars ? min(0, domain.lowerBound)...domain.upperBound : domain
+    }
+
+    var renderedPointCount: Int { markStyle == .line ? displayPoints.count : points.count }
+
+    private func chargeColor(_ value: Double) -> Color {
+        switch ChartSemantic.chargeZone(value) {
+        case .low: return StrandPalette.statusCritical
+        case .medium: return StrandPalette.statusWarning
+        case .high: return StrandPalette.statusPositive
+        case nil: return StrandPalette.textTertiary
+        }
+    }
+
+    private func stressColor(_ value: Double) -> Color {
+        if value < 1 { return StrandPalette.statusPositive }
+        if value < 2 { return StrandPalette.statusWarning }
+        return StrandPalette.statusCritical
     }
 
     var rendersArea: Bool { chrome == .detail && showsArea }
@@ -262,17 +312,51 @@ public struct TrendChart: View {
                 )
                 .foregroundStyle(contextRangeColor.opacity(0.14))
             }
-            if showsBars {
-                // Bar mode: one value-ramp-filled BarMark per (down-sampled) sample, from the baseline.
-                // The line, area and point marks are all replaced. The same `displayPoints` feed it, so a
-                // dense window is min/max-bucketed to the vertex budget exactly as the line is; hover, the
-                // axes, the domain and accessibility are unchanged (they read the full `points`).
-                ForEach(displayPoints) { p in
+            if markStyle == .stressZones, let resolvedXDomain {
+                RectangleMark(xStart: .value("Range start", resolvedXDomain.lowerBound),
+                              xEnd: .value("Range end", resolvedXDomain.upperBound),
+                              yStart: .value("Low stress", 0), yEnd: .value("Low stress top", 1))
+                    .foregroundStyle(StrandPalette.statusPositive.opacity(0.10))
+                RectangleMark(xStart: .value("Range start", resolvedXDomain.lowerBound),
+                              xEnd: .value("Range end", resolvedXDomain.upperBound),
+                              yStart: .value("Medium stress", 1), yEnd: .value("Medium stress top", 2))
+                    .foregroundStyle(StrandPalette.statusWarning.opacity(0.10))
+                RectangleMark(xStart: .value("Range start", resolvedXDomain.lowerBound),
+                              xEnd: .value("Range end", resolvedXDomain.upperBound),
+                              yStart: .value("High stress", 2), yEnd: .value("High stress top", 3))
+                    .foregroundStyle(StrandPalette.statusCritical.opacity(0.10))
+            }
+            if let referenceValue, referenceValue.isFinite {
+                RuleMark(y: .value("Reference", referenceValue))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                    .foregroundStyle(referenceColor)
+            }
+            if markStyle == .bars {
+                // Semantic bars preserve every daily observation and use one metric-identity color.
+                ForEach(points) { p in
                     BarMark(
                         x: .value("Date", p.date),
                         y: .value("Value", p.value)
                     )
-                    .foregroundStyle(valueGradient)
+                    .foregroundStyle(markColor ?? StrandPalette.sample(stops: gradient.toStops(), at: 0.7))
+                }
+            } else if markStyle == .chargeZones {
+                ForEach(points) { p in
+                    PointMark(x: .value("Date", p.date), y: .value("Value", p.value))
+                        .symbolSize(chrome == .compact ? 12 : 28)
+                        .foregroundStyle(chargeColor(p.value))
+                }
+            } else if markStyle == .stressZones {
+                ForEach(points) { p in
+                    LineMark(x: .value("Date", p.date), y: .value("Value", p.value),
+                             series: .value("Segment", p.segment))
+                        .interpolationMethod(.stepEnd)
+                        .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                        .foregroundStyle(stressColor(p.value))
+                    AreaMark(x: .value("Date", p.date), y: .value("Value", p.value),
+                             series: .value("Segment", p.segment))
+                        .interpolationMethod(.stepEnd)
+                        .foregroundStyle(stressColor(p.value).opacity(0.16))
                 }
             } else {
                 if rendersArea {
@@ -412,7 +496,7 @@ public struct TrendChart: View {
                     // "Now" end-cap on the latest point (#458). Positioned with the SAME proxy mapping the
                     // line uses (position(forX:/forY:) + plot origin), so it lands exactly on the curve —
                     // not via a sibling overlay guessing the axis insets, which floated it left/below.
-                    if !showsBars,
+                    if markStyle != .bars,
                        let capColor = nowCapColor ?? (chrome == .summary ? contextRangeColor : nil),
                        let last = ChartGeometry.selectedOrLatestPoint(selectedDate: selectedPoint?.date,
                                                                       points: points),

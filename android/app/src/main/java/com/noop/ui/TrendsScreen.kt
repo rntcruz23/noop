@@ -379,6 +379,13 @@ private fun metricColor(metric: TrendsMetric): Color = when (metric) {
     TrendsMetric.EFFORT -> Palette.effortColor
 }
 
+internal fun chargeColor(value: Double): Color = when (chargeZone(value)) {
+    ChargeZone.LOW -> Palette.statusCritical
+    ChargeZone.MEDIUM -> Palette.statusWarning
+    ChargeZone.HIGH -> Palette.statusPositive
+    null -> Palette.textTertiary
+}
+
 private fun metricSummary(
     metric: TrendsMetric,
     recovery: MetricTrendSummary,
@@ -506,21 +513,37 @@ private fun SelectableTrendHero(
             if (values.isEmpty()) {
                 SparsePlaceholder()
             } else {
-                LineChart(
-                    values = values,
-                    modifier = Modifier.fillMaxWidth().height(Metrics.chartHeight),
-                    color = metricColor(metric),
-                    fill = true,
-                    selectionEnabled = true,
-                    selectionLabels = dates.map(::prettyAxisDate),
-                    formatValue = format,
-                    xPositions = xPositions,
-                    dayKeys = dates,
-                    gapPolicyDaily = true,
-                    rangeBand = presentation?.let { it.lowerBound..it.upperBound },
-                    mode = LineChartMode.SUMMARY,
-                    onSelectionChange = { selectedIndex = it },
-                )
+                if (metric == TrendsMetric.CHARGE || metric == TrendsMetric.EFFORT) {
+                    BarChart(
+                        values = values,
+                        modifier = Modifier.fillMaxWidth().height(Metrics.chartHeight),
+                        color = metricColor(metric),
+                        selectionEnabled = true,
+                        selectionLabels = dates.map(::prettyAxisDate),
+                        formatValue = format,
+                        xPositions = xPositions,
+                        fixedMaximum = 100.0,
+                        pointColor = if (metric == TrendsMetric.CHARGE) ::chargeColor else null,
+                        showFloatingLabel = false,
+                        onSelectionChange = { selectedIndex = it },
+                    )
+                } else {
+                    LineChart(
+                        values = values,
+                        modifier = Modifier.fillMaxWidth().height(Metrics.chartHeight),
+                        color = metricColor(metric),
+                        fill = true,
+                        selectionEnabled = true,
+                        selectionLabels = dates.map(::prettyAxisDate),
+                        formatValue = format,
+                        xPositions = xPositions,
+                        dayKeys = dates,
+                        gapPolicyDaily = true,
+                        rangeBand = presentation?.let { it.lowerBound..it.upperBound },
+                        mode = LineChartMode.SUMMARY,
+                        onSelectionChange = { selectedIndex = it },
+                    )
+                }
                 val axisLabels = vitalAxisLabels(
                     vital?.window?.startDay ?: regular?.displayStartDay,
                     vital?.window?.endDay ?: regular!!.window.endDay,
@@ -631,18 +654,31 @@ private fun CompactTrendRow(
                         SparsePlaceholder(height = Metrics.sparklineHeight)
                     }
                 } else {
-                    LineChart(
-                        values = points.map { it.value },
-                        modifier = Modifier.size(Metrics.trendStripHeight, Metrics.sparklineHeight),
-                        color = metricColor(metric),
-                        selectionEnabled = false,
-                        formatValue = format,
-                        xPositions = vital?.xPositions ?: regular?.xPositions,
-                        dayKeys = points.map { it.day },
-                        gapPolicyDaily = true,
-                        rangeBand = presentation?.let { it.lowerBound..it.upperBound },
-                        mode = LineChartMode.SUMMARY,
-                    )
+                    if (metric == TrendsMetric.CHARGE || metric == TrendsMetric.EFFORT) {
+                        BarChart(
+                            values = points.map { it.value },
+                            modifier = Modifier.size(Metrics.trendStripHeight, Metrics.sparklineHeight),
+                            color = metricColor(metric),
+                            formatValue = format,
+                            xPositions = vital?.xPositions ?: regular?.xPositions,
+                            fixedMaximum = 100.0,
+                            pointColor = if (metric == TrendsMetric.CHARGE) ::chargeColor else null,
+                            showFloatingLabel = false,
+                        )
+                    } else {
+                        LineChart(
+                            values = points.map { it.value },
+                            modifier = Modifier.size(Metrics.trendStripHeight, Metrics.sparklineHeight),
+                            color = metricColor(metric),
+                            selectionEnabled = false,
+                            formatValue = format,
+                            xPositions = vital?.xPositions ?: regular?.xPositions,
+                            dayKeys = points.map { it.day },
+                            gapPolicyDaily = true,
+                            rangeBand = presentation?.let { it.lowerBound..it.upperBound },
+                            mode = LineChartMode.SUMMARY,
+                        )
+                    }
                 }
             }
             IconButton(onClick = onOpenDetail) {

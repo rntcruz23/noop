@@ -535,12 +535,7 @@ struct StressView: View {
             SectionHeader("Stress Trend", overline: "History", trailing: range.name)
             if points.count >= 2 {
                 let avg = points.map(\.value).reduce(0, +) / Double(points.count)
-                // Axis top = highest reading rounded up, plus a little headroom, so a peak curve and
-                // the top axis label clear the plot clip (#974). Floor of 1 keeps a flat calm history
-                // from collapsing to a zero-height axis. The gradient stays on the full 0–3 scale
-                // because TrendChart keys its colors off `valueRange`, not this domain.
-                let peak = (points.map(\.value).max() ?? 3).rounded(.up)
-                let yTop = max(1, peak + 0.3)
+
                 ChartCard(
                     title: "Stress · \(range.label)",
                     subtitle: String(localized: "Daily 0-3 proxy"),
@@ -551,11 +546,12 @@ struct StressView: View {
                         points: points,
                         gradient: StressRamp.gradient,
                         valueRange: 0...3,
-                        showsArea: true,
+                        showsArea: false,
+                        markStyle: .stressZones,
                         height: NoopMetrics.chartHeight,
                         valueFormat: { String(format: "%.1f", $0) },
                         accessibilityLabel: String(localized: "Stress trend"),
-                        yDomain: 0...yTop
+                        yDomain: 0...3
                     )
                 } footer: {
                     ChartFooter([

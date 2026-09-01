@@ -252,13 +252,7 @@ internal fun FilledHypnogram(
             if (w <= 0f || h <= 0f || intervals.isEmpty()) return@Canvas
             val rowStep = h / 4f
             fun levelY(rank: Int): Float = rowStep * (rank + 0.5f)
-            fun rankOf(stage: String): Int = when (canonicalStage(stage)) {
-                "awake" -> 0
-                "rem" -> 1
-                "light" -> 2
-                "deep" -> 3
-                else -> 2
-            }
+            fun rankOf(stage: String): Int = hypnogramStageRank(stage)
             fun xOf(sec: Double): Float = (w * (sec / spanSec)).toFloat().coerceIn(0f, w)
 
             // Faint per-stage lane guides so height → stage reads even across gaps (mirrors the iOS lanes).
@@ -322,6 +316,15 @@ internal fun FilledHypnogram(
             HypnogramTimeAxis(axisTicks)
         }
     }
+}
+
+/** Fixed categorical lane semantics: Awake is always highest and Deep always lowest. */
+internal fun hypnogramStageRank(stage: String): Int = when (canonicalStage(stage)) {
+    "awake" -> 0
+    "rem" -> 1
+    "light" -> 2
+    "deep" -> 3
+    else -> 2
 }
 
 /** A compact colour-coded key for the stepped hypnogram: one dot + label per stage in the chart's ramp, so

@@ -548,6 +548,7 @@ internal fun DurationTrend(m: SleepModel) {
                         selectionLabels = m.trendDates.map(::shortDayLabel),
                         // #1662: same hours format as the Avg/Min/Max row above.
                         formatValue = { String.format(Locale.US, "%.1f h", it) },
+                        referenceValue = chartReferenceAverage(m.trendNeedHours),
                     )
                     DateAxisRow(m.trendDates)
                 }

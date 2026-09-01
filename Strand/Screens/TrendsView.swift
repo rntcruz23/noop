@@ -525,6 +525,21 @@ struct TrendsView: View {
         metric == .charge ? StrandPalette.recoveryGradient : gradient(metricColor(metric))
     }
 
+    private func metricMarkStyle(_ metric: TrendsMetric) -> TrendChartMarkStyle {
+        switch metric {
+        case .charge: return .chargeZones
+        case .effort: return .bars
+        default: return .line
+        }
+    }
+
+    private func metricDomain(_ metric: TrendsMetric, points: [TrendPoint]) -> ClosedRange<Double> {
+        switch metric {
+        case .charge, .effort: return 0...100
+        default: return valueRange(points, fallback: 0...100)
+        }
+    }
+
     private func formattedValue(_ value: Double, for metric: TrendsMetric) -> String {
         metric == .effort
             ? UnitFormatter.effortDisplay(value, scale: effortScale)
@@ -590,8 +605,9 @@ struct TrendsView: View {
                 } else {
                     TrendChart(
                         points: data.points, gradient: metricGradient(metric),
-                        valueRange: valueRange(data.points, fallback: 0...100), showsArea: false,
-                        showsBars: false, height: NoopMetrics.chartHeight,
+                        valueRange: metricDomain(metric, points: data.points), showsArea: false,
+                        markStyle: metricMarkStyle(metric), markColor: color,
+                        height: NoopMetrics.chartHeight,
                         valueFormat: { formattedValue($0, for: metric) },
                         accessibilityLabel: metricTitleText(metric),
                         nowCapColor: color, chrome: .summary,
@@ -691,8 +707,8 @@ struct TrendsView: View {
                         } else {
                             TrendChart(
                                 points: data.points, gradient: metricGradient(metric),
-                                valueRange: valueRange(data.points, fallback: 0...100), showsArea: false,
-                                showsBars: false, height: NoopMetrics.controlHeight, showsHover: false,
+                                valueRange: metricDomain(metric, points: data.points), showsArea: false,
+                                markStyle: metricMarkStyle(metric), height: NoopMetrics.controlHeight, showsHover: false,
                                 accessibilityLabel: String(localized: "Compact metric trend"),
                                 nowCapColor: color, chrome: .compact, xDomain: data.xDomain,
                                 gapPolicy: .daily, calendar: Self.utcCalendar

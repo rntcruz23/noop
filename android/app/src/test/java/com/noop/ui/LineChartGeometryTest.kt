@@ -78,4 +78,20 @@ class LineChartGeometryTest {
         assertEquals(0.25f..0.75f, normalizedBandYRange(50.0..70.0, domain))
         assertNull(normalizedBandYRange(10.0..20.0, domain))
     }
+
+    @Test fun chargeZoneThresholdsAreDiscreteAndClamped() {
+        assertEquals(ChargeZone.LOW, chargeZone(33.999))
+        assertEquals(ChargeZone.MEDIUM, chargeZone(34.0))
+        assertEquals(ChargeZone.MEDIUM, chargeZone(66.999))
+        assertEquals(ChargeZone.HIGH, chargeZone(67.0))
+        assertEquals(ChargeZone.LOW, chargeZone(-10.0))
+        assertEquals(ChargeZone.HIGH, chargeZone(200.0))
+        assertNull(chargeZone(Double.NaN))
+    }
+
+    @Test fun semanticBarDomainIsZeroBasedAndCanBeFixed() {
+        assertEquals(0.0..100.0, semanticBarDomain(listOf(30.0, 80.0), 100.0))
+        assertEquals(0.0..80.0, semanticBarDomain(listOf(30.0, 80.0), null))
+        assertEquals(0.0..1.0, semanticBarDomain(emptyList(), null))
+    }
 }

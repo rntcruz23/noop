@@ -15,6 +15,7 @@ import WhoopStore
 struct AsleepDurationData {
     let points: [TrendPoint]
     let typicalTotalMin: Double?
+    let sleepNeedMin: Double
 
     /// yyyy-MM-dd → Date (en_US_POSIX, UTC) — matches `SleepView.dayParser`.
     private static let dayParser: DateFormatter = {
@@ -40,7 +41,8 @@ struct AsleepDurationData {
         let points = recent.count >= 2 ? recent : mk(days[...])
         let totals = days.compactMap { $0.totalSleepMin }.filter { $0 > 0 }
         let typical = totals.isEmpty ? nil : totals.reduce(0, +) / Double(totals.count)
-        return AsleepDurationData(points: points, typicalTotalMin: typical)
+        return AsleepDurationData(points: points, typicalTotalMin: typical,
+                                  sleepNeedMin: SleepModel.debtNeedMin(days: days))
     }
 }
 
@@ -63,11 +65,13 @@ struct AsleepDurationCard: View {
                     if pts.count >= 2 {
                         TrendChart(points: pts,
                                    gradient: StrandPalette.restGradient,
-                                   valueRange: Self.trendRange(pts),
-                                   showsBars: true,
+                                   valueRange: 0...max(Self.trendRange(pts).upperBound, data.sleepNeedMin / 60),
+                                   markStyle: .bars,
                                    height: NoopMetrics.chartHeight,
                                    valueFormat: { String(format: "%.1f h", $0) },
-                                   accessibilityLabel: String(localized: "Hours asleep trend"))
+                                   accessibilityLabel: String(localized: "Hours asleep trend"),
+                                   referenceValue: data.sleepNeedMin / 60,
+                                   referenceColor: StrandPalette.restColor)
                     } else {
                         Self.sparsePlaceholder
                     }
@@ -75,7 +79,7 @@ struct AsleepDurationCard: View {
                 footer: {
                     HStack {
                         ChartFooter([
-                            ("Avg",    avg.map { String(format: "%.1f h", $0) } ?? "—"),
+                            ("Need",   String(format: "%.1f h", data.sleepNeedMin / 60)),
                             ("Min",    pts.map(\.value).min().map { String(format: "%.1f h", $0) } ?? "—"),
                             ("Max",    pts.map(\.value).max().map { String(format: "%.1f h", $0) } ?? "—"),
                             ("Nights", "\(pts.count)"),

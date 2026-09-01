@@ -720,6 +720,10 @@ struct MetricDetailView: View {
         return (lo - span * 0.12)...(hi + span * 0.12)
     }
 
+    private func chartDomain(_ values: [Double]) -> ClosedRange<Double> {
+        MetricChartSemantics.domain(key: metric.key, values: values) ?? valueRange(values)
+    }
+
     private var latest: (day: String, value: Double)? { series.last }
 
     /// Inspection temporarily replaces the HRV/RHR hero's visible-window latest value/date.
@@ -1203,17 +1207,25 @@ struct MetricDetailView: View {
                 TrendChart(
                     points: trendPoints(windowed),
                     gradient: metricGradient(metric),
-                    valueRange: valueRange(windowed.map(\.value)),
+                    valueRange: chartDomain(windowed.map(\.value)),
                     showsArea: !isPhaseTwoVital,
+                    markStyle: MetricChartSemantics.markStyle(key: metric.key),
+                    markColor: metricAccent(metric),
                     height: NoopMetrics.chartHeight,
                     valueFormat: { fmt($0) },
                     chrome: isPhaseTwoVital ? .summary : .detail,
-                    contextRange: presentation.map { $0.lowerBound...$0.upperBound },
+                    contextRange: metric.key == "skin_temp"
+                        ? MetricChartSemantics.skinDeviationBand(values: windowed.map(\.value))
+                        : presentation.map { $0.lowerBound...$0.upperBound },
                     contextRangeColor: metricAccent(metric),
+                    referenceValue: MetricChartSemantics.referenceValue(key: metric.key,
+                                                                        values: windowed.map(\.value)),
+                    referenceColor: metricAccent(metric),
                     xDomain: vitalXDomain(for: effectiveRange),
                     gapPolicy: isPhaseTwoVital ? .daily : .none,
                     calendar: Self.utcCalendar,
-                    onSelectionChange: isPhaseTwoVital ? { selectedVitalDate = $0?.date } : nil,
+                    onSelectionChange: (isPhaseTwoVital || metric.key == "recovery" || metric.key == "strain")
+                        ? { selectedVitalDate = $0?.date } : nil,
                     accessibilityValue: projection.map { result in
                         String(localized: "\(presentation.map { vitalContext($0) } ?? String(localized: "No reading")) · \(vitalCoverage(result))")
                     }

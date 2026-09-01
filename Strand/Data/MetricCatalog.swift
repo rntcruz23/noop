@@ -112,6 +112,49 @@ struct MetricDescriptor: Identifiable, Hashable {
     }
 }
 
+/// Pure chart policy for Phase 5 metric semantics. Views consume this instead of scattering key checks.
+enum MetricChartSemantics {
+    static func markStyle(key: String) -> TrendChartMarkStyle {
+        switch key {
+        case "recovery": return .chargeZones
+        case "strain", "sleep_total_min", "steps", "steps_est": return .bars
+        case "stress": return .stressZones
+        default: return .line
+        }
+    }
+
+    static func domain(key: String, values: [Double]) -> ClosedRange<Double>? {
+        switch key {
+        case "recovery", "strain": return 0...100
+        case "stress": return 0...3
+        case "sleep_total_min", "steps", "steps_est": return 0...max(values.max() ?? 1, 1)
+        case "skin_temp":
+            guard !values.isEmpty, values.allSatisfy({ SkinTempDisplay.kind(of: $0) == .deviation }) else { return nil }
+            let extent = max(values.map(abs).max() ?? 0, 0.1)
+            return -extent...extent
+        default: return nil
+        }
+    }
+
+    static func referenceValue(key: String, values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        switch key {
+        case "steps", "steps_est": return values.reduce(0, +) / Double(values.count)
+        case "skin_temp" where values.allSatisfy({ SkinTempDisplay.kind(of: $0) == .deviation }): return 0
+        default: return nil
+        }
+    }
+
+    static func skinDeviationBand(values: [Double]) -> ClosedRange<Double>? {
+        let deviations = values.filter { SkinTempDisplay.kind(of: $0) == .deviation }.sorted()
+        guard deviations.count >= 3 else { return nil }
+        func percentile(_ p: Double) -> Double {
+            deviations[Int((Double(deviations.count - 1) * p).rounded())]
+        }
+        return min(percentile(0.25), 0)...max(percentile(0.75), 0)
+    }
+}
+
 /// Canonical catalog — mirrors the WHOOP "Trend View" plus Apple Health body metrics.
 /// Keys match exactly what the importers write into metricSeries.
 enum MetricCatalog {

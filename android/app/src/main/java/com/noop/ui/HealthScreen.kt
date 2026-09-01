@@ -1742,6 +1742,14 @@ private data class VitalDetailModel(
     val color: Color,
     val readings: List<VitalReading>,
     val format: (Double) -> String,
+    val bars: Boolean = false,
+    val referenceValue: Double? = null,
+    val referenceFromWindow: Boolean = false,
+    val rangeBand: ClosedFloatingPointRange<Double>? = null,
+    val fixedDomain: ClosedFloatingPointRange<Double>? = null,
+    val zeroReference: Boolean = false,
+    val stepped: Boolean = false,
+    val zoneBands: List<Pair<ClosedFloatingPointRange<Double>, Color>> = emptyList(),
 ) {
     /** (day, value) projection the trend chart + range helpers consume — SAME order as [readings], so the
      *  chart, the header count, and the table can never drift apart. */
@@ -2031,6 +2039,8 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
         // across recompositions that do not change the window.
         val dayLabels = remember(filteredPoints) { filteredPoints.map { shortDayLabel(it.first) } }
         val latest = filteredPoints.last()
+        val headlineText = "${detail.format(latest.second)} ${detail.unit}".trim()
+        val headlineDay = latest.first
         val min = values.minOrNull()
         val max = values.maxOrNull()
         val avg = values.average()
@@ -2042,12 +2052,12 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                     Column(modifier = Modifier.weight(1f)) {
                         Overline("Latest")
                         Text(
-                            text = uiString(R.string.l10n_health_screen_detail_format_latest_second_detail_unit_9664278b, detail.format(latest.second), detail.unit).trim(),
+                            text = headlineText,
                             style = NoopType.chartValueLarge,
                             color = detail.color,
                         )
                         Text(
-                            text = uiString(R.string.l10n_health_screen_as_of_latest_first_726f20bb, latest.first),
+                            text = uiString(R.string.l10n_health_screen_as_of_latest_first_726f20bb, headlineDay),
                             style = NoopType.footnote,
                             color = Palette.textTertiary,
                         )
@@ -2068,7 +2078,18 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                         color = Palette.textTertiary,
                     )
                 }
-                LineChart(
+                if (detail.bars) {
+                    BarChart(
+                        values = values,
+                        modifier = Modifier.height(Metrics.chartHeight),
+                        color = detail.color,
+                        selectionEnabled = true,
+                        selectionLabels = dayLabels,
+                        formatValue = { "${detail.format(it)} ${detail.unit}".trim() },
+                        referenceValue = if (detail.referenceFromWindow) chartReferenceAverage(values)
+                            else detail.referenceValue,
+                    )
+                } else LineChart(
                     values = values,
                     modifier = Modifier.height(Metrics.chartHeight),
                     color = detail.color,
@@ -2089,6 +2110,11 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                     // "72.4" on tap with "72 ms" written directly underneath.
                     formatValue = { "${detail.format(it)} ${detail.unit}".trim() },
                     segmentIds = if (key == "vo2max_est") vo2MaxTrendSegmentIds(filteredReadings) else null,
+                    rangeBand = detail.rangeBand,
+                    fixedDomain = detail.fixedDomain,
+                    zeroReference = detail.zeroReference,
+                    stepped = detail.stepped,
+                    zoneBands = detail.zoneBands,
                 )
                 // #1662: the VO2max line is SPLIT on purpose wherever the estimator changes, so two
                 // non-adjacent Nes runs are never joined across an incompatible Uth stretch. Nothing said
@@ -2292,26 +2318,25 @@ private fun buildVitalDetail(
         format = { it.roundToInt().toString() },
     )
     "skin" -> {
-        val latest = days.asReversed().asSequence().mapNotNull { it.skinTempDevC }.firstOrNull() ?: return null
-        val kind = SkinTempDisplay.kind(latest)
-        val fahrenheit = tempUnit == TemperatureUnit.FAHRENHEIT
-        val unit = SkinTempDisplay.unitSymbol(kind, fahrenheit)
-        val title = if (kind == SkinTempDisplay.Kind.ABSOLUTE) {
-            uiString(R.string.l10n_health_screen_skin_temperature_f59127f6)
-        } else {
-            uiString(R.string.skin_temp_delta_title)
+        val deviations = days.mapNotNull { row ->
+            row.skinTempDevC?.takeIf { !VitalBands.isAbsoluteSkinTemp(it) }
+                ?.let { VitalReading(row.day, it, row.deviceId) }
         }
+        if (deviations.isEmpty()) return null
+        val deviationKind = SkinTempDisplay.Kind.DEVIATION
+        val fahrenheit = tempUnit == TemperatureUnit.FAHRENHEIT
+        val presentation = skinDeviationPresentation(deviations)
+        val band = presentation?.let { it.lowerBound..it.upperBound }
         VitalDetailModel(
             key = key,
-            title = title,
-            unit = unit,
+            title = uiString(R.string.l10n_health_screen_skin_temperature_f59127f6),
+            unit = SkinTempDisplay.unitSymbol(deviationKind, fahrenheit),
             color = Palette.metricAmber,
-            readings = days.mapNotNull { row ->
-                row.skinTempDevC
-                    ?.takeIf { VitalBands.isAbsoluteSkinTemp(it) == (kind == SkinTempDisplay.Kind.ABSOLUTE) }
-                    ?.let { value -> VitalReading(row.day, value, row.deviceId) }
-            },
-            format = { c -> SkinTempDisplay.numberString(c, kind, fahrenheit, decimals = 1) },
+            readings = deviations,
+            format = { c -> SkinTempDisplay.numberString(c, deviationKind, fahrenheit, decimals = 1) },
+            rangeBand = band,
+            fixedDomain = symmetricZeroDomain(deviations.map { it.value }, band),
+            zeroReference = true,
         )
     }
     else -> null
@@ -2407,13 +2432,16 @@ private suspend fun buildSeriesVitalDetail(vm: AppViewModel, key: String): Vital
         val est = vm.repo.resolvedSeries("steps_est", "my-whoop", "0000-00-00", "9999-99-99",
             strapDeviceId = vm.activeStrapId)
             .points.associateBy({ it.day }, { VitalReading(it.day, it.value, it.source) })
+        val merged = mergeStepsReadings(real, imported, est)
         VitalDetailModel(
             key = key,
             title = uiString(R.string.l10n_health_screen_steps_cdde4f20),
             unit = "steps",
             color = Palette.metricCyan,
-            readings = mergeStepsReadings(real, imported, est),
+            readings = merged,
             format = { it.roundToInt().toString() },
+            bars = true,
+            referenceFromWindow = true,
         )
     }
     "active_kcal" -> {

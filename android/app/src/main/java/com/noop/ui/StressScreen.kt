@@ -1068,6 +1068,13 @@ private fun StressTrendSection(model: StressModel, modifier: Modifier = Modifier
                         // formatter collapses a value within 0.05 of an integer, so a 2.0 stress day
                         // scrubbed as "2" beside a footer reading "2.0".
                         formatValue = { String.format(Locale.US, "%.1f", it) },
+                        fixedDomain = stressChartDomain(),
+                        stepped = true,
+                        zoneBands = listOf(
+                            0.0..1.0 to StressRamp.CALM,
+                            1.0..2.0 to StressRamp.STEADY,
+                            2.0..3.0 to StressRamp.TENSE,
+                        ),
                     )
                     HorizontalDivider(color = Palette.hairline)
                     Row(modifier = Modifier.fillMaxWidth()) {

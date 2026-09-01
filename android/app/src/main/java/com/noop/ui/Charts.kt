@@ -387,6 +387,10 @@ fun LineChart(
     mode: LineChartMode = LineChartMode.CLASSIC,
     accessibilitySummary: String? = null,
     onSelectionChange: ((Int?) -> Unit)? = null,
+    fixedDomain: ClosedFloatingPointRange<Double>? = null,
+    zeroReference: Boolean = false,
+    stepped: Boolean = false,
+    zoneBands: List<Pair<ClosedFloatingPointRange<Double>, Color>> = emptyList(),
 ) {
     val cleanValues = remember(values) { values.filter { it.isFinite() } }
     // Timestamps filtered by the SAME finiteness cut as cleanValues so indices stay aligned;
@@ -416,7 +420,11 @@ fun LineChart(
             cleanValues.size,
         )
     }
-    val yDomain = remember(cleanValues, rangeBand) { lineChartYDomain(cleanValues, rangeBand) }
+    val yDomain = remember(cleanValues, rangeBand, fixedDomain) {
+        fixedDomain?.takeIf {
+            it.start.isFinite() && it.endInclusive.isFinite() && it.start < it.endInclusive
+        } ?: lineChartYDomain(cleanValues, rangeBand)
+    }
     var selectedIndex by remember(cleanValues) { mutableIntStateOf(-1) }
     val renderPolicy = lineChartRenderPolicy(
         mode = mode,
@@ -570,12 +578,40 @@ fun LineChart(
                             Path().apply {
                                 moveTo(pts[range.first].x, pts[range.first].y)
                                 if (range.first < range.last) {
-                                    for (i in (range.first + 1)..range.last) lineTo(pts[i].x, pts[i].y)
+                                    for (i in (range.first + 1)..range.last) {
+                                        if (stepped) lineTo(pts[i].x, pts[i - 1].y)
+                                        lineTo(pts[i].x, pts[i].y)
+                                    }
                                 }
                             }
                         }
                         val lineStroke = Stroke(width = strokePx, cap = StrokeCap.Round, join = StrokeJoin.Round)
                         onDrawBehind {
+                            if (yDomain != null) {
+                                zoneBands.forEach { (band, bandColor) ->
+                                    normalizedBandYRange(band, yDomain)?.let { normalized ->
+                                        drawRect(
+                                            color = bandColor.copy(alpha = StrandAlpha.chartFillSoft),
+                                            topLeft = Offset(0f, topPad + normalized.start * (size.height - topPad - bottomPad)),
+                                            size = androidx.compose.ui.geometry.Size(
+                                                size.width,
+                                                (normalized.endInclusive - normalized.start) * (size.height - topPad - bottomPad),
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                            if (zeroReference && yDomain != null && 0.0 in yDomain) {
+                                val zeroY = topPad + (1f - ((0.0 - yDomain.start) /
+                                    (yDomain.endInclusive - yDomain.start)).toFloat()) *
+                                    (size.height - topPad - bottomPad)
+                                drawLine(
+                                    color = Palette.textTertiary.copy(alpha = StrandAlpha.chartMarker),
+                                    start = Offset(0f, zeroY),
+                                    end = Offset(size.width, zeroY),
+                                    strokeWidth = 1.5f,
+                                )
+                            }
                             if (rangeBand != null && yDomain != null) {
                                 normalizedBandYRange(rangeBand, yDomain)?.let { band ->
                                     drawRect(
@@ -766,11 +802,64 @@ private fun formatLineValue(value: Double): String {
     }
 }
 
-private fun nearestBarIndexForX(count: Int, width: Float, x: Float): Int {
+internal fun nearestBarIndexForX(
+    count: Int,
+    width: Float,
+    x: Float,
+    xPositions: List<Float>? = null,
+): Int {
     if (count <= 1 || width <= 0f) return 0
-    val slot = width / count
-    val clampedX = x.coerceIn(0f, width)
-    return (clampedX / slot).toInt().coerceIn(0, count - 1)
+    return validatedXPositions(xPositions, count)?.let { positions ->
+        val normalizedX = (x / width).coerceIn(0f, 1f)
+        positions.indices.minByOrNull { abs(positions[it] - normalizedX) } ?: 0
+    } ?: run {
+        val slot = width / count
+        (x.coerceIn(0f, width) / slot).toInt().coerceIn(0, count - 1)
+    }
+}
+
+internal enum class ChargeZone { LOW, MEDIUM, HIGH }
+
+internal fun chargeZone(value: Double): ChargeZone? = when {
+    !value.isFinite() -> null
+    value < 34.0 -> ChargeZone.LOW
+    value < 67.0 -> ChargeZone.MEDIUM
+    else -> ChargeZone.HIGH
+}
+
+internal fun semanticBarDomain(values: List<Double>, fixedMaximum: Double?): ClosedFloatingPointRange<Double> {
+    val observed = values.filter { it.isFinite() && it > 0.0 }.maxOrNull() ?: 0.0
+    val upper = fixedMaximum?.takeIf { it.isFinite() && it > 0.0 } ?: observed.coerceAtLeast(1.0)
+    return 0.0..upper
+}
+
+/** A stable reference for zero-based daily bars (sleep need / personal step average). */
+internal fun chartReferenceAverage(values: List<Double>): Double? =
+    values.filter { it.isFinite() && it > 0.0 }.takeIf { it.isNotEmpty() }?.average()
+
+/** A deviation chart must give equal visual weight to movement above and below zero. */
+internal fun symmetricZeroDomain(
+    values: List<Double>,
+    rangeBand: ClosedFloatingPointRange<Double>?,
+): ClosedFloatingPointRange<Double> {
+    val candidates = values.filter { it.isFinite() }.map(::abs).toMutableList()
+    rangeBand?.let {
+        if (it.start.isFinite()) candidates += abs(it.start)
+        if (it.endInclusive.isFinite()) candidates += abs(it.endInclusive)
+    }
+    val extent = (candidates.maxOrNull() ?: 0.0).coerceAtLeast(1.0)
+    return -extent..extent
+}
+
+internal enum class StressChartZone { CALM, STEADY, ELEVATED }
+
+internal fun stressChartDomain(): ClosedFloatingPointRange<Double> = 0.0..3.0
+
+internal fun stressChartZone(value: Double): StressChartZone? = when {
+    !value.isFinite() -> null
+    value < 1.0 -> StressChartZone.CALM
+    value < 2.0 -> StressChartZone.STEADY
+    else -> StressChartZone.ELEVATED
 }
 
 // MARK: - BarChart
@@ -797,6 +886,12 @@ fun BarChart(
     // Preserve every observation's calendar position. Dense unpositioned charts may still downsample;
     // positioned charts keep every bar because collapsing values would desynchronise their dates.
     xPositions: List<Float>? = null,
+    fixedMaximum: Double? = null,
+    pointColor: ((Double) -> Color)? = null,
+    showFloatingLabel: Boolean = true,
+    onSelectionChange: ((Int?) -> Unit)? = null,
+    referenceValue: Double? = null,
+    referenceColor: Color = Palette.textTertiary,
 ) {
     val cleanValues = remember(values) { values.map { if (it.isFinite() && it > 0.0) it else 0.0 } }
     // cleanValues ZEROES (never drops) non-finite bars, so indices stay aligned with [values] and the
@@ -837,7 +932,9 @@ fun BarChart(
                                         count = cleanValues.size,
                                         width = size.width.toFloat(),
                                         x = offset.x,
+                                        xPositions = xPositions,
                                     )
+                                    onSelectionChange?.invoke(selectedIndex)
                                 }
                             },
                         )
@@ -869,7 +966,7 @@ fun BarChart(
                 } else {
                     cleanValues
                 }
-                val maxV = clean.maxOrNull() ?: 0.0
+                val maxV = semanticBarDomain(clean, fixedMaximum).endInclusive
                 if (clean.isEmpty() || maxV <= 0.0 || w <= 0f || h <= 0f) {
                     onDrawBehind { drawBaseline() }
                 } else {
@@ -885,7 +982,7 @@ fun BarChart(
                     val barWidth = (slot * 0.64f).coerceAtLeast(1f)
                     val capRadius = (barWidth / 2f)
                     // Precompute each bar's x centre + top y once.
-                    data class BarSeg(val cx: Float, val top: Float)
+                    data class BarSeg(val sourceIndex: Int, val cx: Float, val top: Float)
                     val bars = ArrayList<BarSeg>(clean.size)
                     clean.forEachIndexed { i, v ->
                         val norm = (v / maxV).toFloat().coerceIn(0f, 1f)
@@ -893,19 +990,29 @@ fun BarChart(
                         if (barHeight <= 0f) return@forEachIndexed
                         val cx = normalizedPositions?.getOrNull(i)?.times(w) ?: (slot * i + slot / 2f)
                         val top = h - barHeight
-                        bars.add(BarSeg(cx, top))
+                        bars.add(BarSeg(i, cx, top))
                     }
                     onDrawBehind {
-                        bars.forEachIndexed { i, seg ->
+                        referenceValue?.takeIf { it.isFinite() && it >= 0.0 }?.let { reference ->
+                            val y = h - (reference / maxV).toFloat().coerceIn(0f, 1f) * usableH
                             drawLine(
-                                color = if (selectionEnabled && i == selectedIndex) color else unselectedColor,
+                                color = referenceColor.copy(alpha = StrandAlpha.chartMarker),
+                                start = Offset(0f, y),
+                                end = Offset(w, y),
+                                strokeWidth = 1.5f,
+                            )
+                        }
+                        bars.forEach { seg ->
+                            drawLine(
+                                color = pointColor?.invoke(clean[seg.sourceIndex])
+                                    ?: if (selectionEnabled && seg.sourceIndex == selectedIndex) color else unselectedColor,
                                 start = Offset(seg.cx, h),
                                 end = Offset(seg.cx, (seg.top + capRadius).coerceAtMost(h)),
                                 strokeWidth = barWidth,
                                 cap = StrokeCap.Round,
                             )
                         }
-                        if (selectionEnabled && selectedIndex in clean.indices) {
+                        if (selectionEnabled && showFloatingLabel && selectedIndex in clean.indices) {
                             drawContext.canvas.nativeCanvas.apply {
                                 drawText(
                                     lineChartSelectionLabel(

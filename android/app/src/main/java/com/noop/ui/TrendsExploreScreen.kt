@@ -739,44 +739,56 @@ private fun HeroChartCard(
                         // The shared LineChart with a glowing "now" end-cap on its latest sample ,
                         // the Bevel idiom from Today's OverviewHRChart.
                         Box(modifier = Modifier.weight(1f).height(Metrics.chartHeight)) {
-                            LineChart(
-                                values = values,
-                                modifier = Modifier.fillMaxSize(),
-                                color = metric.accent,
-                                fill = true,
-                                selectionEnabled = true,
-                                selectionLabels = windowed.map { prettyExploreDate(it.day) },
-                                // #1662, and here it was worse than a decimal: `values` are the RAW
-                                // stored numbers, and `MetricSpec.format` is what rescales Effort to the
-                                // WHOOP 0–21 axis. The Y labels and the hero went through it; the scrub
-                                // read-out did not — so on that scale the axis said 12.4 and tapping the
-                                // same point said 59. Routing the label through the same formatter makes
-                                // the chart agree with itself.
-                                formatValue = metric::format,
-                                xPositions = vitalSummary?.xPositions,
-                                dayKeys = if (vitalSummary != null) windowed.map { it.day } else null,
-                                gapPolicyDaily = vitalSummary != null,
-                                rangeBand = presentation?.let { it.lowerBound..it.upperBound },
-                                mode = if (vitalSummary != null) LineChartMode.SUMMARY else LineChartMode.CLASSIC,
-                                accessibilitySummary = vitalSummary?.let { summary ->
-                                    val coverage = if (summary.allHistory) {
-                                        stringResource(R.string.trends_coverage_all, summary.window.observed, summary.window.expected)
-                                    } else {
-                                        stringResource(R.string.trends_coverage, summary.window.observed, summary.window.expected)
-                                    }
-                                    stringResource(
-                                        R.string.trends_chart_accessibility, metric.title, heroValue,
-                                        displayed?.day?.let(::prettyExploreDate) ?: stringResource(R.string.trends_no_reading),
-                                        presentation?.let { vitalStateText(it.position) }
-                                            ?: stringResource(R.string.trends_no_reading),
-                                        coverage,
-                                    )
-                                },
-                                onSelectionChange = if (vitalSummary != null) {
-                                    { index -> selectedIndex = index }
-                                } else null,
-                            )
-                            if (vitalSummary == null) {
+                            if (metric.key == "recovery" || metric.key == "strain") {
+                                BarChart(
+                                    values = values,
+                                    modifier = Modifier.fillMaxSize(),
+                                    color = metric.accent,
+                                    selectionEnabled = true,
+                                    selectionLabels = windowed.map { prettyExploreDate(it.day) },
+                                    formatValue = metric::format,
+                                    xPositions = normalizedCalendarXPositions(
+                                        windowed.map { it.day }, windowed.first().day, windowed.last().day,
+                                    ),
+                                    fixedMaximum = 100.0,
+                                    pointColor = if (metric.key == "recovery") ::chargeColor else null,
+                                    showFloatingLabel = false,
+                                    onSelectionChange = { selectedIndex = it },
+                                )
+                            } else {
+                                LineChart(
+                                    values = values,
+                                    modifier = Modifier.fillMaxSize(),
+                                    color = metric.accent,
+                                    fill = true,
+                                    selectionEnabled = true,
+                                    selectionLabels = windowed.map { prettyExploreDate(it.day) },
+                                    formatValue = metric::format,
+                                    xPositions = vitalSummary?.xPositions,
+                                    dayKeys = if (vitalSummary != null) windowed.map { it.day } else null,
+                                    gapPolicyDaily = vitalSummary != null,
+                                    rangeBand = presentation?.let { it.lowerBound..it.upperBound },
+                                    mode = if (vitalSummary != null) LineChartMode.SUMMARY else LineChartMode.CLASSIC,
+                                    accessibilitySummary = vitalSummary?.let { summary ->
+                                        val coverage = if (summary.allHistory) {
+                                            stringResource(R.string.trends_coverage_all, summary.window.observed, summary.window.expected)
+                                        } else {
+                                            stringResource(R.string.trends_coverage, summary.window.observed, summary.window.expected)
+                                        }
+                                        stringResource(
+                                            R.string.trends_chart_accessibility, metric.title, heroValue,
+                                            displayed?.day?.let(::prettyExploreDate) ?: stringResource(R.string.trends_no_reading),
+                                            presentation?.let { vitalStateText(it.position) }
+                                                ?: stringResource(R.string.trends_no_reading),
+                                            coverage,
+                                        )
+                                    },
+                                    onSelectionChange = if (vitalSummary != null) {
+                                        { index -> selectedIndex = index }
+                                    } else null,
+                                )
+                            }
+                            if (vitalSummary == null && metric.key != "recovery" && metric.key != "strain") {
                                 ExploreGlowEndCap(values = values, tipColor = metric.accent)
                             }
                         }

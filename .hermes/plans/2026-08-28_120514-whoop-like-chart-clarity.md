@@ -442,7 +442,7 @@ Plus both Apple app builds from Phase 1.
 # Phase 5: Roll out semantic charts by metric family
 
 **Priority:** P1  
-**Status:** Not started  
+**Status:** Source implementation complete; native rendered QA pending
 **Depends on:** Phase 4
 
 **Objective:** Apply the approved grammar to remaining charts without turning the effort into a broad visual rewrite.
@@ -459,11 +459,11 @@ Plus both Apple app builds from Phase 1.
 
 **Tasks:**
 
-- [ ] Render Charge as daily zone-colored dots or short columns.
-- [ ] Render Effort as zero-based blue bars.
-- [ ] Remove arbitrary line/bar switching for these summary charts.
-- [ ] Preserve the user's Effort display scale in labels and selection.
-- [ ] Test zone thresholds and zero-baseline truthfulness.
+- [x] Render Charge as daily zone-colored dots or short columns.
+- [x] Render Effort as zero-based blue bars.
+- [x] Remove arbitrary line/bar switching for these summary charts.
+- [x] Preserve the user's Effort display scale in labels and selection.
+- [x] Test zone thresholds and zero-baseline truthfulness.
 
 ## Phase 5B: Sleep duration and stages
 
@@ -478,10 +478,10 @@ Plus both Apple app builds from Phase 1.
 
 **Tasks:**
 
-- [ ] Use bars for nightly duration with a sleep-need/goal reference when already available.
-- [ ] Keep stages as a proportional timeline/hypnogram.
-- [ ] Avoid conventional lines for categorical stage transitions.
-- [ ] Ensure durations and percentages remain visible without redundant legends.
+- [x] Use bars for nightly duration with a sleep-need/goal reference when already available.
+- [x] Keep stages as a proportional timeline/hypnogram.
+- [x] Avoid conventional lines for categorical stage transitions.
+- [x] Ensure durations and percentages remain visible without redundant legends.
 
 ## Phase 5C: Skin temperature
 
@@ -495,10 +495,10 @@ Plus both Apple app builds from Phase 1.
 
 **Tasks:**
 
-- [ ] Plot deviation around a visible zero line.
-- [ ] Show absolute nightly temperature as the primary reading outside the plot.
-- [ ] Respect Celsius/Fahrenheit everywhere.
-- [ ] Add typical deviation band only from existing baseline data.
+- [x] Plot deviation around a visible zero line.
+- [x] Show absolute nightly temperature as the primary reading outside the plot where available; trend detail remains deviation-only so value and date stay coherent.
+- [x] Respect Celsius/Fahrenheit everywhere.
+- [x] Add typical deviation band only from existing baseline data.
 
 ## Phase 5D: Stress and steps
 
@@ -511,21 +511,33 @@ Plus both Apple app builds from Phase 1.
 
 **Tasks:**
 
-- [ ] Use stepped/filled stress plots against calm/elevated zones.
-- [ ] Use bars for steps with goal or personal-average reference.
-- [ ] Ensure calibration charts use the active-device union already established by recent upstream changes.
+- [x] Use stepped/filled stress plots against calm/elevated zones.
+- [x] Use bars for steps with goal or personal-average reference.
+- [x] Ensure calibration charts retain the existing active-device union; Phase 5 does not alter calibration storage or resolution.
 
 ### Phase 5 acceptance criteria
 
-- [ ] Every metric family has a semantically appropriate fixed default chart type.
-- [ ] Color meaning is consistent across screens and platforms.
-- [ ] No presentation change alters metric values or storage.
-- [ ] All migrated charts retain accessibility summaries and selection.
+- [x] Every metric family has a semantically appropriate fixed default chart type.
+- [x] Color meaning is consistent across screens and platforms.
+- [x] No presentation change alters metric values or storage.
+- [x] All migrated charts retain accessibility summaries and selection.
 
 ### Completion evidence
 
-- Per-family tests and screenshots: _pending_
-- Cross-platform parity matrix: _pending_
+- Per-family tests: Apple and Android semantic helpers, fixed domains, thresholds, stage ranks, references, and positioned-bar selection are covered. Android production/test sources compile. Native test execution and screenshots remain pending because this host lacks Swift/Xcode and a JDK `jlink` executable.
+- Cross-platform parity matrix:
+
+| Family | Apple | Android | Semantic contract |
+|---|---|---|---|
+| Charge | zone-colored daily marks | zone-colored daily bars | fixed 0–100, low/medium/high thresholds |
+| Effort | metric-colored daily bars | metric-colored daily bars | fixed 0–100 storage domain; labels honor selected 0–100/0–21 scale |
+| Sleep duration | nightly bars + need rule | nightly bars + need rule | zero baseline; need is normative, not observed average |
+| Sleep stages | proportional stage timeline/hypnogram | proportional stage timeline/hypnogram | categorical transitions are never conventional lines |
+| Skin temperature | deviation line, zero rule, typical band | deviation line, zero rule, typical band | symmetric deviation domain and configured temperature unit |
+| Stress | stepped line over calm/steady/elevated zones | stepped line over calm/steady/elevated zones | fixed 0–3 domain |
+| Steps | daily bars + personal-average rule | daily bars + personal-average rule | zero baseline; existing active-device source resolution retained |
+
+- Static verification: `git diff --check`, detached-doc lint, and 108 Tools tests pass. Android production and unit-test Kotlin compilation passes. The repository-wide i18n gate still fails on an existing dynamic interpolation in `TrendsExploreScreen.kt`; Phase 5 adds no localization keys.
 
 ---
 

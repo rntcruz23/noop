@@ -1698,7 +1698,6 @@
     <string name="l10n_settings_screen_theme_a797e309">Theme</string>
     <string name="l10n_settings_screen_this_is_a_plain_unencrypted_archive_b0dfe63d">This is a plain, unencrypted archive — anyone who gets the file can open it with any zip tool. Store it somewhere you trust.</string>
     <string name="l10n_settings_screen_this_restarts_the_roughly_4_night_c610a93d">This restarts the roughly 4-night build-up for Charge and your HRV baseline. Your history stays. Use it if a bad first week, like wearing it while sick, set your baseline off.</string>
-    <string name="l10n_settings_screen_trend_charts_19085c81">Trend charts</string>
     <string name="l10n_settings_screen_try_history_sync_without_pairing_experimental_54c31ea2">Try history sync without pairing (experimental)</string>
     <string name="l10n_settings_screen_try_history_sync_without_pairing_33ae8594">Try history sync without pairing</string>
     <string name="l10n_settings_screen_try_whoop_5_mg_protocol_probes_1d584653">Try WHOOP 5/MG protocol probes</string>
@@ -2092,8 +2091,6 @@
     <string name="settings_theme_dark">Dark</string>
     <string name="settings_chart_default">Default</string>
     <string name="settings_chart_classic">Classic</string>
-    <string name="settings_trend_line">Line</string>
-    <string name="settings_trend_bars">Bars</string>
     <!-- #103/queue-11a: Blood Oxygen tile captions for the experimental strap estimate (WHOOP @82 or Oura ceiling@100). -->
     <string name="spo2_strap_estimate_caption">strap estimate (unverified)</string>
     <string name="spo2_toggle_on_no_data">toggle ON · no estimate yet</string>

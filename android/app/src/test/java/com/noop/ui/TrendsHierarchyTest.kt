@@ -43,4 +43,12 @@ class TrendsHierarchyTest {
         assertFalse(hasAnyTrendData(0, 0, 0, 0, 0))
         assertTrue(hasAnyTrendData(0, 0, 0, 1, 0))
     }
+
+    @Test fun everyMetricUsesFixedSemanticGeometry() {
+        assertEquals(TrendMetricGeometry.CHARGE_ZONES, trendMetricGeometry(TrendsMetric.CHARGE))
+        assertEquals(TrendMetricGeometry.LINE, trendMetricGeometry(TrendsMetric.HRV))
+        assertEquals(TrendMetricGeometry.LINE, trendMetricGeometry(TrendsMetric.RHR))
+        assertEquals(TrendMetricGeometry.LINE, trendMetricGeometry(TrendsMetric.REST))
+        assertEquals(TrendMetricGeometry.BARS, trendMetricGeometry(TrendsMetric.EFFORT))
+    }
 }

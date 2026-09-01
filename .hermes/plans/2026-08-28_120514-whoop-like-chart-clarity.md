@@ -544,7 +544,7 @@ Plus both Apple app builds from Phase 1.
 # Phase 6: Retire conflicting options and clean up legacy paths
 
 **Priority:** P2  
-**Status:** Not started  
+**Status:** Source implementation complete; native verification pending
 **Depends on:** Phase 5
 
 **Objective:** Remove or constrain old presentation options that conflict with the semantic chart contract.
@@ -560,23 +560,26 @@ Plus both Apple app builds from Phase 1.
 
 ### Tasks
 
-- [ ] Audit every use of the line/bar preference.
-- [ ] Decide whether to remove it, migrate it to an advanced detail-only preference, or ignore it on semantically fixed summary charts.
-- [ ] Preserve backward compatibility for stored preference keys where removal could affect backups.
-- [ ] Remove dead chart branches only after all callers migrate.
-- [ ] Update settings copy and release notes.
-- [ ] Run source hygiene and localization audits.
+- [x] Audit every use of the line/bar preference.
+- [x] Remove the global geometry option instead of moving it to detail screens; migrated summary charts derive geometry from metric semantics.
+- [x] Preserve downgrade and backup compatibility by leaving any existing device-local `trend.chart.style` value untouched and keeping it outside `.noopbak`.
+- [x] Remove the obsolete Android preference-controlled line/bar branch from the legacy chart path.
+- [x] Update settings copy, obsolete localization resources, design decision D4, and unreleased notes.
+- [x] Run available source hygiene and localization audits; native app verification remains Phase 7 work.
 
 ### Acceptance criteria
 
-- [ ] Users cannot select a misleading geometry for summary charts.
-- [ ] Existing backup/settings decoding remains compatible.
-- [ ] No dead chart-style code remains in migrated paths.
+- [x] Users cannot select a misleading geometry for summary charts.
+- [x] Existing backup/settings decoding remains compatible.
+- [x] No dead chart-style code remains in migrated paths.
 
 ### Completion evidence
 
-- Preference migration decision: _pending_
-- Tests: _pending_
+- Preference migration decision: remove the Line/Bars Settings control, enum, key constants, readers, and writers on both platforms. Preserve the old device-local stored value by performing no deletion or migration; older builds can still read it after a downgrade. Keep `ChartStyle` (global semantic color palette) and `SleepChartStyle` (specialized categorical sleep-stage presentation), which do not conflict with the Trends geometry contract.
+- Semantic geometry tests: `TrendsHierarchyTests.testEveryMetricUsesFixedSemanticGeometry` and `TrendsHierarchyTest.everyMetricUsesFixedSemanticGeometry` pin Charge = zone columns, Effort = bars, and HRV/RHR/Rest = lines.
+- Backup compatibility tests: Apple and Android codec tests explicitly prove `trend.chart.style` remains excluded from `.noopbak`.
+- Source cleanup: repository search reports no remaining `TrendChartStyle`, `trendChartStyleKey`, `KEY_TREND_CHART_STYLE`, reader, writer, or Settings-state references.
+- Verification: Android production and unit-test Kotlin compilation passed after the cleanup. Full test execution, Apple app builds, and native rendered QA remain pending because this Linux host lacks executable `jlink`, Swift, and Xcode.
 
 ---
 

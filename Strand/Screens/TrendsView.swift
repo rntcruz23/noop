@@ -32,6 +32,14 @@ enum TrendsMetric: String, CaseIterable, Hashable {
         hasAnyData([recovery, hrv, rhr, rest, effort])
     }
 
+    var markStyle: TrendChartMarkStyle {
+        switch self {
+        case .charge: return .chargeZones
+        case .effort: return .bars
+        default: return .line
+        }
+    }
+
     var detailKey: String {
         switch self {
         case .charge: return "recovery"
@@ -525,14 +533,6 @@ struct TrendsView: View {
         metric == .charge ? StrandPalette.recoveryGradient : gradient(metricColor(metric))
     }
 
-    private func metricMarkStyle(_ metric: TrendsMetric) -> TrendChartMarkStyle {
-        switch metric {
-        case .charge: return .chargeZones
-        case .effort: return .bars
-        default: return .line
-        }
-    }
-
     private func metricDomain(_ metric: TrendsMetric, points: [TrendPoint]) -> ClosedRange<Double> {
         switch metric {
         case .charge, .effort: return 0...100
@@ -606,7 +606,7 @@ struct TrendsView: View {
                     TrendChart(
                         points: data.points, gradient: metricGradient(metric),
                         valueRange: metricDomain(metric, points: data.points), showsArea: false,
-                        markStyle: metricMarkStyle(metric), markColor: color,
+                        markStyle: metric.markStyle, markColor: color,
                         height: NoopMetrics.chartHeight,
                         valueFormat: { formattedValue($0, for: metric) },
                         accessibilityLabel: metricTitleText(metric),
@@ -708,7 +708,7 @@ struct TrendsView: View {
                             TrendChart(
                                 points: data.points, gradient: metricGradient(metric),
                                 valueRange: metricDomain(metric, points: data.points), showsArea: false,
-                                markStyle: metricMarkStyle(metric), height: NoopMetrics.controlHeight, showsHover: false,
+                                markStyle: metric.markStyle, height: NoopMetrics.controlHeight, showsHover: false,
                                 accessibilityLabel: String(localized: "Compact metric trend"),
                                 nowCapColor: color, chrome: .compact, xDomain: data.xDomain,
                                 gapPolicy: .daily, calendar: Self.utcCalendar

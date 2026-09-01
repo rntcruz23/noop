@@ -1384,7 +1384,6 @@
     <string name="l10n_settings_screen_theme_a797e309">Tema</string>
     <string name="l10n_settings_screen_this_is_a_plain_unencrypted_archive_b0dfe63d">Es un archivo sencillo y sin cifrar: cualquiera que consiga el archivo puede abrirlo con cualquier herramienta zip. Guárdelo en un lugar de confianza.</string>
     <string name="l10n_settings_screen_this_restarts_the_roughly_4_night_c610a93d">Esto reinicia el período de unas 4 noches de construcción de la Carga y tu línea base de VFC. Tu historial se conserva. Úsalo si una mala primera semana, como usarla estando enfermo, desvió tu línea base.</string>
-    <string name="l10n_settings_screen_trend_charts_19085c81">Gráficos de tendencias</string>
     <string name="l10n_settings_screen_try_history_sync_without_pairing_experimental_54c31ea2">Probar la sincronización del historial sin vinculación (experimental)</string>
     <string name="l10n_settings_screen_try_history_sync_without_pairing_33ae8594">Probar la sincronización del historial sin vinculación</string>
     <string name="l10n_settings_screen_try_whoop_5_mg_protocol_probes_1d584653">Prueba las sondas del protocolo WHOOP 5/MG</string>
@@ -1962,8 +1961,6 @@
     <string name="settings_theme_dark">Oscuro</string>
     <string name="settings_chart_default">Predeterminado</string>
     <string name="settings_chart_classic">Clásico</string>
-    <string name="settings_trend_line">Línea</string>
-    <string name="settings_trend_bars">Barras</string>
     <string name="spo2_strap_estimate_caption">estimación de la correa (sin verificar)</string>
     <string name="spo2_toggle_on_no_data">activado · aún sin estimación</string>
     <string name="l10n_devices_screen_forget_device_d6eb6209">Olvidar dispositivo…</string>

@@ -34,7 +34,7 @@ These defaults were approved for Phase 1 on 2026-08-28.
 1. **D1 — Trends hierarchy:** one selectable hero metric followed by compact metric rows.
 2. **D2 — Default hero:** Charge, preserving today's primary Trends emphasis.
 3. **D3 — Terminology:** retain Charge, Rest, and Effort.
-4. **D4 — Chart choice:** summary geometry is fixed by metric semantics. The global line/bar preference does not control migrated summary charts. Preserve its stored key until the later compatibility phase.
+4. **D4 — Chart choice:** summary geometry is fixed by metric semantics. The retired global line/bar preference no longer controls migrated summary charts or appears in Settings. Its device-local stored value is left untouched for downgrade compatibility and remains outside `.noopbak` backups.
 5. **D5 — Typical-range source:** HRV and resting-HR reference cards use the existing `VitalBands` definition of personal normality, not a new interpretation of scoring state.
 6. **D6 — Calendar geometry:** Android daily charts use calendar-day X positions. Dates determine spacing; list indices do not.
 7. **D7 — Daily gaps:** a daily line breaks when consecutive valid samples are more than one calendar day apart. A missing day therefore remains visible as empty horizontal space.

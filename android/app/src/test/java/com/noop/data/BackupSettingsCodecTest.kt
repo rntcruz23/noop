@@ -83,14 +83,17 @@ class BackupSettingsCodecTest {
                     "profile.age" to 30,
                     "device.peripheralId" to "AA:BB:CC:DD:EE:FF",
                     "sync.cursor" to 12345,
+                    "trend.chart.style" to "bar",
                 ),
             ),
         )
         assertFalse(json.contains("peripheralId"))
         assertFalse(json.contains("cursor"))
+        assertFalse(json.contains("trend.chart.style"))
 
-        val back = BackupSettingsCodec.decode("""{"profile.age": 28, "injected.key": "evil"}""")
+        val back = BackupSettingsCodec.decode("""{"profile.age": 28, "injected.key": "evil", "trend.chart.style": "bar"}""")
         assertNull(back["injected.key"])
+        assertNull(back["trend.chart.style"])
         assertEquals(28, back["profile.age"])
     }
 

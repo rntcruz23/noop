@@ -17,6 +17,10 @@ approximate; downloads are on the [Releases](https://github.com/NoopApp/noop/rel
 
 ---
 
+## Unreleased
+
+- **Trend charts now use the shape that fits each metric.** Charge keeps its zone-colored daily marks, Effort uses zero-based bars, and HRV, resting heart rate, and Rest use continuous lines. The old global Line/Bars setting has been removed because one shape could not represent every metric honestly. Existing local preference values are left untouched for downgrade compatibility and remain outside `.noopbak` backups.
+
 ## 9.3.0: Water and caffeine import, honest Effort, and an Oura resting-heart-rate fix (all platforms)
 
 A release about the numbers being right, on top of 9.2.1.

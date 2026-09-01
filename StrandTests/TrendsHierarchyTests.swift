@@ -36,4 +36,12 @@ final class TrendsHierarchyTests: XCTestCase {
         XCTAssertFalse(TrendsMetric.hasAnyData(recovery: 0, hrv: 0, rhr: 0, rest: 0, effort: 0))
         XCTAssertTrue(TrendsMetric.hasAnyData(recovery: 0, hrv: 0, rhr: 0, rest: 1, effort: 0))
     }
+
+    func testEveryMetricUsesFixedSemanticGeometry() {
+        XCTAssertEqual(TrendsMetric.charge.markStyle, .chargeZones)
+        XCTAssertEqual(TrendsMetric.hrv.markStyle, .line)
+        XCTAssertEqual(TrendsMetric.rhr.markStyle, .line)
+        XCTAssertEqual(TrendsMetric.rest.markStyle, .line)
+        XCTAssertEqual(TrendsMetric.effort.markStyle, .bars)
+    }
 }

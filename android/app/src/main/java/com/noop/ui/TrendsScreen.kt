@@ -100,6 +100,14 @@ internal enum class TrendsMetric(val detailKey: String) {
     CHARGE("recovery"), HRV("hrv"), RHR("rhr"), REST("rest"), EFFORT("strain"),
 }
 
+internal enum class TrendMetricGeometry { LINE, BARS, CHARGE_ZONES }
+
+internal fun trendMetricGeometry(metric: TrendsMetric): TrendMetricGeometry = when (metric) {
+    TrendsMetric.CHARGE -> TrendMetricGeometry.CHARGE_ZONES
+    TrendsMetric.EFFORT -> TrendMetricGeometry.BARS
+    else -> TrendMetricGeometry.LINE
+}
+
 internal fun defaultTrendsMetric(): TrendsMetric = TrendsMetric.CHARGE
 internal fun secondaryTrendMetrics(selected: TrendsMetric): List<TrendsMetric> =
     TrendsMetric.entries.filterNot { it == selected }
@@ -513,7 +521,7 @@ private fun SelectableTrendHero(
             if (values.isEmpty()) {
                 SparsePlaceholder()
             } else {
-                if (metric == TrendsMetric.CHARGE || metric == TrendsMetric.EFFORT) {
+                if (trendMetricGeometry(metric) != TrendMetricGeometry.LINE) {
                     BarChart(
                         values = values,
                         modifier = Modifier.fillMaxWidth().height(Metrics.chartHeight),
@@ -654,7 +662,7 @@ private fun CompactTrendRow(
                         SparsePlaceholder(height = Metrics.sparklineHeight)
                     }
                 } else {
-                    if (metric == TrendsMetric.CHARGE || metric == TrendsMetric.EFFORT) {
+                    if (trendMetricGeometry(metric) != TrendMetricGeometry.LINE) {
                         BarChart(
                             values = points.map { it.value },
                             modifier = Modifier.size(Metrics.trendStripHeight, Metrics.sparklineHeight),
@@ -1071,10 +1079,7 @@ private fun ChartWithAxes(
     val maxV = values.max()
     val avgV = values.average()
     val minV = values.min()
-    // Trend chart style (line vs bar). Read here at the single chart choke point (every trend card routes
-    // through ChartWithAxes); SharedPreferences isn't reactive, but returning from Settings recomposes the
-    // Trends screen, which re-reads it — the same read-on-recompose the Effort scale toggle relies on.
-    val chartStyle = UnitPrefs.trendChartStyle(LocalContext.current)
+
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Column(
             modifier = Modifier.height(Metrics.chartHeight),
@@ -1104,36 +1109,22 @@ private fun ChartWithAxes(
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 Box(modifier = Modifier.fillMaxWidth().height(plotHeight)) {
-                    if (chartStyle == TrendChartStyle.BAR) {
-                        // Bar mode: value-ramp bars from the baseline. No GlowEndCap (the "now" halo is a
-                        // line idiom). selectionEnabled is OFF so BarChart mean-bins a dense window (the
-                        // multi-year "ALL" span) down to the pixel width — a clean silhouette instead of a
-                        // 1000-bar sub-pixel smear. The max/avg/min axis column + footer carry the numbers.
-                        BarChart(
-                            values = values,
-                            modifier = Modifier.fillMaxSize(),
-                            color = color,
-                            selectionEnabled = false,
-                            xPositions = xPositions,
-                        )
-                    } else {
-                        LineChart(
-                            values = values,
-                            modifier = Modifier.fillMaxSize(),
-                            color = color,
-                            fill = true,
-                            selectionEnabled = true,
-                            // #463: the pinpoint label goes through the SAME formatter as the axis column,
-                            // so a tapped Effort day can't print the stored 0-100 value beside a 0-21 axis.
-                            formatValue = formatY,
-                            selectionLabels = dates.map(::prettyAxisDate),
-                            xPositions = xPositions,
-                            dayKeys = dates,
-                            gapPolicyDaily = true,
-                            mode = LineChartMode.SUMMARY,
-                        )
-                        GlowEndCap(values = values, tipColor = tipColor, xPositions = xPositions)
-                    }
+                    LineChart(
+                        values = values,
+                        modifier = Modifier.fillMaxSize(),
+                        color = color,
+                        fill = true,
+                        selectionEnabled = true,
+                        // #463: the pinpoint label goes through the SAME formatter as the axis column,
+                        // so a tapped Effort day can't print the stored 0-100 value beside a 0-21 axis.
+                        formatValue = formatY,
+                        selectionLabels = dates.map(::prettyAxisDate),
+                        xPositions = xPositions,
+                        dayKeys = dates,
+                        gapPolicyDaily = true,
+                        mode = LineChartMode.SUMMARY,
+                    )
+                    GlowEndCap(values = values, tipColor = tipColor, xPositions = xPositions)
                 }
             }
             val axisLabels = if (windowEnd != null) vitalAxisLabels(windowStart, windowEnd) else trendAxisLabels(dates)

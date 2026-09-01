@@ -688,9 +688,6 @@ fun SettingsScreen(
     // Chrome accent (Mint / WHOOP Blue / Custom) — chrome only; AccentPrefs mirrors it in snapshot state.
     var accentColor by remember { mutableStateOf(AccentPrefs.color) }
     var accentCustomHex by remember { mutableStateOf(AccentPrefs.customHex) }
-    // Trend charts (Line / Bar) — flips the Trends tab between the gradient line and value-ramp bars.
-    // Display-only; SharedPreferences isn't reactive, so mirror into local state and persist on select.
-    var trendChartStyle by remember { mutableStateOf(UnitPrefs.trendChartStyle(context)) }
     var sleepChartStyle by remember { mutableStateOf(UnitPrefs.sleepChartStyle(context)) }
     // In-app quiet motion (#941), default OFF. The process-wide preference observer in NoopMotion makes
     // this take effect on every currently composed looping surface as soon as the switch is flipped.
@@ -1375,23 +1372,6 @@ fun SettingsScreen(
                     onHexChange = { hex ->
                         accentCustomHex = hex
                         AccentPrefs.setCustomHex(context, hex)
-                    },
-                )
-            }
-            SettingsRowDivider()
-            // Trend chart style (line vs bar). Display-only: flips the Trends tab's charts between the
-            // gradient line and value-ramp bars. The plotted data is identical either way.
-            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_trend_charts_19085c81)) {
-                SegmentedPillControl(
-                    items = listOf(TrendChartStyle.LINE, TrendChartStyle.BAR),
-                    selection = trendChartStyle,
-                    label = {
-                        if (it == TrendChartStyle.BAR) uiString(R.string.settings_trend_bars)
-                        else uiString(R.string.settings_trend_line)
-                    },
-                    onSelect = { style ->
-                        trendChartStyle = style
-                        UnitPrefs.setTrendChartStyle(context, style)
                     },
                 )
             }

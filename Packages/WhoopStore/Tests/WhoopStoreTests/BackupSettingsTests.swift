@@ -62,6 +62,7 @@ final class BackupSettingsTests: XCTestCase {
             "noop.acceptedTermsVersion": "3",
             "sync.cursor": 12345,
             "profile.avatarImageData": "base64…",
+            "trend.chart.style": "bar",
         ]
         let data = try XCTUnwrap(BackupSettings.encode(dirty))
         let json = try XCTUnwrap(String(data: data, encoding: .utf8))
@@ -69,11 +70,13 @@ final class BackupSettingsTests: XCTestCase {
         XCTAssertFalse(json.contains("cursor"))
         XCTAssertFalse(json.contains("avatar"))
         XCTAssertFalse(json.contains("acceptedTerms"))
+        XCTAssertFalse(json.contains("trend.chart.style"))
 
         // Decode side: a hand-crafted settings.json can't smuggle keys in either.
-        let crafted = Data(#"{"profile.age": 28, "injected.key": "evil", "profile.sex": "male"}"#.utf8)
+        let crafted = Data(#"{"profile.age": 28, "injected.key": "evil", "trend.chart.style": "bar", "profile.sex": "male"}"#.utf8)
         let back = BackupSettings.decode(crafted)
         XCTAssertNil(back["injected.key"])
+        XCTAssertNil(back["trend.chart.style"])
         XCTAssertEqual(back["profile.age"] as? Int, 28)
         XCTAssertEqual(back["profile.sex"] as? String, "male")
     }

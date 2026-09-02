@@ -239,7 +239,7 @@ private fun DebtDeltaBars(ledger: SleepDebtLedger) {
     val accentColor = Palette.accent
     val deficitColor = Palette.metricRose
     val centreColor = Palette.hairline
-    Column(verticalArrangement = Arrangement.spacedBy(Metrics.spaceHalf)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.space4)) {
         Text(uiString(R.string.sleep_positive_minutes, scale.roundToInt()), style = NoopType.footnote, color = Palette.textTertiary)
         Box(
             modifier = Modifier

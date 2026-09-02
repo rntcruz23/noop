@@ -37,6 +37,33 @@ final class ApplePhase5ChartSemanticsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(band!.upperBound, 0)
     }
 
+    func testSleepDurationKeepsFixedTrailingCalendarWindowAndAverageMatchesPlot() {
+        let days = [
+            day("2026-06-01", sleep: 600),
+            day("2026-07-02", sleep: 360),
+            day("2026-07-30", sleep: 480),
+            day("2026-07-31", sleep: 420),
+        ]
+
+        let data = AsleepDurationData.build(days: days)
+
+        XCTAssertEqual(data.points.map(\.value), [6, 8, 7])
+        XCTAssertEqual(data.plottedAverageHours ?? -1, 7, accuracy: 0.001)
+        XCTAssertEqual(data.coverageText, "3 of 30 nights recorded")
+    }
+
+    func testSleepDebtUsesTrailingFourteenCalendarDaysWithoutBackfillingOlderNights() {
+        let days = [
+            day("2026-07-01", sleep: 300),
+            day("2026-07-17", sleep: 480),
+            day("2026-07-30", sleep: 480),
+        ]
+
+        let ledger = SleepModel.debtLedger(days: days, napSleepMinByDay: [:])
+
+        XCTAssertEqual(ledger.nights.map(\.day), ["2026-07-17", "2026-07-30"])
+    }
+
     private func day(_ key: String, sleep: Double) -> DailyMetric {
         DailyMetric(day: key, totalSleepMin: sleep, efficiency: nil, deepMin: nil, remMin: nil,
                     lightMin: nil, disturbances: nil, restingHr: nil, avgHrv: nil,

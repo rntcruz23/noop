@@ -17,6 +17,15 @@ struct AsleepDurationData {
     let typicalTotalMin: Double?
     let sleepNeedMin: Double
 
+    var plottedAverageHours: Double? {
+        guard !points.isEmpty else { return nil }
+        return points.map(\.value).reduce(0, +) / Double(points.count)
+    }
+
+    var coverageText: String {
+        String(localized: "\(points.count) of 30 nights recorded")
+    }
+
     /// yyyy-MM-dd → Date (en_US_POSIX, UTC) — matches `SleepView.dayParser`.
     private static let dayParser: DateFormatter = {
         let f = DateFormatter()
@@ -26,21 +35,25 @@ struct AsleepDurationData {
         return f
     }()
 
-    /// Trailing 30 days of total sleep in HOURS, falling back to all nights with data when the trailing
-    /// window is too sparse (verbatim of `SleepView.durationTrendPoints`). `typicalTotalMin` is the mean
-    /// asleep minutes across nights with data (verbatim of `SleepView.typicalTotalMin`).
+    /// Fixed trailing 30 calendar days of total sleep in HOURS. Missing nights remain missing; the chart
+    /// never widens the window to make sparse coverage look fuller. The displayed average is derived from
+    /// these exact plotted points.
     static func build(days: [DailyMetric]) -> AsleepDurationData {
-        func mk(_ slice: ArraySlice<DailyMetric>) -> [TrendPoint] {
-            slice.compactMap { d -> TrendPoint? in
-                guard let mins = d.totalSleepMin, mins > 0,
-                      let date = dayParser.date(from: d.day) else { return nil }
-                return TrendPoint(date: date, value: mins / 60.0)
-            }
+        let dated = days.compactMap { day -> (metric: DailyMetric, date: Date)? in
+            guard let date = dayParser.date(from: day.day) else { return nil }
+            return (day, date)
         }
-        let recent = mk(days.suffix(30))
-        let points = recent.count >= 2 ? recent : mk(days[...])
-        let totals = days.compactMap { $0.totalSleepMin }.filter { $0 > 0 }
-        let typical = totals.isEmpty ? nil : totals.reduce(0, +) / Double(totals.count)
+        let latest = dated.map(\.date).max()
+        let cutoff = latest.flatMap {
+            Calendar(identifier: .gregorian).date(byAdding: .day, value: -29, to: $0)
+        }
+        let points = dated.compactMap { row -> TrendPoint? in
+            guard let cutoff, row.date >= cutoff,
+                  let mins = row.metric.totalSleepMin, mins > 0 else { return nil }
+            return TrendPoint(date: row.date, value: mins / 60.0)
+        }
+        let plottedMinutes = points.map { $0.value * 60 }
+        let typical = plottedMinutes.isEmpty ? nil : plottedMinutes.reduce(0, +) / Double(plottedMinutes.count)
         return AsleepDurationData(points: points, typicalTotalMin: typical,
                                   sleepNeedMin: SleepModel.debtNeedMin(days: days))
     }
@@ -52,13 +65,13 @@ struct AsleepDurationCard: View {
 
     var body: some View {
         let pts = data.points
-        let avg = data.typicalTotalMin.map { $0 / 60.0 }
+        let avg = data.plottedAverageHours
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
             SectionHeader("Asleep duration", overline: "Trend")
             ChartCard(
                 title: "Hours asleep",
-                subtitle: String(localized: "Per night, trailing 30 days"),
-                trailing: avg.map { String(localized: "\(String(format: "%.1f", $0)) h avg") },
+                subtitle: String(localized: "Trailing 30 calendar days · \(data.coverageText)"),
+                trailing: avg.map { String(localized: "\($0.formatted(.number.precision(.fractionLength(1)))) h avg") },
                 height: NoopMetrics.chartHeight,
                 tint: StrandPalette.restColor,
                 chart: {

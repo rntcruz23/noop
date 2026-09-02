@@ -854,9 +854,11 @@ fun SleepScreen(
                 SleepSection.BODY_CLOCK -> {
                     val phase = v5Signals?.bodyClock
                     val session = night?.session
+                    val bodyClockOnset = night?.heroOnsetTs ?: session?.effectiveStartTs
+                    val bodyClockWake = night?.heroWakeTs ?: session?.endTs
                     if (phase != null &&
                         phase.confidence != CircadianEngine.PhaseConfidence.UNREADABLE &&
-                        session != null
+                        bodyClockOnset != null && bodyClockWake != null
                     ) {
                         item(key = k) {
                             SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
@@ -864,8 +866,8 @@ fun SleepScreen(
                                     Spacer(Modifier.height(Metrics.selectorTopUp))
                                     BodyClockDialCard(
                                         estimate = phase,
-                                        actualBedHour = localClockHour(session.effectiveStartTs),
-                                        actualWakeHour = localClockHour(session.endTs),
+                                        actualOnsetTs = bodyClockOnset,
+                                        actualWakeTs = bodyClockWake,
                                     )
                                 }
                             }
@@ -1349,6 +1351,7 @@ private fun Hero(
                 val chartStyle = UnitPrefs.sleepChartStyle(LocalContext.current)
                 val filledSegments = display.hypnogramSegments?.takeIf { it.size >= 2 }
                 if (chartStyle != SleepChartStyle.CLASSIC && filledSegments != null) {
+                    var selectedStage by remember(filledSegments) { mutableStateOf<String?>(null) }
                     SleepChartCard(
                         title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
                         subtitle = subtitle,
@@ -1361,7 +1364,9 @@ private fun Hero(
                         // colours, so on Oura/Garmin three things in one card disagreed. Making the rows
                         // ramp-aware leaves them naming and colouring every stage correctly, which IS the
                         // key; a separate legend above a correct key is the redundancy that was reported.
-                        footer = { StageBreakdownRows(s, chartStyle.stagePalette) },
+                        footer = {
+                            StageBreakdownRows(s, chartStyle.stagePalette, selectedStage) { selectedStage = it }
+                        },
                     ) {
                         FilledHypnogram(
                             segments = filledSegments,
@@ -1369,6 +1374,7 @@ private fun Hero(
                             wakeTs = windowWakeTs ?: session?.endTs,
                             filled = chartStyle.isFilled,
                             palette = chartStyle.stagePalette,
+                            selectedStage = selectedStage,
                         )
                     }
                 } else {
@@ -1392,12 +1398,13 @@ private fun Hero(
                     }
                 }
             } else {
+                var selectedStage by remember(display) { mutableStateOf<String?>(null) }
                 SleepChartCard(
                     title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
                     subtitle = subtitle,
                     trailing = durationText(s.asleep),
                     tint = Palette.restColor,
-                    footer = { StageBreakdownRows(s) },
+                    footer = { StageBreakdownRows(s, selectedStage = selectedStage) { selectedStage = it } },
                 ) {
                     // Reconstructed architecture (light → deep → light → rem → light → awake) as the
                     // flat proportional strip. No MotionStrip and no fake steps here: invented
@@ -1409,17 +1416,29 @@ private fun Hero(
                     // at least two buckets, matching iOS's `buckets.count >= 2`: one point is not a line,
                     // and a night the strap never sampled should show nothing rather than a flat stub.
                     if (nightHr.size >= 2) {
-                        LineChart(
-                            values = nightHr.map { it.avgBpm },
-                            modifier = Modifier.fillMaxWidth().height(Metrics.compactChartHeight)
-                                .semantics {
-                                    contentDescription = uiString(R.string.l10n_sleep_screen_sleep_heart_rate_chart_8ec47ae1)
-                                },
-                            color = Palette.metricRose,
-                            fill = false,
-                            timestamps = nightHr.map { it.bucket },
-                            formatValue = { "${Math.round(it)} bpm" },
-                        )
+                        val hrValues = nightHr.map { it.avgBpm }
+                        Column(verticalArrangement = Arrangement.spacedBy(Metrics.space6)) {
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Text(uiString(R.string.sleep_sleeping_heart_rate), style = NoopType.overline, color = Palette.textSecondary)
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    uiString(R.string.sleep_heart_rate_range, Math.round(hrValues.min()).toInt(), Math.round(hrValues.max()).toInt()),
+                                    style = NoopType.captionNumber,
+                                    color = Palette.textPrimary,
+                                )
+                            }
+                            LineChart(
+                                values = hrValues,
+                                modifier = Modifier.fillMaxWidth().height(Metrics.compactChartHeight)
+                                    .semantics {
+                                        contentDescription = uiString(R.string.l10n_sleep_screen_sleep_heart_rate_chart_8ec47ae1)
+                                    },
+                                color = Palette.metricRose,
+                                fill = false,
+                                timestamps = nightHr.map { it.bucket },
+                                formatValue = { "${Math.round(it)} bpm" },
+                            )
+                        }
                     }
                     val segments = stageSegments(s)
                     if (segments.isNotEmpty()) {
@@ -1427,6 +1446,7 @@ private fun Hero(
                             stages = segments,
                             onsetTs = session?.effectiveStartTs,
                             wakeTs = session?.endTs,
+                            selectedStage = selectedStage,
                         )
                     } else {
                         Text(
@@ -2014,7 +2034,11 @@ internal fun StageTimeline(
         // #407 — MotionStrip component + data path untouched; relocated UNDER the rows on the SAME
         // timeline. Same inner insets as the rows' tracks so epochs don't skew against the segments.
         Box(modifier = Modifier.padding(horizontal = Metrics.stageRowPadH)) {
-            MotionStrip(motionEpochs)
+            Column(verticalArrangement = Arrangement.spacedBy(Metrics.space2)) {
+                Text(uiString(R.string.sleep_movement_relative), style = NoopType.overline, color = Palette.textSecondary)
+                MotionStrip(motionEpochs)
+                Text(uiString(R.string.sleep_movement_relative_explanation), style = NoopType.footnote, color = Palette.textTertiary)
+            }
         }
         if (onsetTs != null && wakeTs != null) {
             Box(modifier = Modifier.padding(horizontal = Metrics.stageRowPadH)) {
@@ -2106,8 +2130,8 @@ private fun StageTimelineRow(
             .fillMaxWidth()
             .clip(shape)
             .background(Palette.textPrimary.copy(alpha = 0.045f))
-            .then(if (selected) Modifier.border(1.5.dp, Palette.hairlineStrong, shape) else Modifier)
-            .clickable(onClickLabel = "Highlights this stage on the sleep chart", onClick = onTap)
+            .then(if (selected) Modifier.border(1.5.dp, color, shape) else Modifier)
+            .clickable(onClickLabel = "Select $label stage", onClick = onTap)
             .padding(horizontal = Metrics.stageRowPadH, vertical = Metrics.stageRowPadV)
             .semantics(mergeDescendants = true) {
                 contentDescription = uiString(R.string.l10n_sleep_screen_label_durationtext_minutes_percent_percent_of_6ab7ae87, label, durationText(minutes), percent)
@@ -2244,7 +2268,9 @@ private fun MotionStrip(epochs: List<Double>) {
         return
     }
     val tint = Palette.restColor
-    Canvas(modifier = Modifier.fillMaxWidth().height(Metrics.motionStripHeight)) {
+    Canvas(modifier = Modifier.fillMaxWidth().height(Metrics.motionStripHeight).semantics {
+        contentDescription = uiString(R.string.sleep_movement_relative_semantics)
+    }) {
         val w = size.width
         val h = size.height
         if (w <= 0f || h <= 0f) return@Canvas

@@ -22,7 +22,7 @@ struct SleepDebtLedgerCard: View {
     var body: some View {
         let ledger = model.sleepDebtLedger
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Sleep-debt ledger", overline: "Last 14 nights")
+            SectionHeader("Sleep-debt ledger", overline: "Trailing 14 calendar days")
             NoopCard(tint: StrandPalette.restColor) {
                 if ledger.nightCount == 0 {
                     Text("No nights with sleep data yet. Your ledger fills in as you wear the strap to bed.")
@@ -51,6 +51,10 @@ struct SleepDebtLedgerCard: View {
                         Text(debtRead(ledger))
                             .font(StrandFont.subhead)
                             .foregroundStyle(StrandPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Coverage: \(ledger.nightCount) of 14 nights recorded · bars show minutes above or below need")
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
                         // Raw per-night delta bars (above/below base need), intentionally separate
                         // from the recurrence's current debt estimate.
@@ -97,8 +101,18 @@ struct SleepDebtLedgerCard: View {
             }
         }
         .frame(height: 56)
+        .overlay(alignment: .topLeading) {
+            Text("+\(Int(scale.rounded())) min")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+        }
+        .overlay(alignment: .bottomLeading) {
+            Text("−\(Int(scale.rounded())) min")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+        }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Per-night sleep balance: \(ledger.nightCount) nights, net \(debtSigned(ledger.balanceMin))")
+        .accessibilityLabel("Per-night sleep balance: \(ledger.nightCount) of 14 nights recorded, scale plus or minus \(Int(scale.rounded())) minutes, net \(debtSigned(ledger.balanceMin))")
     }
 
     // MARK: - Sleep-debt ledger formatting (verbatim lift of the ledger-only SleepView helpers)

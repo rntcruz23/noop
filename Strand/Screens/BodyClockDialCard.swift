@@ -55,8 +55,9 @@ struct BodyClockDialCard: View {
                         .accessibilityElement(children: .ignore)
                         // Label only. The verdict is the caption Text below, a separate element, so giving
                         // the dial the same string as its VALUE made VoiceOver announce it twice.
-                        .accessibilityLabel(Text("Body clock dial"))
+                        .accessibilityLabel(Text(accessibilitySummary))
                     legend
+                    windowLabels
                     Text(alignmentText)
                         .font(StrandFont.title2)
                         .foregroundStyle(StrandPalette.textPrimary)
@@ -76,7 +77,10 @@ struct BodyClockDialCard: View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Body clock").strandOverline()
-                Text("Last night against your clock")
+                Text("Sleep timing, not duration")
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                Text("Estimated from the last 14 days of heart-rate timing")
                     .font(StrandFont.footnote)
                     .foregroundStyle(StrandPalette.textTertiary)
             }
@@ -207,7 +211,7 @@ struct BodyClockDialCard: View {
         HStack(spacing: 14) {
             legendItem(colour: hue, dashed: false, label: String(localized: "Last night"))
             legendItem(colour: hue.opacity(0.55), dashed: true,
-                       label: String(localized: "Your clock"))
+                       label: String(localized: "Estimated body clock"))
             Spacer()
         }
         .accessibilityHidden(true)   // the caption below already states the comparison in words
@@ -228,6 +232,48 @@ struct BodyClockDialCard: View {
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textTertiary)
         }
+    }
+
+    private static let clockFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = AppLanguage.activeLocale
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.setLocalizedDateFormatFromTemplate("jmm")
+        return formatter
+    }()
+
+    private func clockText(_ hour: Double) -> String {
+        let dayMinutes = 24 * 60
+        let rawMinutes = Int((hour * 60).rounded())
+        let minutes = (rawMinutes % dayMinutes + dayMinutes) % dayMinutes
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = TimeZone(secondsFromGMT: 0)
+        components.year = 2001
+        components.month = 1
+        components.day = 1
+        components.hour = minutes / 60
+        components.minute = minutes % 60
+        guard let date = components.date else { return "—" }
+        return Self.clockFormatter.string(from: date)
+    }
+
+    @ViewBuilder
+    private var windowLabels: some View {
+        if let ideal {
+            VStack(alignment: .leading, spacing: NoopMetrics.spaceHalf) {
+                Text("Actual: \(clockText(actualBedHour))–\(clockText(actualWakeHour))")
+                Text("Estimated body clock: \(clockText(ideal.bedHour))–\(clockText(ideal.wakeHour))")
+            }
+            .font(StrandFont.footnote)
+            .foregroundStyle(StrandPalette.textSecondary)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var accessibilitySummary: String {
+        guard let ideal else { return String(localized: "Body clock timing unavailable") }
+        return String(localized: "Sleep timing, not duration. Estimated from the last 14 days of heart-rate timing. Actual window \(clockText(actualBedHour)) to \(clockText(actualWakeHour)). Estimated body clock window \(clockText(ideal.bedHour)) to \(clockText(ideal.wakeHour)).")
     }
 
     /// Rounded to five minutes: the underlying phase is an activity fit, so a to-the-minute caption would

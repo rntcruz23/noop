@@ -239,15 +239,24 @@ internal fun buildSleepModel(
         Metric(series.lastOrNull(), mean(series), series)
     }
 
-    // Trend set = the most-recent nights with data (asleep totals, full history — latest-anchored,
-    // not the browsed night). Mirrors iOS's trailing trend over repo.days.
-    val trendRows = days.filter { (it.totalSleepMin ?: 0.0) > 0.0 }.takeLast(14)
+    // Trailing fourteen CALENDAR days ending at the latest repository day. Missing nights retain their
+    // horizontal position instead of making the chart reach farther back for fourteen observations.
+    val trendEnd = days.mapNotNull { runCatching { java.time.LocalDate.parse(it.day) }.getOrNull() }.maxOrNull()
+    val trendStart = trendEnd?.minusDays(13)
+    val trendDates = if (trendStart != null) (0L..13L).map { trendStart.plusDays(it).toString() } else emptyList()
+    val trendRows = if (trendStart != null) days.filter { row ->
+        val date = runCatching { java.time.LocalDate.parse(row.day) }.getOrNull()
+        date != null && !date.isBefore(trendStart) && !date.isAfter(trendEnd) && (row.totalSleepMin ?: 0.0) > 0.0
+    }.sortedBy { it.day } else emptyList()
     val trendHours = trendRows.mapNotNull { it.totalSleepMin?.let { minutes -> minutes / 60.0 } }
     val trendNeedHours = trendRows.map { row -> ((imported.needMin[row.day] ?: debtNeedMin) / 60.0) }
     val trendDebtHours = trendRows.map { row ->
         (localDebtByDay[row.day] ?: 0.0) / 60.0
     }
-    val trendDates = trendRows.map { it.day }
+    val trendPositions = trendRows.map { row ->
+        (java.time.temporal.ChronoUnit.DAYS.between(trendStart, java.time.LocalDate.parse(row.day)).toFloat() / 13f)
+            .coerceIn(0f, 1f)
+    }
 
     // Real per-epoch timeline only when the merged session IS this night — UTC OR local-tz
     // end-day match (imported DailyMetric.day is local-tz while dayString is UTC, so a
@@ -296,6 +305,9 @@ internal fun buildSleepModel(
         trendNeedHours = trendNeedHours,
         trendDebtHours = trendDebtHours,
         trendDates = trendDates,
+        trendValueDates = trendRows.map { it.day },
+        trendPositions = trendPositions,
+        trendCoverage = trendRows.size,
         realSegments = realSegments,
         hypnogramSegments = hypnogramSegments,
         sleepDebtLedger = sleepDebtLedger,

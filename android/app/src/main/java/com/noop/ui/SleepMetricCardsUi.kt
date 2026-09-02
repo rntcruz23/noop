@@ -21,7 +21,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -204,6 +207,11 @@ internal fun SleepDebtLedgerHostCard(m: SleepModel) {
                         style = NoopType.subhead,
                         color = Palette.textSecondary,
                     )
+                    Text(
+                        uiString(R.string.sleep_debt_coverage, ledger.nightCount),
+                        style = NoopType.footnote,
+                        color = Palette.textTertiary,
+                    )
                     // Per-night diverging delta bars (surplus up, deficit down).
                     DebtDeltaBars(ledger)
                     SleepHairline()
@@ -231,15 +239,21 @@ private fun DebtDeltaBars(ledger: SleepDebtLedger) {
     val accentColor = Palette.accent
     val deficitColor = Palette.metricRose
     val centreColor = Palette.hairline
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .semantics {
-                contentDescription =
-                    uiString(R.string.l10n_sleep_screen_per_night_sleep_balance_ledger_nightcount_f339d0ab, ledger.nightCount, debtSigned(ledger.balanceMin))
-            }
-            .drawBehind {
+    Column(verticalArrangement = Arrangement.spacedBy(Metrics.spaceHalf)) {
+        Text(uiString(R.string.sleep_positive_minutes, scale.roundToInt()), style = NoopType.footnote, color = Palette.textTertiary)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .semantics {
+                    contentDescription = uiString(
+                        R.string.sleep_debt_chart_semantics,
+                        ledger.nightCount,
+                        scale.roundToInt(),
+                        debtSigned(ledger.balanceMin),
+                    )
+                }
+                .drawBehind {
                 val n = max(deltas.size, 1)
                 val slot = size.width / n
                 val barW = max(2f, slot * 0.6f)
@@ -264,8 +278,10 @@ private fun DebtDeltaBars(ledger: SleepDebtLedger) {
                         cornerRadius = CornerRadius(2f, 2f),
                     )
                 }
-            },
-    )
+                },
+        )
+        Text(uiString(R.string.sleep_negative_minutes, scale.roundToInt()), style = NoopType.footnote, color = Palette.textTertiary)
+    }
 }
 
 // MARK: - Stages (read-only latest-night host card)
@@ -300,6 +316,7 @@ internal fun StagesHostCard(m: SleepModel) {
             val chartStyle = UnitPrefs.sleepChartStyle(LocalContext.current)
             val filledSegments = m.hypnogramSegments?.takeIf { it.size >= 2 }
             if (chartStyle != SleepChartStyle.CLASSIC && filledSegments != null) {
+                var selectedStage by remember(filledSegments) { mutableStateOf<String?>(null) }
                 SleepChartCard(
                     title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
                     subtitle = subtitle,
@@ -312,7 +329,7 @@ internal fun StagesHostCard(m: SleepModel) {
                     // colours, so on Oura/Garmin three things in one card disagreed. Making the rows
                     // ramp-aware leaves them naming and colouring every stage correctly, which IS the
                     // key; a separate legend above a correct key is the redundancy that was reported.
-                    footer = { StageBreakdownRows(s, chartStyle.stagePalette) },
+                    footer = { StageBreakdownRows(s, chartStyle.stagePalette, selectedStage) { selectedStage = it } },
                 ) {
                     FilledHypnogram(
                         segments = filledSegments,
@@ -320,6 +337,7 @@ internal fun StagesHostCard(m: SleepModel) {
                         wakeTs = null,
                         filled = chartStyle.isFilled,
                         palette = chartStyle.stagePalette,
+                        selectedStage = selectedStage,
                     )
                 }
             } else {
@@ -340,16 +358,17 @@ internal fun StagesHostCard(m: SleepModel) {
                 }
             }
         } else {
+            var selectedStage by remember(m) { mutableStateOf<String?>(null) }
             SleepChartCard(
                 title = uiString(R.string.l10n_sleep_screen_stage_breakdown_e9b714f9),
                 subtitle = subtitle,
                 trailing = durationText(s.asleep),
                 tint = Palette.restColor,
-                footer = { StageBreakdownRows(s) },
+                footer = { StageBreakdownRows(s, selectedStage = selectedStage) { selectedStage = it } },
             ) {
                 val segments = stageSegments(s)
                 if (segments.isNotEmpty()) {
-                    HypnogramWithAxis(stages = segments, onsetTs = null, wakeTs = null)
+                    HypnogramWithAxis(stages = segments, onsetTs = null, wakeTs = null, selectedStage = selectedStage)
                 } else {
                     Text(
                         uiString(R.string.l10n_sleep_screen_no_stage_breakdown_for_this_night_b74bf9c3),
@@ -510,6 +529,13 @@ internal fun AsleepDurationHostCard(hours: List<Double>, dates: List<String>) {
     }
 }
 
+internal fun sleepDurationDomain(values: List<Double>, referenceHours: Double?): ClosedFloatingPointRange<Double> {
+    val top = (values.filter { it.isFinite() }.maxOrNull() ?: 0.0)
+        .coerceAtLeast(referenceHours?.takeIf { it.isFinite() } ?: 0.0)
+        .coerceAtLeast(1.0)
+    return 0.0..top
+}
+
 @Composable
 internal fun DurationTrend(m: SleepModel) {
     val pts = m.trendHours
@@ -527,13 +553,22 @@ internal fun DurationTrend(m: SleepModel) {
                         "Avg" to (avg?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
                         "Min" to (pts.minOrNull()?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
                         "Max" to (pts.maxOrNull()?.let { String.format(Locale.US, "%.1f h", it) } ?: "—"),
-                        "Nights" to "${pts.size}",
+                        "Coverage" to "${m.trendCoverage} of 14",
                     ),
                 )
             },
         ) {
             if (pts.size >= 2) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val reference = chartReferenceAverage(m.trendNeedHours)
+                    val top = sleepDurationDomain(pts, reference).endInclusive
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text(uiString(R.string.sleep_duration_scale_top, top), style = NoopType.footnote, color = Palette.textTertiary)
+                        Spacer(Modifier.weight(1f))
+                        reference?.let {
+                            Text(uiString(R.string.sleep_duration_need, it), style = NoopType.footnote, color = Palette.textSecondary)
+                        }
+                    }
                     // #85: sleep duration reads as a per-night histogram (zero-based bars), matching the
                     // iOS Sleep tab's TrendChart(showsBars:) — a BarMark is proportional to hours slept,
                     // clearer than a line for a nightly total. BarChart floors at 0 like the iOS bar domain.
@@ -544,12 +579,15 @@ internal fun DurationTrend(m: SleepModel) {
                         color = Palette.restColor,
                         selectionEnabled = true,
                         // #691: on tap, show the DATE alongside the value (the shared chart's tooltip),
-                        // matching the other trend graphs. trendDates is index-aligned with the values.
-                        selectionLabels = m.trendDates.map(::shortDayLabel),
+                        // Recorded values keep their position inside the fourteen-day calendar domain.
+                        selectionLabels = m.trendValueDates.map(::shortDayLabel),
+                        xPositions = m.trendPositions,
                         // #1662: same hours format as the Avg/Min/Max row above.
                         formatValue = { String.format(Locale.US, "%.1f h", it) },
-                        referenceValue = chartReferenceAverage(m.trendNeedHours),
+                        referenceValue = reference,
+                        fixedMaximum = top,
                     )
+                    Text(uiString(R.string.sleep_duration_scale_zero), style = NoopType.footnote, color = Palette.textTertiary)
                     DateAxisRow(m.trendDates)
                 }
             } else {
@@ -567,9 +605,9 @@ internal fun DurationTrend(m: SleepModel) {
             footer = {
                 SleepChartFooter(
                     listOf(
-                        "Avg" to (m.trendDebtHours.sleepAverageOrNull()?.let { durationText(it * 60.0) } ?: "â€”"),
-                        "Max" to (m.trendDebtHours.maxOrNull()?.let { durationText(it * 60.0) } ?: "â€”"),
-                        "Days" to "${m.trendDebtHours.size}",
+                        "Avg" to (m.trendDebtHours.sleepAverageOrNull()?.let { durationText(it * 60.0) } ?: "—"),
+                        "Max" to (m.trendDebtHours.maxOrNull()?.let { durationText(it * 60.0) } ?: "—"),
+                        "Coverage" to "${m.trendCoverage} of 14",
                     ),
                 )
             },
@@ -582,7 +620,8 @@ internal fun DurationTrend(m: SleepModel) {
                             .semantics { contentDescription = uiString(R.string.l10n_sleep_screen_sleep_debt_trend_chart_9e178776) },
                         color = Palette.metricRose,
                         selectionEnabled = true,
-                        selectionLabels = m.trendDates.map(::shortDayLabel),   // #691: hover shows date + value
+                        selectionLabels = m.trendValueDates.map(::shortDayLabel),
+                        xPositions = m.trendPositions,
                         // #1662: debt is shown as a DURATION ("7h 20m") in the card's trailing value and
                         // its Avg/Max row, so a bare "7.3" on tap was a different unit, not just a
                         // different precision.

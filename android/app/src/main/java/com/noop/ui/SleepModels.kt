@@ -52,6 +52,9 @@ internal data class SleepModel(
     val trendNeedHours: List<Double>,
     val trendDebtHours: List<Double>,
     val trendDates: List<String>,
+    val trendValueDates: List<String>,
+    val trendPositions: List<Float>,
+    val trendCoverage: Int,
     /** Persisted per-epoch segments as ordered (stage, minutes) weights — the REAL
      *  hypnogram (on-device APPROXIMATE staging) — or null → synthesized fallback. */
     val realSegments: List<Pair<String, Float>>?,

@@ -888,6 +888,7 @@ struct SleepView: View {
                     showsHover: true,
                     nightStart: night.onsetDate,
                     showsTimeAxis: true,
+                    highlightedStage: selectedStage,
                     filled: style.isFilled,
                     stagePalette: style.stagePalette
                 )
@@ -918,7 +919,10 @@ struct SleepView: View {
         // Label above the trace, plot inset 10pt to line up with the stage-timeline rows' strips
         // (the old 44+12 gutter matched the removed Hypnogram's y-axis column). (ryanAtriumAi #988)
         VStack(alignment: .leading, spacing: 2) {
-            Text("Move")
+            Text("Movement (relative)")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+            Text("Scaled to this night's peak")
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textTertiary)
             if night.motionEpochs.count >= 2 {
@@ -1209,6 +1213,7 @@ struct SleepView: View {
         Rectangle()
             .fill(StrandPalette.sleepStageColor(stage))
             .frame(width: max(0, w))
+            .opacity(selectedStage != nil && selectedStage != stage ? 0.22 : 1)
     }
 
     @ViewBuilder
@@ -1664,7 +1669,14 @@ struct SleepView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .accessibilityLabel(Text("Sleeping heart rate through the night"))
+            .overlay(alignment: .topTrailing) {
+                let bpms = buckets.map(\.bpm)
+                Text("Sleeping HR · \(Int((bpms.min() ?? 0).rounded()))–\(Int((bpms.max() ?? 0).rounded())) bpm")
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .padding(NoopMetrics.spaceHalf)
+            }
+            .accessibilityLabel(Text("Sleeping heart rate, \(Int((buckets.map(\.bpm).min() ?? 0).rounded())) to \(Int((buckets.map(\.bpm).max() ?? 0).rounded())) beats per minute through the night"))
         } else {
             Text("No heart-rate detail for this night")
                 .font(StrandFont.footnote)

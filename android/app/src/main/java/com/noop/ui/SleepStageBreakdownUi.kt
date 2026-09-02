@@ -2,6 +2,8 @@ package com.noop.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -37,6 +40,17 @@ import com.noop.R
 import java.util.Locale
 import kotlin.math.roundToInt
 
+internal data class StageSelectionVisual(val selected: Boolean, val dimmed: Boolean, val alpha: Float)
+
+internal fun stageSelectionVisual(stage: String, selectedStage: String?): StageSelectionVisual {
+    val selected = selectedStage != null && canonicalStage(stage) == canonicalStage(selectedStage)
+    val dimmed = selectedStage != null && !selected
+    return StageSelectionVisual(selected, dimmed, if (dimmed) 0.28f else 1f)
+}
+
+internal fun stageSelectionAlpha(stage: String, selectedStage: String?): Float =
+    stageSelectionVisual(stage, selectedStage).alpha
+
 /**
  * The four WHOOP-style stage rows that replace the old "label · value" footer grid, read like WHOOP's
  * sleep detail: a colour swatch, the UPPERCASE stage name, the share-of-night % in the stage colour, a
@@ -45,12 +59,20 @@ import kotlin.math.roundToInt
  * macOS SleepView.stageBreakdownRows. (PipBar)
  */
 @Composable
-internal fun StageBreakdownRows(s: Stages, palette: SleepStagePalette = SleepStagePalette.NOOP) {
+internal fun StageBreakdownRows(
+    s: Stages,
+    palette: SleepStagePalette = SleepStagePalette.NOOP,
+    selectedStage: String? = null,
+    onStageSelected: ((String?) -> Unit)? = null,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
-        StageBreakdownRow("REM", s.rem, s.total, stageColorForRamp("REM", palette), stageSharePercent("REM", s))
-        StageBreakdownRow("Deep", s.deep, s.total, stageColorForRamp("Deep", palette), stageSharePercent("Deep", s))
-        StageBreakdownRow("Light", s.light, s.total, stageColorForRamp("Light", palette), stageSharePercent("Light", s))
-        StageBreakdownRow("Awake", s.awake, s.total, stageColorForRamp("Awake", palette), stageSharePercent("Awake", s))
+        listOf("REM" to s.rem, "Deep" to s.deep, "Light" to s.light, "Awake" to s.awake).forEach { (stage, minutes) ->
+            StageBreakdownRow(
+                stage, minutes, s.total, stageColorForRamp(stage, palette), stageSharePercent(stage, s),
+                stageSelectionVisual(stage, selectedStage),
+                onStageSelected?.let { select -> { select(if (canonicalStage(selectedStage ?: "") == canonicalStage(stage)) null else stage) } },
+            )
+        }
     }
 }
 
@@ -59,13 +81,20 @@ internal fun StageBreakdownRows(s: Stages, palette: SleepStagePalette = SleepSta
  * apportioned share (so the four rows sum to 100). Mirrors the macOS SleepView.stageBreakdownRow.
  */
 @Composable
-private fun StageBreakdownRow(stage: String, minutes: Double, total: Double, color: Color, percent: Int) {
+private fun StageBreakdownRow(
+    stage: String, minutes: Double, total: Double, color: Color, percent: Int,
+    visual: StageSelectionVisual, onTap: (() -> Unit)?,
+) {
     val fraction = if (total > 0.0) (minutes / total).coerceIn(0.0, 1.0) else 0.0
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Metrics.space10),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(Metrics.cornerSm))
+            .then(if (visual.selected) Modifier.border(1.dp, color, RoundedCornerShape(Metrics.cornerSm)) else Modifier)
+            .then(if (onTap != null) Modifier.clickable(onClickLabel = "Select $stage stage", onClick = onTap) else Modifier)
+            .alpha(visual.alpha)
             .semantics {
                 contentDescription =
                     uiString(R.string.l10n_sleep_screen_stage_durationtext_minutes_percent_percent_of_477dbf14, stage, durationText(minutes), percent)
@@ -127,6 +156,7 @@ internal fun HypnogramWithAxis(
     stages: List<Pair<String, Float>>,
     onsetTs: Long?,
     wakeTs: Long?,
+    selectedStage: String? = null,
 ) {
     val showsAxis = onsetTs != null && wakeTs != null
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.space6)) {
@@ -166,7 +196,7 @@ internal fun HypnogramWithAxis(
                 val segW = floored[i] * scale
                 if (segW <= 0f) return@forEachIndexed
                 drawRoundRect(
-                    color = stageColorFor(name),
+                    color = stageColorFor(name).copy(alpha = stageSelectionAlpha(name, selectedStage)),
                     topLeft = Offset(x, 0f),
                     size = Size(segW.coerceAtMost(w - x), h),
                     cornerRadius = radius,
@@ -214,6 +244,7 @@ internal fun FilledHypnogram(
     filled: Boolean = true,
     // The stage-colour ramp: NOOP tokens (Fill), Garmin's (Garmin Fill), or Oura's (Ribbon).
     palette: SleepStagePalette = SleepStagePalette.NOOP,
+    selectedStage: String? = null,
 ) {
     if (segments.isEmpty()) return
     val originSec = (onsetTs?.toDouble()) ?: segments.minOf { it.start }.toDouble()
@@ -276,13 +307,13 @@ internal fun FilledHypnogram(
                 val segW = (x1 - x0).coerceAtLeast(1.5f).coerceAtMost(w - x0)
                 if (filled) {
                     drawRect(
-                        color = stageColorForRamp(iv.stage, palette),
+                        color = stageColorForRamp(iv.stage, palette).copy(alpha = stageSelectionAlpha(iv.stage, selectedStage)),
                         topLeft = Offset(x0, y),
                         size = Size(segW, (h - y).coerceAtLeast(0f)),
                     )
                 } else {
                     drawRect(
-                        color = stageColorForRamp(iv.stage, palette),
+                        color = stageColorForRamp(iv.stage, palette).copy(alpha = stageSelectionAlpha(iv.stage, selectedStage)),
                         topLeft = Offset(x0, y - ribbonThickness / 2f),
                         size = Size(segW, ribbonThickness),
                     )

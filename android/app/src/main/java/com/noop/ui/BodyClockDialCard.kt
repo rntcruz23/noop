@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.noop.R
 import com.noop.analytics.CircadianEngine
@@ -49,15 +50,17 @@ import kotlin.math.sin
 // byte-identical with the Swift twin. Only the drawing is per-platform (visual parity, not pixel parity).
 
 /**
- * The dial card. [actualBedHour] / [actualWakeHour] are the night's own clock hours (0..<24, fractional),
+ * The dial card. [actualOnsetTs] and [actualWakeTs] are the night's actual timestamp window,
  * taken from the scored session by the caller. Twin of Apple `BodyClockDialCard`.
  */
 @Composable
 fun BodyClockDialCard(
     estimate: CircadianEngine.PhaseEstimate,
-    actualBedHour: Double,
-    actualWakeHour: Double,
+    actualOnsetTs: Long,
+    actualWakeTs: Long,
 ) {
+    val actualBedHour = localClockHour(actualOnsetTs)
+    val actualWakeHour = localClockHour(actualWakeTs)
     // One hue for both arcs, told apart by dash and weight rather than by a second colour. Two blues
     // competed with the background image; a single legible one plus a dashed, lighter reference does not.
     val hue = Palette.restLine
@@ -73,6 +76,9 @@ fun BodyClockDialCard(
     // DrawScope.
     val bedPainter = rememberVectorPainter(Icons.Filled.Bedtime)
     val dialLabel = uiString(R.string.l10n_body_clock_dial_card_body_clock_dial_03cdbc31)
+    val is24h = android.text.format.DateFormat.is24HourFormat(LocalContext.current)
+    val actualWindow = "${axisEdgeLabel(actualOnsetTs, is24h)}–${axisEdgeLabel(actualWakeTs, is24h)}"
+    val estimatedWindow = "${clockHourLabel(ideal.bedHour, is24h)}–${clockHourLabel(ideal.wakeHour, is24h)}"
 
     NoopCard(tint = hue) {
         Column(verticalArrangement = Arrangement.spacedBy(Metrics.gap)) {
@@ -80,7 +86,7 @@ fun BodyClockDialCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Overline(uiString(R.string.l10n_body_clock_dial_card_body_clock_b0b9b988))
                     Text(
-                        uiString(R.string.l10n_body_clock_dial_card_last_night_against_your_clock_9183a37c),
+                        uiString(R.string.sleep_body_clock_explanation),
                         style = NoopType.footnote,
                         color = Palette.textTertiary,
                     )
@@ -91,7 +97,9 @@ fun BodyClockDialCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(170.dp)
-                    .semantics { contentDescription = dialLabel },
+                    .semantics {
+                        contentDescription = uiString(R.string.sleep_body_clock_semantics, dialLabel, actualWindow, estimatedWindow)
+                    },
             ) {
                 val side = min(size.width, size.height)
                 val centre = Offset(size.width / 2f, size.height / 2f)
@@ -187,6 +195,9 @@ fun BodyClockDialCard(
 
             DialLegend(hue)
 
+            Text(uiString(R.string.sleep_actual_window, actualWindow), style = NoopType.subhead, color = Palette.textPrimary)
+            Text(uiString(R.string.sleep_estimated_window, estimatedWindow), style = NoopType.subhead, color = Palette.textSecondary)
+
             Text(alignment, style = NoopType.title2, color = Palette.textPrimary)
 
             CircadianEngine.chronotype(estimate)?.let { c ->
@@ -206,7 +217,7 @@ private fun DialLegend(hue: androidx.compose.ui.graphics.Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         LegendItem(hue, dashed = false, label = uiString(R.string.l10n_body_clock_dial_card_last_night_6eaba4dd))
         Spacer(Modifier.width(14.dp))
-        LegendItem(hue.copy(alpha = 0.55f), dashed = true, label = uiString(R.string.l10n_body_clock_dial_card_your_clock_1b91f5ee))
+        LegendItem(hue.copy(alpha = 0.55f), dashed = true, label = uiString(R.string.sleep_estimated_body_clock))
     }
 }
 
@@ -245,6 +256,16 @@ internal fun hourAngleDegrees(hour: Double): Double = hour / 24.0 * 360.0 - 90.0
 /** Sweep from [from] to [to] clockwise, always positive so an arc crossing midnight still draws. */
 internal fun sweepHours(from: Double, to: Double): Double =
     ((to - from) % 24.0).let { if (it <= 0.0) it + 24.0 else it }
+
+internal fun clockHourLabel(hour: Double, is24h: Boolean): String {
+    val totalMinutes = ((hour * 60.0).roundToInt() % 1440 + 1440) % 1440
+    val calendar = java.util.Calendar.getInstance().apply {
+        set(java.util.Calendar.HOUR_OF_DAY, totalMinutes / 60)
+        set(java.util.Calendar.MINUTE, totalMinutes % 60)
+    }
+    return java.text.SimpleDateFormat(if (is24h) "HH:mm" else "h:mm a", java.util.Locale.getDefault())
+        .format(calendar.time)
+}
 
 /**
  * Rounded to five minutes: the underlying phase is an activity fit, so a to-the-minute caption would imply

@@ -2685,5 +2685,22 @@
     <string name="l10n_body_clock_dial_card_body_clock_dial_03cdbc31">Body clock dial</string>
     <string name="l10n_body_clock_dial_card_last_night_6eaba4dd">Last night</string>
     <string name="l10n_body_clock_dial_card_your_clock_1b91f5ee">Your clock</string>
+    <string name="sleep_body_clock_explanation">Estimated from the last 14 days of heart-rate timing. This compares sleep timing, not duration.</string>
+    <string name="sleep_estimated_body_clock">Estimated body clock</string>
+    <string name="sleep_movement_relative">Movement (relative)</string>
+    <string name="sleep_movement_relative_explanation">Scaled to this night’s peak</string>
+    <string name="sleep_movement_relative_semantics">Movement, relative; scaled to this night’s peak</string>
+    <string name="sleep_actual_window">Actual sleep  %1$s</string>
+    <string name="sleep_estimated_window">Estimated body clock  %1$s</string>
+    <string name="sleep_body_clock_semantics">%1$s. Actual sleep %2$s. Estimated body clock %3$s. The comparison is timing, not duration.</string>
+    <string name="sleep_sleeping_heart_rate">Sleeping heart rate</string>
+    <string name="sleep_heart_rate_range">%1$d–%2$d bpm</string>
+    <string name="sleep_duration_scale_top">%1$.1f h</string>
+    <string name="sleep_duration_scale_zero">0 h</string>
+    <string name="sleep_duration_need">Need %1$.1f h</string>
+    <string name="sleep_debt_coverage">Coverage: %1$d of 14 nights recorded · bars show minutes above or below need</string>
+    <string name="sleep_positive_minutes">+%1$d min</string>
+    <string name="sleep_negative_minutes">−%1$d min</string>
+    <string name="sleep_debt_chart_semantics">Per-night sleep balance: %1$d of 14 nights recorded, scale plus or minus %2$d minutes, net %3$s</string>
     <string name="vo2max_method_change_caption">The line breaks where the estimation method changed or was not recorded.</string>
 </resources>

@@ -476,8 +476,20 @@ extension SleepModel {
     /// normative `debtNeedMin` (the engine's `personalizedNeedHours`) — the SAME need and recurrence
     /// the local "Sleep Debt" tile uses — and credits actual asleep minutes from separate naps. (#242)
     static func debtLedger(days: [DailyMetric], napSleepMinByDay: [String: Double]) -> SleepDebtLedger {
-        SleepDebt.ledger(
-            series: days.map { day in
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(identifier: "UTC")
+        parser.dateFormat = "yyyy-MM-dd"
+        let latest = days.compactMap { parser.date(from: $0.day) }.max()
+        let cutoff = latest.flatMap {
+            Calendar(identifier: .gregorian).date(byAdding: .day, value: -13, to: $0)
+        }
+        let window = days.filter { day in
+            guard let date = parser.date(from: day.day), let cutoff else { return false }
+            return date >= cutoff
+        }
+        return SleepDebt.ledger(
+            series: window.map { day in
                 (day: day.day, totalSleepMin: SleepDebt.creditedSleepMin(
                     mainSleepMin: day.totalSleepMin,
                     napSleepMin: napSleepMinByDay[day.day] ?? 0))

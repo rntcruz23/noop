@@ -2769,4 +2769,21 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">Aktualisiert %1$s</string>
     <string name="widget_hr_name">NOOP Herzfrequenz</string>
     <string name="widget_hr_description">Live-Herzfrequenz mit den letzten drei Stunden als Verlauf.</string>
+    <string name="sleep_body_clock_explanation">Geschätzt aus den Herzfrequenz-Zeitpunkten der letzten 14 Tage. Verglichen wird die Schlafzeit, nicht die Dauer.</string>
+    <string name="sleep_estimated_body_clock">Geschätzte innere Uhr</string>
+    <string name="sleep_movement_relative">Bewegung (relativ)</string>
+    <string name="sleep_movement_relative_explanation">Skaliert auf das Maximum dieser Nacht</string>
+    <string name="sleep_movement_relative_semantics">Bewegung, relativ; skaliert auf das Maximum dieser Nacht</string>
+    <string name="sleep_actual_window">Tatsächlicher Schlaf  %1$s</string>
+    <string name="sleep_estimated_window">Geschätzte innere Uhr  %1$s</string>
+    <string name="sleep_body_clock_semantics">%1$s. Tatsächlicher Schlaf %2$s. Geschätzte innere Uhr %3$s. Verglichen wird die Zeit, nicht die Dauer.</string>
+    <string name="sleep_sleeping_heart_rate">Herzfrequenz im Schlaf</string>
+    <string name="sleep_heart_rate_range">%1$d–%2$d bpm</string>
+    <string name="sleep_duration_scale_top">%1$.1f h</string>
+    <string name="sleep_duration_scale_zero">0 h</string>
+    <string name="sleep_duration_need">Bedarf %1$.1f h</string>
+    <string name="sleep_debt_coverage">Abdeckung: %1$d von 14 Nächten erfasst · Balken zeigen Minuten über oder unter dem Bedarf</string>
+    <string name="sleep_positive_minutes">+%1$d Min.</string>
+    <string name="sleep_negative_minutes">−%1$d Min.</string>
+    <string name="sleep_debt_chart_semantics">Schlafbilanz pro Nacht: %1$d von 14 Nächten erfasst, Skala plus/minus %2$d Minuten, netto %3$s</string>
 </resources>

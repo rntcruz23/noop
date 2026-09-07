@@ -2748,4 +2748,21 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">Atualizado %1$s</string>
     <string name="widget_hr_name">NOOP Frequência cardíaca</string>
     <string name="widget_hr_description">Frequência cardíaca em direto com as últimas três horas em gráfico.</string>
+    <string name="sleep_body_clock_explanation">Estimado a partir dos horários da frequência cardíaca dos últimos 14 dias. Compara a hora do sono, não a duração.</string>
+    <string name="sleep_estimated_body_clock">Relógio biológico estimado</string>
+    <string name="sleep_movement_relative">Movimento (relativo)</string>
+    <string name="sleep_movement_relative_explanation">Escalado ao pico desta noite</string>
+    <string name="sleep_movement_relative_semantics">Movimento, relativo; escalado ao pico desta noite</string>
+    <string name="sleep_actual_window">Sono real  %1$s</string>
+    <string name="sleep_estimated_window">Relógio biológico estimado  %1$s</string>
+    <string name="sleep_body_clock_semantics">%1$s. Sono real %2$s. Relógio biológico estimado %3$s. A comparação é de horário, não de duração.</string>
+    <string name="sleep_sleeping_heart_rate">Frequência cardíaca durante o sono</string>
+    <string name="sleep_heart_rate_range">%1$d–%2$d bpm</string>
+    <string name="sleep_duration_scale_top">%1$.1f h</string>
+    <string name="sleep_duration_scale_zero">0 h</string>
+    <string name="sleep_duration_need">Necessidade %1$.1f h</string>
+    <string name="sleep_debt_coverage">Cobertura: %1$d de 14 noites registadas · as barras mostram os minutos acima ou abaixo da necessidade</string>
+    <string name="sleep_positive_minutes">+%1$d min</string>
+    <string name="sleep_negative_minutes">−%1$d min</string>
+    <string name="sleep_debt_chart_semantics">Balanço de sono por noite: %1$d de 14 noites registadas, escala de mais ou menos %2$d minutos, líquido %3$s</string>
 </resources>

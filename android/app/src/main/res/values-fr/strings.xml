@@ -2755,4 +2755,21 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">Mis à jour %1$s</string>
     <string name="widget_hr_name">NOOP Fréquence cardiaque</string>
     <string name="widget_hr_description">Fréquence cardiaque en direct avec les trois dernières heures en courbe.</string>
+    <string name="sleep_body_clock_explanation">Estimé à partir des horaires de fréquence cardiaque des 14 derniers jours. La comparaison porte sur l’heure du sommeil, pas sur sa durée.</string>
+    <string name="sleep_estimated_body_clock">Horloge biologique estimée</string>
+    <string name="sleep_movement_relative">Mouvement (relatif)</string>
+    <string name="sleep_movement_relative_explanation">Mis à l’échelle du pic de cette nuit</string>
+    <string name="sleep_movement_relative_semantics">Mouvement, relatif ; mis à l’échelle du pic de cette nuit</string>
+    <string name="sleep_actual_window">Sommeil réel  %1$s</string>
+    <string name="sleep_estimated_window">Horloge biologique estimée  %1$s</string>
+    <string name="sleep_body_clock_semantics">%1$s. Sommeil réel %2$s. Horloge biologique estimée %3$s. La comparaison porte sur l’heure, pas sur la durée.</string>
+    <string name="sleep_sleeping_heart_rate">Fréquence cardiaque pendant le sommeil</string>
+    <string name="sleep_heart_rate_range">%1$d–%2$d bpm</string>
+    <string name="sleep_duration_scale_top">%1$.1f h</string>
+    <string name="sleep_duration_scale_zero">0 h</string>
+    <string name="sleep_duration_need">Besoin %1$.1f h</string>
+    <string name="sleep_debt_coverage">Couverture : %1$d nuits sur 14 enregistrées · les barres indiquent les minutes au-dessus ou en dessous du besoin</string>
+    <string name="sleep_positive_minutes">+%1$d min</string>
+    <string name="sleep_negative_minutes">−%1$d min</string>
+    <string name="sleep_debt_chart_semantics">Bilan de sommeil par nuit : %1$d nuits sur 14 enregistrées, échelle de plus ou moins %2$d minutes, net %3$s</string>
 </resources>

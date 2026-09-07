@@ -241,7 +241,10 @@ stale|inRange|population|stale|null|40.000|120.000|within|20"""
         val result = VitalBands.presentation(
             50.0, rows, "2026-06-15", hrvPop, hrvCfg, baselineEpoch = epoch,
         )
-        assertEquals(BaselineStatus.CALIBRATING, result.status)
+        // Only the five on-or-after-epoch nights survive the drop, so the re-seeded baseline is past
+        // the 4-night seed gate but short of the 14-night trust gate: PROVISIONAL, still banded
+        // against the population range.
+        assertEquals(BaselineStatus.PROVISIONAL, result.status)
         assertEquals(5, result.nights)
         assertEquals(VitalBands.Basis.POPULATION, result.basis)
     }

@@ -2669,4 +2669,21 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">更新于 %1$s</string>
     <string name="widget_hr_name">NOOP 心率</string>
     <string name="widget_hr_description">实时心率，并显示最近三小时的曲线。</string>
+    <string name="sleep_body_clock_explanation">根据过去 14 天的心率时间估算。比较的是睡眠时间点，而非时长。</string>
+    <string name="sleep_estimated_body_clock">预估生物钟</string>
+    <string name="sleep_movement_relative">活动量（相对）</string>
+    <string name="sleep_movement_relative_explanation">按当晚峰值缩放</string>
+    <string name="sleep_movement_relative_semantics">活动量，相对值；按当晚峰值缩放</string>
+    <string name="sleep_actual_window">实际睡眠  %1$s</string>
+    <string name="sleep_estimated_window">预估生物钟  %1$s</string>
+    <string name="sleep_body_clock_semantics">%1$s。实际睡眠 %2$s。预估生物钟 %3$s。比较的是时间点，而非时长。</string>
+    <string name="sleep_sleeping_heart_rate">睡眠心率</string>
+    <string name="sleep_heart_rate_range">%1$d–%2$d bpm</string>
+    <string name="sleep_duration_scale_top">%1$.1f 小时</string>
+    <string name="sleep_duration_scale_zero">0 小时</string>
+    <string name="sleep_duration_need">需要 %1$.1f 小时</string>
+    <string name="sleep_debt_coverage">覆盖率：已记录 14 晚中的 %1$d 晚 · 柱状图显示高于或低于需求的分钟数</string>
+    <string name="sleep_positive_minutes">+%1$d 分钟</string>
+    <string name="sleep_negative_minutes">−%1$d 分钟</string>
+    <string name="sleep_debt_chart_semantics">每晚睡眠平衡：已记录 14 晚中的 %1$d 晚，刻度为正负 %2$d 分钟，净值 %3$s</string>
 </resources>

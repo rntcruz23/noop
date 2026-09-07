@@ -235,7 +235,10 @@ final class VitalBandsTests: XCTestCase {
                                              displayedDay: "2026-06-15",
                                              populationRange: hrvPop, cfg: hrvCfg,
                                              baselineEpoch: epoch)
-        XCTAssertEqual(result.status, .calibrating)
+        // Only the five on-or-after-epoch nights survive the drop, so the re-seeded baseline is past
+        // the 4-night seed gate but short of the 14-night trust gate: provisional, still banded
+        // against the population range.
+        XCTAssertEqual(result.status, .provisional)
         XCTAssertEqual(result.nights, 5)
         XCTAssertEqual(result.basis, .population)
     }

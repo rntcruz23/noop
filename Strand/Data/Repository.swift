@@ -403,7 +403,11 @@ final class Repository: ObservableObject {
             spo2Ir: rawSpo2FromFiller ? filler.spo2Ir : winner.spo2Ir,
             // Strap-only, like raw SpO2: an imported winner carries no absolute skin temp, so take the
             // filler's rather than let the union blank a value the strap did record (#1636).
-            skinTempC: winner.skinTempC ?? filler.skinTempC
+            skinTempC: winner.skinTempC ?? filler.skinTempC,
+            // Part of the SLEEP GROUP, not an independent column (#1801): it describes how the stage
+            // figures above were derived, so it has to come from whichever row supplied them. A plain
+            // `winner ?? filler` would caption the winner's own hypnogram with the filler's staging.
+            sleepHrOnly: sleepFromFiller ? filler.sleepHrOnly : winner.sleepHrOnly
         )
     }
 
@@ -606,6 +610,23 @@ final class Repository: ObservableObject {
     /// PER-FIELD skin-temperature-deviation carry — twin of the above. See `DailyMetric.lastSkinTempDay`.
     nonisolated static func lastSkinTempDay(days: [DailyMetric], todayKey: String) -> DailyMetric? {
         DailyMetric.lastSkinTempDay(days: days, todayKey: todayKey)
+    }
+
+    /// The freshest strictly-prior row with EITHER skin-temp number (#1844), for the surfaces that lead
+    /// with the absolute. See `DailyMetric.lastSkinTempReadingDay`.
+    nonisolated static func lastSkinTempReadingDay(days: [DailyMetric], todayKey: String) -> DailyMetric? {
+        DailyMetric.lastSkinTempReadingDay(days: days, todayKey: todayKey)
+    }
+
+    /// PER-FIELD HRV carry — twin of the above, for a field `lastVitalsDay`'s OR predicate DOES check but
+    /// can still resolve nil on (#1842). See `DailyMetric.lastHrvDay`.
+    nonisolated static func lastHrvDay(days: [DailyMetric], todayKey: String) -> DailyMetric? {
+        DailyMetric.lastHrvDay(days: days, todayKey: todayKey)
+    }
+
+    /// PER-FIELD resting-HR carry — twin of `lastHrvDay`. See `DailyMetric.lastRestingHrDay`.
+    nonisolated static func lastRestingHrDay(days: [DailyMetric], todayKey: String) -> DailyMetric? {
+        DailyMetric.lastRestingHrDay(days: days, todayKey: todayKey)
     }
 
     /// PER-FIELD respiratory carry — twin of `lastSpo2Day`, but STALENESS-BOUNDED to `Baselines.vitalCarryDays`.
@@ -2595,13 +2616,16 @@ final class Repository: ObservableObject {
         guard let store = await ensureStore() else { return [] }
         let now = Int(Date().timeIntervalSince1970)
         let lo = now - days * 86_400, hi = now + 86_400
-        // UNION the active strap + canonical (and their computed siblings) so workouts banked under the
-        // canonical "my-whoop" before a re-add still show, alongside the re-added strap's live workouts.
+        // UNION every registered WHOOP + canonical (and computed siblings) so workouts banked before a
+        // re-add remain visible alongside every retained strap's live workouts.
         // De-dup identical same-source rows that appear under both union ids by natural key (the cross-SOURCE
         // dedup below only collapses strap-vs-Apple twins, not a row present in two strap namespaces).
         var rows: [WorkoutRow] = []
-        for id in importedReadIds { rows += (try? await store.workouts(deviceId: id, from: lo, to: hi, limit: 5000)) ?? [] }
-        for id in computedReadIds { rows += (try? await store.workouts(deviceId: id, from: lo, to: hi, limit: 5000)) ?? [] }
+        let rawIds = rawPhysiologyReadIds(store: store)
+        for id in rawIds { rows += (try? await store.workouts(deviceId: id, from: lo, to: hi, limit: 5000)) ?? [] }
+        for id in rawIds.map({ $0.hasSuffix("-noop") ? $0 : $0 + "-noop" }) {
+            rows += (try? await store.workouts(deviceId: id, from: lo, to: hi, limit: 5000)) ?? []
+        }
         rows += (try? await store.workouts(deviceId: "apple-health", from: lo, to: hi, limit: 5000)) ?? []
         // Imported lifting sessions (Hevy / Liftosaur) live under their own "lifting" source.
         rows += (try? await store.workouts(deviceId: "lifting", from: lo, to: hi, limit: 5000)) ?? []
@@ -3213,7 +3237,11 @@ final class Repository: ObservableObject {
     }
 }
 
-private extension DailyMetric {
+// `internal`, not `private`: `DailySkinTempAbsoluteCarryTests` exercises these two directly, and a
+// `private` extension is invisible even to `@testable import`. They stayed private because the tests
+// that call them have never compiled (StrandTests runs only in the on-demand app-build), so nothing
+// ever demanded the wider access. Still confined to this module.
+extension DailyMetric {
     /// A copy of self where every nil field is backfilled from `fallback`. Used by the field-by-field
     /// daily merge so an imported export keeps its own values while a computed row fills the gaps it
     /// doesn't carry (e.g. on-device Charge / skin-temp deviation / activity totals).
@@ -3243,7 +3271,10 @@ private extension DailyMetric {
             avgSdnn: avgSdnn ?? fallback.avgSdnn,
             // On-device only (imports never carry it), so an imported row's nil is backfilled from the
             // computed fallback — otherwise the night's absolute would be lost. (#1636)
-            skinTempC: skinTempC ?? fallback.skinTempC
+            skinTempC: skinTempC ?? fallback.skinTempC,
+            // Same shape, same reason (#1801): only a scoring pass knows how the night was staged, so an
+            // imported row's nil takes the computed answer rather than erasing it.
+            sleepHrOnly: sleepHrOnly ?? fallback.sleepHrOnly
         )
     }
 
@@ -3273,7 +3304,11 @@ private extension DailyMetric {
             spo2Red: spo2Red,   // non-sleep field: preserved as-is (#93)
             spo2Ir: spo2Ir,
             avgSdnn: avgSdnn,   // non-sleep (HRV) field: preserved as-is
-            skinTempC: skinTempC // non-sleep (thermal) field: preserved as-is (#1636)
+            skinTempC: skinTempC, // non-sleep (thermal) field: preserved as-is (#1636)
+            // MOVES with the sleep columns, unlike the others here: it describes how the very stage
+            // figures being taken were derived, so leaving `self`'s behind would caption the source's
+            // hypnogram with the import's staging — and an import's is always nil. (#1801)
+            sleepHrOnly: source.sleepHrOnly
         )
     }
 }

@@ -62,9 +62,76 @@ internal fun shouldProbeUnbondedOffload(
     // eleven weeks. Only the stable no-hello link can answer this question.
     if (helloWrittenThisLink) return false
     if (alreadyProbedThisLink) return false
-    if (previouslyRefused) return false
-    return unbondedProbeStillWorthAsking(silentLinksSoFar)
+    return !unbondedProbeRetired(previouslyRefused, silentLinksSoFar)
 }
+
+/**
+ * Why the unbonded-offload probe did NOT run on this link, or null when it will.
+ *
+ * [beginUnbondedOffloadProbe] returns SILENTLY when [shouldProbeUnbondedOffload] says no, and that
+ * silence is unreadable. A 5/MG log then shows the four puffin notify chars DISCOVERED, one standard-HR
+ * subscribe, and nothing further — which looks identical whether the app declined to ask or the strap
+ * refused. Those have opposite meanings for #1635: one is a setting, the other is the answer.
+ *
+ * Names the reason in the SAME ORDER the gate tests them, so the reason printed is the one that actually
+ * decided rather than the first one that happens to be true. Returns null exactly when the gate returns
+ * true, and the tests pin that agreement exhaustively over every input, so a new condition added to one
+ * cannot outlive the other.
+ *
+ * The consequence clause is appended only for an unbonded 5/MG, because that is the only case where the
+ * puffin chars go unsubscribed: a bonded strap reaches them through the ordinary handshake.
+ */
+internal fun unbondedProbeSkippedLine(
+    isWhoop5: Boolean,
+    optedIn: Boolean,
+    bonded: Boolean,
+    helloWrittenThisLink: Boolean,
+    alreadyProbedThisLink: Boolean,
+    previouslyRefused: Boolean,
+    silentLinksSoFar: Int,
+): String? {
+    val why = when {
+        !isWhoop5 -> "not a WHOOP 5/MG"
+        !optedIn -> "the unbonded-offload experiment is off"
+        bonded -> "this strap bonded, so the ordinary post-hello handshake reaches the offload"
+        helloWrittenThisLink ->
+            "a CLIENT_HELLO went out on this link, so a refusal here could not be attributed to the strap"
+        alreadyProbedThisLink -> "already probed on this link"
+        unbondedProbeRetired(previouslyRefused, silentLinksSoFar) ->
+            if (previouslyRefused) "retired for this strap: a refusal is latched"
+            else "retired for this strap: the silent-link budget is spent"
+        else -> return null
+    }
+    val consequence = if (isWhoop5 && !bonded) {
+        " The puffin notify chars stay unsubscribed on this link, so neither the historical offload nor a" +
+            " realtime IMU producer can reach us here."
+    } else {
+        ""
+    }
+    return "unbonded probe skipped — $why.$consequence"
+}
+
+/**
+ * Has the probe stopped asking — for good, on this device?
+ *
+ * True on a latched refusal (the strap's verdict) or once the silent-link budget is spent. Extracted
+ * because TWO decisions depend on it and they were only wired to one: the probe retires itself correctly,
+ * while the handshake skip that exists TO SERVE it kept applying forever.
+ *
+ * What happens to a stranded strap once this is fixed, since "it starts writing helloes again" deserves an
+ * answer rather than a shrug: it resumes the ordinary handshake, a #1635 strap refuses it, and
+ * [BondRefusalGiveUp] latches `helloSuppressed` after its 5-refusal threshold — settling at the designed
+ * "Live HR, not fully paired" end state. Bounded, and strictly better than the state it replaces, which
+ * had no bond, no offload AND no probe.
+ *
+ * That asymmetry strands the strap. With the hello skipped `didBond` can never become true, so the
+ * ordinary offload gate can never open — and once the probe has retired there is nothing left the skip is
+ * buying. A field log shows the end state plainly: the hello skipped on every connect, no probe lines at
+ * all, `didBond=false` and `Backfill: deferred` nine times across sixteen hours. The strap could neither
+ * bond nor sync, in service of a question that had already stopped being asked.
+ */
+internal fun unbondedProbeRetired(previouslyRefused: Boolean, silentLinksSoFar: Int): Boolean =
+    previouslyRefused || !unbondedProbeStillWorthAsking(silentLinksSoFar)
 
 /**
  * How many links may end in SILENCE before the probe retires itself.
@@ -142,7 +209,13 @@ internal fun unbondedProbeSupersedesHandshake(
     isWhoop5: Boolean,
     appLevelBonded: Boolean,
     userInitiated: Boolean,
-): Boolean = optedIn && isWhoop5 && !appLevelBonded && !userInitiated
+    /**
+     * The probe has stopped asking ([unbondedProbeRetired]) — so skipping the hello now buys nothing and
+     * costs the strap its bond and its offload. Suppressing the handshake is only defensible while
+     * something is using the link it creates.
+     */
+    probeRetired: Boolean,
+): Boolean = optedIn && isWhoop5 && !appLevelBonded && !userInitiated && !probeRetired
 
 /**
  * Said once per superseded connect, because a hello that is absent looks identical to one that failed

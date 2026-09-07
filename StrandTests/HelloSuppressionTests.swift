@@ -114,7 +114,23 @@ final class HelloSuppressionTests: XCTestCase {
         let hint = BondRefusalGiveUp.helloSuppressedHint()
         XCTAssertTrue(hint.contains("live heart rate keeps streaming"))
         XCTAssertTrue(hint.contains("History sync stays unavailable"))
-        XCTAssertTrue(hint.contains("Tap Connect"))
+        // #1635 follow-up: the hint no longer LEADS with a retry. Framing a strap that refuses pairing as
+        // a retryable failure invited the hammering the give-up latch exists to stop, and a field report
+        // read the whole hint and still asked how to fix it. Pairing mode comes first now; Connect follows.
+        XCTAssertTrue(hint.contains("pairing mode"))
+        XCTAssertTrue(hint.contains("tap Connect"))
+        // And it must NOT claim these are unavailable: since #1884 an HR-only night reports both.
+        XCTAssertFalse(hint.contains("HRV and resting heart rate are unavailable"))
+        // The hint must name what an unbonded strap actually costs, not just history sync: motion,
+        // skin temperature, SpO2 and respiratory stop, so sleep falls to the HR-only stager. A field log
+        // showed a week of blank Recovery Vitals under the old wording, which pointed only at a feature
+        // the user was not missing. (It used to end "and HRV + resting HR are nulled" — #1884 made that
+        // false, and leaving it here would have contradicted the assertion four lines down.)
+        XCTAssertTrue(hint.contains("motion"))
+        // #1884 repinned the tail of this: naming HRV and resting HR as LOSSES stopped being true when an
+        // HR-only night began reporting both. What survives from #1878 is the reason they were named at
+        // all - the strap stops sending motion, so sleep falls to the HR-only stager. That still holds.
+        XCTAssertTrue(hint.contains("staged from heart rate alone"))
         XCTAssertFalse(hint.lowercased().contains("paused"))
         XCTAssertFalse(hint.lowercased().contains("stopped retrying"))
     }
@@ -170,5 +186,27 @@ final class HelloSuppressionTests: XCTestCase {
             XCTAssertFalse(keepAliveMayRun(connected: false, didBond: true, bonded: true, family: family))
         }
     }
-}
 
+    // MARK: - giveUpThresholdFor
+
+    /// The Kotlin twin is `HelloSuppressionTest."an unanswered handshake gives up sooner than an auth
+    /// refusal"`. Both numbers matter: 5 keeps the auth branch's patience, 3 is the unanswered branch.
+    func testUnansweredHandshakeGivesUpSoonerThanAuthRefusal() {
+        XCTAssertEqual(5, giveUpThresholdFor(authRefusal: true, pauseThreshold: 5))
+        XCTAssertEqual(3, giveUpThresholdFor(authRefusal: false, pauseThreshold: 5))
+        // Above the hint threshold, so a PERSISTED verdict still keeps a cycle of margin.
+        XCTAssertGreaterThan(unansweredGiveUpThreshold, 2)
+    }
+
+    /// Patience and treatment read the SAME refusal. Keyed apart they could disagree — pausing on a branch
+    /// that waited the suppression count, or vice versa. Kotlin twin: "the threshold and the treatment
+    /// read the same refusal".
+    func testThresholdAndTreatmentReadTheSameRefusal() {
+        for auth in [true, false] {
+            let suppresses = giveUpSuppressesHello(authRefusal: auth)
+            let threshold = giveUpThresholdFor(authRefusal: auth, pauseThreshold: 5)
+            XCTAssertEqual(suppresses, threshold == unansweredGiveUpThreshold)
+        }
+    }
+
+}

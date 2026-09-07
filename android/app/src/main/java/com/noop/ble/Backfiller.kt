@@ -64,6 +64,14 @@ class Backfiller(
      */
     private val ackTrim: (trim: Long, endData: ByteArray) -> Unit,
     /**
+     * #1635: what one offload chunk actually stored, handed up so the client can tally it per LINK and
+     * name it beside the link epitaph. The offload is the ONLY path that banks gravity, respiratory,
+     * skin temperature, SpO2 and steps — the realtime decoder yields hr/rr/events/battery and nothing
+     * else — so a link summary that omitted this could not distinguish an unbonded strap, which defers
+     * backfill entirely, from a healthy one. Defaulted so existing constructions are unchanged.
+     */
+    private val onBankedOffload: (counts: InsertCounts) -> Unit = {},
+    /**
      * Fires after a chunk's decoded rows are durably committed AND acked — i.e. real new data just
      * landed. Lets the client schedule on-device scoring right away instead of leaving fresh history
      * invisible until the next 15-min analysis tick. Empty chunks (metadata-only ENDs) don't fire.
@@ -227,6 +235,12 @@ class Backfiller(
      * sentinel: it has no banked history to offload (a clock/charge state, not a decode bug).
      */
     private var loggedNoCursor = false
+
+    /** #1754: whether THIS session saw the trim=0xFFFFFFFF "no valid flash cursor" sentinel. Exposed so
+     *  the empty-offload banner can distinguish the clock/charge state (no cursor — the existing copy is
+     *  correct) from a strap that has a valid, advancing flash cursor but banks no sensor records (NOT a
+     *  clock problem — points at the sensor front-end or power). Read-only from outside. */
+    val sawNoFlashCursor: Boolean get() = loggedNoCursor
 
     /**
      * #773: logged once per session the first time a HISTORY_END's own timestamp is dated implausibly far
@@ -563,6 +577,7 @@ class Backfiller(
                 // key has already absorbed part of it.
                 val rrCensus = com.noop.analytics.RrEmissionStats.compute(decoded.rr.map { it.ts.toInt() to it.rrMs })
                 val counts = repository.insert(decoded, deviceId)
+                onBankedOffload(counts)
                 committed = decoded
                 // Success-side observability (#150): tally what actually persisted so the session can emit
                 // "persisted N rows (M with motion) across K night(s)" — the win-rate signal we never logged.
@@ -863,6 +878,24 @@ class Backfiller(
                 "so if that does not help, try Restart strap in Devices, then forget and re-pair. If the " +
                 "official WHOOP app is missing these days too, the strap is the cause and not NOOP."
         }
+
+        /** #1754: the banner for an empty offload whose flash cursor is VALID and ADVANCING — the strap
+         *  is writing pages but banking no sensor records, so the clock/charge advice does not apply. The
+         *  cause points at the sensor front-end or power state, not the RTC. Byte-identical to the Swift
+         *  twin (`Backfiller.noSensorRecordsBanner`). No em-dash (project rule). */
+        val noSensorRecordsBanner =
+            "Synced, but your strap handed over no sensor records - only its diagnostic output. The " +
+                "strap's flash cursor is valid and advancing, so this is not a clock problem; it points " +
+                "at the sensor front-end or power state. If this persists across reconnects, please " +
+                "share a strap log so the cause can be identified."
+
+        /** #1754: the banner for an empty offload whose flash cursor is the 0xFFFFFFFF sentinel — the
+         *  strap has no banked history at all, the clock/charge advice IS correct. Byte-identical to the
+         *  Swift twin (`Backfiller.noFlashCursorBanner`). */
+        val noFlashCursorBanner =
+            "Synced, but your strap had no stored history to hand over - only its diagnostic output. " +
+                "This usually means its clock has lost sync, so it isn't saving data to flash. Fully " +
+                "charge it to 100%, then reconnect, and it should start banking again."
     }
 }
 

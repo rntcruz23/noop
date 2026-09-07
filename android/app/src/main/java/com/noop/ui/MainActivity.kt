@@ -118,6 +118,9 @@ class MainActivity : ComponentActivity() {
         // feature is off). Wrapped because a WorkManager hiccup must never block launch.
         runCatching { DebugExportScheduler.reschedule(applicationContext) }
 
+        // K5: self-heal the scheduled Coach morning-brief job (no-op when off / already scheduled).
+        runCatching { CoachBriefScheduler.reschedule(applicationContext) }
+
         // Backup & Sync (#791): self-heal the daily auto-backup schedule (no-op when off / no folder),
         // and run a DEFERRED on-launch catch-up backup. Must-fix #4: the catch-up is gated on the toggle
         // being ON, runs fully off the main thread on Dispatchers.IO, and is launched AFTER the
@@ -146,6 +149,7 @@ class MainActivity : ComponentActivity() {
         // Decode the optional custom background image (if set) + its toggles before first composition so
         // the backdrop is right from the first frame on every tab. No-op when no image is set.
         BackgroundImageStore.load(this)
+        BottomBarStyleStore.load(this)   // #1836: bottom-bar layout choice, default the shipped slot
 
         setContent {
             NoopTheme {
@@ -254,6 +258,19 @@ object NoopPrefs {
 
     /** "Keep connected in the background", drives [com.noop.ble.WhoopConnectionService]. Default on. */
     const val KEY_BACKGROUND_CONNECTION = "noop.backgroundConnection"
+
+    /** Boundary used by additive daily metrics. Sleep onset is the product default; midnight restores
+     * the conventional civil-day view. Naps never become boundaries. */
+    const val KEY_DAY_CYCLE_MODE = "noop.dayCycleMode"
+
+    fun dayCycleMode(context: Context): com.noop.analytics.DayCycleMode =
+        com.noop.analytics.DayCycleMode.fromPersisted(
+            of(context).getString(KEY_DAY_CYCLE_MODE, null),
+        )
+
+    fun setDayCycleMode(context: Context, mode: com.noop.analytics.DayCycleMode) {
+        of(context).edit().putString(KEY_DAY_CYCLE_MODE, mode.persistedValue).apply()
+    }
 
     /** "Continuous HRV capture", when on (AND background connection is on), NOOP holds the dense
      *  realtime HR stream armed even with no Live screen open, so the strap banks beat-to-beat R-R 24/7
@@ -700,17 +717,53 @@ object NoopPrefs {
         of(context).edit().putBoolean(KEY_APP_ICON_NAVY, navy).apply()
     }
 
-    /** Imperial/Metric display preference (D#103). Display-only, stored data stays SI. The length/mass
-     *  system is read by [UnitPrefs.system]; the temperature override (empty = "match the system") by
-     *  [UnitPrefs.temperature]. Mirrors macOS @AppStorage("units.system" / "units.temperature"). */
+    /** #1839: hide the overlay bottom bar while scrolling down, restore it on scrolling up. Default
+     *  ON (#1841). Only meaningful with the overlay layout, where the bar sits over content. */
+    const val KEY_BOTTOM_BAR_AUTO_HIDE = "noop.bottomBarAutoHide"
+
+    /** #1836 follow-up: the bar's glass alpha, as one of eight steps. See [com.noop.ui.alphaForOpacityStep]. */
+    const val KEY_BOTTOM_BAR_OPACITY_STEP = "noop.bottomBarOpacityStep"
+
+    /** #1836 follow-up: how much bigger the bar is drawn, one of [com.noop.ui.BOTTOM_BAR_SCALES]. */
+    const val KEY_BOTTOM_BAR_SCALE = "noop.bottomBarScale"
+
+    /** #1836: draw the bottom bar as an overlay (glass over the screen's backdrop) instead of a reserved
+     *  Scaffold slot. Default ON (#1841), after the overlay was confirmed on a device. */
+    const val KEY_OVERLAY_BOTTOM_BAR = "noop.overlayBottomBar"
+
+    /** #1821: Clock format ("system" / "twelveHour" / "twentyFourHour"). Shares its stored vocabulary
+     *  with the Apple @AppStorage binding via [com.noop.analytics.ClockFormatPreference]. */
+    const val KEY_CLOCK_FORMAT = com.noop.analytics.ClockFormatPreference.PREFS_KEY
+
+    /** Display-only unit preferences; stored data stays SI. `units.system` remains the body preference
+     *  for compatibility, while exercise distance can override it independently. */
     const val KEY_UNIT_SYSTEM = "units.system"
+    const val KEY_DISTANCE_UNIT_SYSTEM = "units.distance"
     const val KEY_TEMPERATURE_UNIT = "units.temperature"
+
+    /** #1846: which skin-temp number the cards lead with — "" / absent = a temperature (default), or the
+     *  DEVIATION raw to lead with the ±baseline move. Display-only; nothing stored ever changes. */
+    const val KEY_SKIN_TEMP_DISPLAY = "units.skinTempDisplay"
 
     fun setUnitSystem(context: Context, system: UnitSystem) {
         of(context).edit().putString(KEY_UNIT_SYSTEM, system.raw).apply()
     }
 
+    fun setDistanceUnitSystem(context: Context, system: UnitSystem) {
+        of(context).edit().putString(KEY_DISTANCE_UNIT_SYSTEM, system.raw).apply()
+    }
+
     /** Persist the temperature override, or pass null to clear it back to "match the system". */
+    fun setSkinTempDisplay(context: Context, kind: com.noop.analytics.SkinTempDisplay.Kind?) {
+        of(context).edit().apply {
+            if (kind == null || kind == com.noop.analytics.SkinTempDisplay.Kind.ABSOLUTE) {
+                remove(KEY_SKIN_TEMP_DISPLAY)
+            } else {
+                putString(KEY_SKIN_TEMP_DISPLAY, kind.raw)
+            }
+        }.apply()
+    }
+
     fun setTemperatureUnit(context: Context, unit: TemperatureUnit?) {
         of(context).edit().apply {
             if (unit == null) remove(KEY_TEMPERATURE_UNIT) else putString(KEY_TEMPERATURE_UNIT, unit.raw)
@@ -1036,6 +1089,18 @@ object NoopPrefs {
 
     fun setCoachSignals(context: Context, enabled: Boolean) {
         of(context).edit().putBoolean(KEY_COACH_SIGNALS, enabled).apply()
+    }
+
+    /** K11: Coach multimodal chart image (opt-in, default OFF). When ON and the provider is Gemini,
+     *  a chart snapshot is sent as inline_data alongside the text. A THIRD opt-in on top of the
+     *  existing data consent. Only Gemini supports multimodal input. */
+    const val KEY_COACH_MULTIMODAL = "noop.coachMultimodal"
+
+    fun coachMultimodal(context: Context): Boolean =
+        of(context).getBoolean(KEY_COACH_MULTIMODAL, false)
+
+    fun setCoachMultimodal(context: Context, enabled: Boolean) {
+        of(context).edit().putBoolean(KEY_COACH_MULTIMODAL, enabled).apply()
     }
 
     /** The user's EDITED Coach system prompt. Empty/absent means "use the built-in default". A small,

@@ -74,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.noop.analytics.AnalyticsEngine
 import com.noop.analytics.CircadianEngine
+import com.noop.analytics.HypnogramCoverage
 import com.noop.analytics.SleepEditGuard
 import com.noop.analytics.SleepGroupEdit
 import com.noop.analytics.SleepStageTotals
@@ -89,10 +90,12 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import com.noop.analytics.ClockFormat
 
 internal enum class SleepFreshnessStatus {
     SYNCING, CALCULATING, SYNC_FAILED, AWAITING_SYNC, NOT_DETECTED,
@@ -493,8 +496,11 @@ fun SleepScreen(
     // The navigated night, decoded once per (offset, data) change — chevron taps re-pick
     // instantly without re-parsing stagesJSON on every recomposition. The offset now indexes
     // DAYS (navDays), so a day with a detected night always resolves to that night. (#160, #59)
-    val night = remember(nightOffset, navDays, days, habitualMidsleep, motionByStart) {
-        selectNight(navDays, days, nightOffset, habitualMidsleep, motionByStart)
+    // #1821: the reader's chosen clock, resolved once for this screen. It is a remember KEY below so
+    // changing the setting re-derives the labels instead of leaving the old clock on screen.
+    val is24h = ClockPrefs.uses24Hour(LocalContext.current)
+    val night = remember(nightOffset, navDays, days, habitualMidsleep, motionByStart, is24h) {
+        selectNight(navDays, days, nightOffset, habitualMidsleep, motionByStart, is24h = is24h)
     }
 
     // #1311: label the carousel by CALENDAR nights, not the flat recorded-night index — a night with no
@@ -509,10 +515,10 @@ fun SleepScreen(
     // at-a-glance TILES, the debt ledger, the personal need and the trend stay full-history /
     // latest-anchored, matching iOS SleepView. `selectedDay` re-points only the hero. Model is null
     // when the selected day has no stage minutes. (#5)
-    val model = remember(days, night, imported, napSleepMinByDay, sleeps) {
+    val model = remember(days, night, imported, napSleepMinByDay, sleeps, is24h) {
         buildSleepModel(days, night?.session, imported, selectedDay = night?.dayKey,
             heroStages = night?.groupStages, heroSegments = night?.groupSegments,
-            napSleepMinByDay = napSleepMinByDay, sessions = sleeps)
+            napSleepMinByDay = napSleepMinByDay, sessions = sleeps, is24h = is24h)
     }
     val display = remember(model, night) { heroDisplay(model, night) }
 
@@ -1020,7 +1026,9 @@ private fun SleepUndoBanner(undo: SleepUndoState, onUndo: () -> Unit) {
     // it retired something), but `first()` on an empty list would take the whole Sleep tab down — too
     // steep a price for a strip that is only ever informational. Render nothing instead.
     val session = undo.sessions.firstOrNull() ?: return
-    val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
+    val timeFmt = SimpleDateFormat(                                   // #1821
+        ClockFormat.hourMinutePattern(ClockPrefs.uses24Hour(LocalContext.current)), Locale.US,
+    )
     // effectiveStartTs is the displayed onset (a userEdited night's corrected bed time), matching iOS.
     val startText = timeFmt.format(java.util.Date(session.effectiveStartTs * 1000L))
     val endText = timeFmt.format(java.util.Date(session.endTs * 1000L))
@@ -1489,6 +1497,21 @@ private fun Hero(
             // anchor), so it carries the flag; nil (imported / pre-migration) is never flagged. Mirrors iOS
             // SleepView.stageIncompleteNote.
             if (session?.stagingSparse == true) SleepIncompleteNote()
+            // #1716 — a device-provided hypnogram assembled from records that never all arrived leaves a
+            // HOLE in the timeline while the session still spans the whole night, so a night we saw a
+            // fraction of renders as a complete one. Asked of the bridged main-night GROUP (the quantity
+            // analyzeDay gates on), never of one fragment. This is the only place the coverage guard
+            // becomes visible: the engine's matching Rest downgrade lands in a transient DayResult field
+            // no screen reads. Mirrors iOS SleepView.stagePartialNote.
+            val coverageGroup = heroGroup.ifEmpty { listOfNotNull(session) }
+            val stageCoverage = HypnogramCoverage.groupFraction(
+                coverageGroup.map {
+                    HypnogramCoverage.Fragment(it.stagesJSON, (it.endTs - it.startTs).toDouble())
+                }
+            )
+            if (stageCoverage != null && stageCoverage < HypnogramCoverage.minCoverage) {
+                SleepPartialNote(stageCoverage)
+            }
         }
         // Naps card (#508/#518): the day's blocks OTHER than the main night, each editable / deletable
         // with the SAME mechanism main sleep uses, plus a Main / Nap(s) / Total split so what drives the
@@ -1622,6 +1645,37 @@ private fun SleepIncompleteNote() {
 }
 
 /**
+ * The PARTIAL-TIMELINE caveat (#1716): this night's stage segments account for less than
+ * [HypnogramCoverage.minCoverage] of the window the session claims, so the stage totals describe only the
+ * part of the night the timeline accounts for. Distinct from BOTH notes above — #H9 doubts the deep/REM SPLIT
+ * of a fully-described night, #345 doubts a night staged on thin motion, and this one says plainly that
+ * some of the night is MISSING rather than doubted.
+ *
+ * HONEST-DATA: reports only what was observed and changes no number. The percentage is FLOORED, never
+ * rounded — 94.8% must not print as "95%" beside a badge raised because coverage fell below 95% — which is
+ * why this takes the fraction and floors it here rather than accepting a pre-rounded Int from the caller.
+ * The copy names NO cause and offers NO remedy: the captures behind this note show the missing codes DID
+ * reach the phone (the ring reported them unwritten, 0xFF) and that re-persisting the night does not fill
+ * the hole. Mirrors iOS SleepView.stagePartialNote.
+ */
+@Composable
+private fun SleepPartialNote(coverage: Double) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier.padding(horizontal = 2.dp),
+    ) {
+        SourceBadge(text = uiString(R.string.l10n_sleep_screen_partly_recorded_f43509ab), tint = Palette.statusWarning)
+        Text(
+            uiString(R.string.l10n_sleep_screen_only_of_this_night_s_window_9660332a,
+                     floor(coverage * 100.0).toInt()),
+            style = NoopType.caption,
+            color = Palette.textTertiary,
+        )
+    }
+}
+
+/**
  * The Naps card footer: the night's provenance badge (the REAL per-day merge winner) next to a tappable
  * "Why this sleep?" affordance that reveals the foundation [SleepStageTotals.MainNightReason] copy inline,
  * so the pick is explainable on the spot. The reason words + the provenance wording are IDENTICAL to iOS
@@ -1729,7 +1783,8 @@ private fun NapRow(
     // with the Edit next-step. Inline disclosure (Compose has no anchored popover here); the COPY matches
     // iOS SleepView.whyPopover(napSuffix:) exactly. (spec 2026-06-20)
     var showWhy by remember(nap.startTs) { mutableStateOf(false) }
-    val window = "${clockTimeLabel(nap.effectiveStartTs)} - ${clockTimeLabel(nap.endTs)}"
+    val napIs24h = ClockPrefs.uses24Hour(LocalContext.current)   // #1821
+    val window = "${clockTimeLabel(nap.effectiveStartTs, napIs24h)} - ${clockTimeLabel(nap.endTs, napIs24h)}"
     val durMin = (nap.endTs - nap.effectiveStartTs) / 60.0
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.space10)) {
         Row(
@@ -1869,6 +1924,7 @@ private fun SleepCyclesChart(
 ) {
     // 5 min mirrors the Swift Hypnogram's default displaySmoothed(300s) — weights are minutes here.
     val smoothed = remember(segments) { displaySmoothedWeights(segments, minMinutes = 5f) }
+    val is24h = ClockPrefs.uses24Hour(LocalContext.current)
     // The Swift Hypnogram's lane order (stagesTopToBottom): awake rank 0 (top) → deep rank 3 (bottom).
     val laneNames = listOf("awake", "rem", "light", "deep")
     val laneLabels = listOf("Awake", "REM", "Light", "Deep")
@@ -1954,14 +2010,14 @@ private fun SleepCyclesChart(
         if (onsetTs != null && wakeTs != null) {
             Row(modifier = Modifier.fillMaxWidth().padding(start = 44.dp + Metrics.space12)) {
                 Text(
-                    clockTimeLabel(onsetTs),
+                    clockTimeLabel(onsetTs, is24h),
                     style = NoopType.footnote,
                     color = Palette.textTertiary,
                     maxLines = 1,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    clockTimeLabel((onsetTs + wakeTs) / 2L),
+                    clockTimeLabel((onsetTs + wakeTs) / 2L, is24h),
                     style = NoopType.footnote,
                     color = Palette.textTertiary,
                     textAlign = TextAlign.Center,
@@ -1969,7 +2025,7 @@ private fun SleepCyclesChart(
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    clockTimeLabel(wakeTs),
+                    clockTimeLabel(wakeTs, is24h),
                     style = NoopType.footnote,
                     color = Palette.textTertiary,
                     textAlign = TextAlign.End,

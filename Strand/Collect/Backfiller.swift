@@ -48,6 +48,11 @@ final class Backfiller {
     /// of end_data, used for the `strap_trim` cursor) and the 8-byte `end_data` (= the raw
     /// HISTORY_END metadata.data[10:18]) that the high-freq-sync ack form requires verbatim.
     private let ackTrim: (_ trim: UInt32, _ endData: [UInt8]) -> Void
+    /// #1635: one offload chunk's accepted-row counts, handed up so `BLEManager` can tally them per LINK.
+    /// The offload is the only path that banks gravity/resp/skinTemp/SpO2/steps, so a link summary
+    /// without it cannot tell an unbonded strap — which defers backfill — from a healthy one.
+    private let onBankedOffload: (_ counts: (hr: Int, rr: Int, events: Int, battery: Int,
+                                             spo2: Int, skinTemp: Int, resp: Int, gravity: Int)) -> Void
     private let extract: Extractor
     /// Research toggle. When false (DEFAULT) no raw frames are persisted — the chunk's
     /// decoded streams are still durable and the trim is still acked (decoded is the product of
@@ -142,6 +147,11 @@ final class Backfiller {
     /// Logged once per session when the strap reports trim=0xFFFFFFFF — the "no valid flash cursor"
     /// sentinel: it has no banked history to offload (a clock/charge state, not a decode bug).
     private var loggedNoCursor = false
+    /// #1754: whether THIS session saw the trim=0xFFFFFFFF "no valid flash cursor" sentinel. Exposed so
+    /// the empty-offload banner can distinguish the clock/charge state (no cursor — the existing copy is
+    /// correct) from a strap that has a valid, advancing flash cursor but banks no sensor records (NOT a
+    /// clock problem — points at the sensor front-end or power). Read-only from outside.
+    var sawNoFlashCursor: Bool { loggedNoCursor }
     /// #773: logged once per session the first time a HISTORY_END's own timestamp is dated implausibly far
     /// in the FUTURE (a corrupt strap RTC). Distinct from #547's per-record drop tally: this fires on the
     /// chunk metadata's own clock, the earliest visible tell that the strap's RTC is bogus. Reset in begin().
@@ -209,6 +219,9 @@ final class Backfiller {
     init(store: BackfillStoreWriting,
          deviceId: String,
          ackTrim: @escaping (_ trim: UInt32, _ endData: [UInt8]) -> Void,
+         onBankedOffload: @escaping (_ counts: (hr: Int, rr: Int, events: Int, battery: Int,
+                                                spo2: Int, skinTemp: Int, resp: Int,
+                                                gravity: Int)) -> Void = { _ in },
          enableRawCapture: Bool = false,
          log: ((String) -> Void)? = nil,
          rejectedSink: ((_ frames: [[UInt8]], _ trim: UInt32, _ family: DeviceFamily) -> Bool)? = nil,
@@ -225,6 +238,7 @@ final class Backfiller {
         self.store = store
         self.deviceId = deviceId
         self.ackTrim = ackTrim
+        self.onBankedOffload = onBankedOffload
         self.enableRawCapture = enableRawCapture
         self.log = log
         self.rejectedSink = rejectedSink
@@ -476,6 +490,21 @@ final class Backfiller {
         return "Synced, but your strap handed over no stored history, and its newest saved record is about \(ageDays) day(s) old. If you have been wearing it since then, it has stopped saving to flash. Charge it to 100% and reconnect; NOOP already re-sets its clock every connect, so if that does not help, try Restart strap in Devices, then forget and re-pair. If the official WHOOP app is missing these days too, the strap is the cause and not NOOP."
     }
 
+    /// #1754: the banner for an empty offload whose flash cursor is VALID and ADVANCING — the strap is
+    /// writing pages but banking no sensor records, so the clock/charge advice does not apply. The
+    /// cause points at the sensor front-end or power state, not the RTC. Byte-identical to the Android
+    /// twin (`Backfiller.noSensorRecordsBanner`). Not localized, matching the sibling `lastSyncError`
+    /// copy on both platforms; localizing that surface is its own change. No em-dash (project rule).
+    nonisolated static let noSensorRecordsBanner =
+        "Synced, but your strap handed over no sensor records - only its diagnostic output. The strap's flash cursor is valid and advancing, so this is not a clock problem; it points at the sensor front-end or power state. If this persists across reconnects, please share a strap log so the cause can be identified."
+
+    /// #1754: the banner for an empty offload whose flash cursor is the 0xFFFFFFFF sentinel — the strap
+    /// has no banked history at all, the clock/charge advice IS correct. Kept as a constant so the two
+    /// banners stay side by side and the caller's branch reads as a choice between two named states.
+    /// Byte-identical to the Android twin (`Backfiller.noFlashCursorBanner`).
+    nonisolated static let noFlashCursorBanner =
+        "Synced, but your strap had no stored history to hand over - only its diagnostic output. This usually means its clock has lost sync, so it isn't saving data to flash. Fully charge it to 100%, then reconnect, and it should start banking again."
+
     /// Commit one HISTORY_END chunk: (persist decoded → enqueueRaw when present) → setCursor → ackTrim.
     /// Early-returns on any throw to preserve the safe-trim invariant.
     ///
@@ -706,7 +735,10 @@ final class Backfiller {
             // emission can be measured, since every existing R-R number is taken after the ON CONFLICT key
             // has already absorbed part of it.
             let rrCensus = RrEmissionStats.compute(decoded.rr.map { (ts: $0.ts, rrMs: $0.rrMs) })
-            do { counts = try await store.insert(decoded, deviceId: deviceId) } catch {
+            do {
+                counts = try await store.insert(decoded, deviceId: deviceId)
+                onBankedOffload(counts)
+            } catch {
                 // Diag (#601): the decoded rows couldn't be written — this is the "history stalls but live HR
                 // works" class. We return WITHOUT acking so the strap keeps this chunk and re-sends it next
                 // session (no data loss), but a silent return left a strap log with no trace of the stall.

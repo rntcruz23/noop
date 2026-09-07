@@ -155,6 +155,81 @@ class StalledLinkDiagnosticsTest {
         assertTrue(backfillDeferredLine("WHOOP5", false, false, true, 1, 0L).contains("sinceConnect=0s"))
     }
 
+    // ---- #1802: unbonded-offload probe discoverability ---------------------------------------
+
+    /**
+     * The structural-unreachable case with the probe NOT opted in and NOT retired is the one where the
+     * hint matters most: the diagnostic reads as hopeless, but the probe can test exactly this state.
+     * The line must name the toggle and say what it does, without promising an answer.
+     */
+    @Test
+    fun `the unreachable case names the probe toggle when not opted in`() {
+        val line = backfillDeferredLine(
+            "WHOOP5", false, false, true, 3, 42_000L,
+            unbondedProbeOptedIn = false, unbondedProbeRetired = false,
+        )
+        assertTrue(line, line.contains("Try history sync without pairing"))
+        assertTrue(line, line.contains("Test Centre"))
+        assertTrue(line, line.contains("SET_CLOCK"))
+    }
+
+    /**
+     * When the probe IS opted in, its own lines report what it found — the deferral line must not
+     * duplicate that. The hint is only for the user who has NOT turned it on.
+     */
+    @Test
+    fun `the probe hint is suppressed when the probe is opted in`() {
+        val line = backfillDeferredLine(
+            "WHOOP5", false, false, true, 3, 42_000L,
+            unbondedProbeOptedIn = true, unbondedProbeRetired = false,
+        )
+        assertFalse(line, line.contains("Try history sync without pairing"))
+    }
+
+    /**
+     * When the probe has retired (latched refusal or spent silence budget), the hint says so and
+     * points at the off/on retry — #1804 fixed a false negative that could have latched it.
+     */
+    @Test
+    fun `the probe hint names the retry path when retired`() {
+        val line = backfillDeferredLine(
+            "WHOOP5", false, false, true, 3, 42_000L,
+            unbondedProbeOptedIn = false, unbondedProbeRetired = true,
+        )
+        assertTrue(line, line.contains("retired"))
+        assertTrue(line, line.contains("turn it off and on"))
+        assertTrue(line, line.contains("#1804"))
+    }
+
+    /**
+     * The probe hint must NOT appear on the non-unreachable cases — a WHOOP4 or a hello that was
+     * written and went unanswered is a different problem with a different fix.
+     */
+    @Test
+    fun `the probe hint only appears on the structural-unreachable case`() {
+        // WHOOP4: no probe, no hint
+        assertFalse(backfillDeferredLine(
+            "WHOOP4", false, false, false, 1, 5_000L,
+            unbondedProbeOptedIn = false, unbondedProbeRetired = false,
+        ).contains("Try history sync without pairing"))
+        // Hello written but unanswered: different problem
+        assertFalse(backfillDeferredLine(
+            "WHOOP5", false, true, true, 3, 42_000L,
+            unbondedProbeOptedIn = false, unbondedProbeRetired = false,
+        ).contains("Try history sync without pairing"))
+    }
+
+    /**
+     * The default values (not opted in, not retired) preserve the old behaviour for callers that
+     * have not been updated — the hint appears on the unreachable case.
+     */
+    @Test
+    fun `default probe params preserve the old unreachable behaviour plus the hint`() {
+        val line = backfillDeferredLine("WHOOP5", false, false, true, 3, 42_000L)
+        assertTrue(line, line.contains("No hello was written"))
+        assertTrue(line, line.contains("Try history sync without pairing"))
+    }
+
     // ---- liveInsertFailedLine -----------------------------------------------------------------
 
     /**
@@ -183,6 +258,9 @@ class StalledLinkDiagnosticsTest {
      * The two platforms emit this line into logs meant to be read beside each other, and every
      * `contains` check above would still pass with a stray space or a moved clause. This is the
      * assertion that actually holds them together.
+     *
+     * ASCII only: the 200-char bound is Kotlin `take` (UTF-16) vs Swift `prefix` (graphemes). Store
+     * errors are ASCII, which is what this oracle covers. It is not a Unicode truncation twin.
      */
     @Test
     fun `the whole line matches the Swift rendering byte for byte`() {
@@ -334,4 +412,87 @@ class StalledLinkDiagnosticsTest {
         assertEquals(true, shouldEmitLiveInsertFailure(1L, 60_001L))
         assertEquals(false, shouldEmitLiveInsertFailure(1L, 30_000L))
     }
+    // Standard-HR transport lines — byte-identical twins of Swift's LivePersistTrace.
+
+    /**
+     * The expected strings are copied from the Swift `LivePersistTraceTests`, not regenerated from the
+     * Kotlin. That is the point: a twin asserted against its own implementation proves only that the
+     * implementation is self-consistent, and these two lines exist so an Android and an Apple log of the
+     * same stall compare directly.
+     */
+    @Test
+    fun `host receipt separates accepted and rejected rows`() {
+        assertEquals(
+            "standard-hr transport host-received hostUnixSec=1750000000" +
+                " acceptedHRRows=1 acceptedRRRows=2 rejectedHRRows=0 rejectedRRRows=1" +
+                " pendingHRRows=4 pendingRRRows=5",
+            standardHrHostReceivedLine(
+                hostUnixSeconds = 1_750_000_000,
+                acceptedHrRows = 1, acceptedRrRows = 2,
+                rejectedHrRows = 0, rejectedRrRows = 1,
+                pendingHrRows = 4, pendingRrRows = 5,
+            ),
+        )
+    }
+
+    @Test
+    fun `flush success separates offered from actually inserted rows`() {
+        assertEquals(
+            "standard-hr transport flush-attempt reason=cadence offeredHRRows=4 offeredRRRows=5",
+            standardHrFlushAttemptLine(StandardHrFlushReason.CADENCE.raw, 4, 5),
+        )
+        // Offered 4/5 and inserted 1/2 is the failure that reads like success: the batch was accepted by
+        // the call and mostly discarded by the store. Only the store's own count shows it.
+        assertEquals(
+            "standard-hr transport flush-succeeded reason=cadence offeredHRRows=4 offeredRRRows=5" +
+                " insertedHRRows=1 insertedRRRows=2",
+            standardHrFlushSucceededLine(StandardHrFlushReason.CADENCE.raw, 4, 5, 1, 2),
+        )
+    }
+
+    @Test
+    fun `retry names the lifecycle reason and the total pending rows`() {
+        assertEquals(
+            "standard-hr transport rebuffered-for-retry reason=disconnect" +
+                " attemptedHRRows=1 attemptedRRRows=2 pendingHRRows=3 pendingRRRows=4" +
+                " consecutiveFailures=1",
+            standardHrRebufferedForRetryLine(StandardHrFlushReason.DISCONNECT.raw, 1, 2, 3, 4, 1),
+        )
+    }
+
+    /**
+     * The raw values are what the log line carries, so they are the parity surface — not the enum's
+     * Kotlin spelling. background and termination have no Android emitter today (the foreground service
+     * gives no suspension edge); they exist so the two enums cannot drift apart before one does.
+     */
+    @Test
+    fun `the flush reasons match the Swift raw values exactly`() {
+        assertEquals(
+            listOf("cadence", "disconnect", "background", "termination", "explicit"),
+            StandardHrFlushReason.entries.map { it.raw },
+        )
+    }
+
+    /**
+     * [standardHrHostReceivedLine] is dead unless enqueue calls it. Apple emits at ingest; Android
+     * buffers raw samples and range-gates at flush, so the line is computed from this sample's gates
+     * plus [rowsOf] pending, WITHOUT moving the 30-sample trigger onto accepted-only rows (#1770).
+     */
+    @Test
+    fun `enqueue emits host-received without moving the flush trigger onto accepted rows`() {
+        var root = java.io.File(System.getProperty("user.dir") ?: ".").canonicalFile
+        val src = run {
+            repeat(4) {
+                val f = java.io.File(root, "android/app/src/main/java/com/noop/ble/StandardHrSource.kt")
+                if (f.isFile) return@run f.readText()
+                root = root.parentFile ?: root
+            }
+            error("StandardHrSource.kt not found — this test must not pass by default")
+        }
+        val enqueue = src.substringAfter("private fun enqueue(").substringBefore("private fun rowsOf(")
+        assertTrue("enqueue must emit the host-received twin", enqueue.contains("standardHrHostReceivedLine("))
+        assertTrue("pending counts must use the gated rowsOf helper", enqueue.contains("rowsOf(buffer)"))
+        assertTrue("cadence must stay on raw buffer size", enqueue.contains("buffer.size >= flushCount"))
+    }
+
 }

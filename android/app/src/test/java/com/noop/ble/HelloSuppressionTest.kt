@@ -27,6 +27,72 @@ class HelloSuppressionTest {
     }
 
     @Test
+    fun `a user Connect spends one attempt and leaves the latch standing`() {
+        // The tap's own connect re-attempts — that is what makes suppression non-permanent...
+        assertTrue(shouldSendClientHello(suppressedForDevice = true, userInitiated = true))
+        // ...but the tap is not evidence about the firmware, so it must not drop the latch.
+        assertFalse(pairingHintClearDropsSuppressionLatch(genuineBond = false))
+        // Which is the whole point: the AUTOMATIC reconnect behind that attempt is still suppressed.
+        // The regression cleared the latch on the tap, so this read false for every reconnect that
+        // followed and the give-up had to re-earn itself over five more refusals (~55s of churn).
+        assertFalse(shouldSendClientHello(suppressedForDevice = true, userInitiated = false))
+    }
+
+    @Test
+    fun `a genuine bond drops the latch - it is the one event that proves the handshake works`() {
+        assertTrue(pairingHintClearDropsSuppressionLatch(genuineBond = true))
+    }
+
+    @Test
+    fun `a Connect keeps a live bonded link it already holds`() {
+        assertTrue(connectKeepsExistingLink(genuinelyBonded = true, connected = true, sameDevice = true,
+                                            silentMs = 5_000, stallFuseMs = 600_000))
+    }
+
+    @Test
+    fun `a Connect rebuilds when a reconnect could still achieve something`() {
+        // Suppressed / never bonded: the tap IS the handshake retry, and that needs a new link.
+        assertFalse(connectKeepsExistingLink(genuinelyBonded = false, connected = true, sameDevice = true,
+                                             silentMs = 5_000, stallFuseMs = 600_000))
+        // A tap aimed at a different strap must not be swallowed by the one in hand.
+        assertFalse(connectKeepsExistingLink(genuinelyBonded = true, connected = true, sameDevice = false,
+                                             silentMs = 5_000, stallFuseMs = 600_000))
+        assertFalse(connectKeepsExistingLink(genuinelyBonded = true, connected = false, sameDevice = true,
+                                             silentMs = 5_000, stallFuseMs = 600_000))
+    }
+
+    @Test
+    fun `a silently dead link does NOT keep the button inert`() {
+        // The regression this clause exists for: GATT still says connected, nothing has arrived, and the
+        // watchdog is about to bounce it. That is exactly when Connect is tapped, so it must act.
+        assertFalse(connectKeepsExistingLink(genuinelyBonded = true, connected = true, sameDevice = true,
+                                             silentMs = 600_000, stallFuseMs = 600_000))
+        assertFalse(connectKeepsExistingLink(genuinelyBonded = true, connected = true, sameDevice = true,
+                                             silentMs = 900_000, stallFuseMs = 600_000))
+    }
+
+    @Test
+    fun `an unanswered handshake gives up sooner than an auth refusal`() {
+        // The auth refusal keeps the full patience: the hint asks the user to act, and 5 is the time
+        // to act in. An unanswered handshake asks nothing of them, so waiting only buys link drops.
+        assertEquals(5, giveUpThresholdFor(authRefusal = true, pauseThreshold = 5))
+        assertEquals(3, giveUpThresholdFor(authRefusal = false, pauseThreshold = 5))
+        // Above the hint threshold, so a latched PERSISTED verdict still needs a cycle of margin.
+        assertTrue(UNANSWERED_GIVE_UP_THRESHOLD > 2)
+    }
+
+    @Test
+    fun `the threshold and the treatment read the same refusal`() {
+        // These two decide patience and outcome for one refusal. Keyed apart they could disagree -
+        // pausing on a branch that waited the suppression count, or vice versa.
+        for (auth in listOf(true, false)) {
+            val suppresses = giveUpSuppressesHello(authRefusal = auth)
+            val threshold = giveUpThresholdFor(authRefusal = auth, pauseThreshold = 5)
+            assertEquals(suppresses, threshold == UNANSWERED_GIVE_UP_THRESHOLD)
+        }
+    }
+
+    @Test
     fun `only an unanswered handshake suppresses - an auth refusal still pauses`() {
         // An auth refusal is evidence the strap actively declined and reconnecting cannot help, so the
         // existing pause is right. An unanswered write is not that, and pausing would throw away live HR.
@@ -61,7 +127,22 @@ class HelloSuppressionTest {
         // is holding the strap - the two mistakes this issue has already produced.
         assertFalse(hint.contains("paus", ignoreCase = true))
         assertFalse(hint.contains("WHOOP app", ignoreCase = true))
-        assertTrue(hint.contains("Connect"))
+        // #1635 follow-up: the hint no longer LEADS with a retry. Framing a strap that refuses pairing as
+        // a retryable failure invited the hammering the give-up latch exists to stop, and a field report
+        // read the whole hint and still asked how to fix it. Pairing mode comes first now; Connect follows.
+        assertTrue(hint.contains("pairing mode"))
+        assertTrue(hint.contains("tap Connect"))
+        // And it must NOT claim these are unavailable: since #1884 an HR-only night reports both.
+        assertFalse(hint.contains("HRV and resting heart rate are unavailable"))
+        // #1635 field log: a week of blank Recovery Vitals while this hint named only history sync.
+        // Unbonded, the strap also stops sending motion / skin temperature / SpO2 / respiratory, which
+        // drops sleep onto the HR-only stager. (This used to end "and blanks HRV + resting HR by
+        // construction" - #1884 made that false, and leaving it would contradict the assertion below.)
+        assertTrue(hint.contains("motion"))
+        // #1884 repinned the tail of this: naming HRV and resting HR as LOSSES stopped being true when an
+        // HR-only night began reporting both. What survives from #1878 is the reason they were named at
+        // all — the strap stops sending motion, so sleep falls to the HR-only stager. That still holds.
+        assertTrue(hint.contains("staged from heart rate alone"))
         val epitaph = BondRefusalGiveUp.helloSuppressedEpitaph(5, "abcd1234")
         assertFalse(epitaph.contains("held by", ignoreCase = true))
         assertTrue(epitaph.contains("abcd1234"))

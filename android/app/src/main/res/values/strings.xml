@@ -2,6 +2,8 @@
 <resources>
     <string name="app_name">NOOP</string>
     <string name="widget_description">Today\'s Rest, Charge and Effort, with live heart rate and strap battery at a glance.</string>
+    <string name="widget_hr_name">NOOP Heart Rate</string>
+    <string name="widget_hr_description">Live heart rate with the last three hours as a trace.</string>
     <string name="widget_compact_name">NOOP Compact</string>
     <string name="widget_compact_description">Compact Rest, Charge and Effort widget, with live heart rate and strap battery.</string>
     <string name="widget_error">NOOP widget couldn\'t draw — it will recover on the next update.</string>
@@ -519,6 +521,14 @@
     <string name="l10n_data_sources_screen_data_sources_5e43d6bb">Data Sources</string>
     <string name="l10n_data_sources_screen_every_3560d90b">Every</string>
     <string name="l10n_data_sources_screen_health_connect_be6bca3e">Health Connect</string>
+    <string name="health_connect_categories_title">Choose what NOOP can read</string>
+    <string name="health_connect_categories_detail">Select the Health Connect categories to import. You can change this later.</string>
+    <string name="health_connect_category_recovery">Recovery &amp; wellness</string>
+    <string name="health_connect_category_recovery_detail">Heart rate, HRV, sleep, SpO₂, breathing, and hydration</string>
+    <string name="health_connect_category_activity">Activity</string>
+    <string name="health_connect_category_activity_detail">Steps, calories, workouts, distance, and VO₂ max</string>
+    <string name="health_connect_category_body_composition">Body composition</string>
+    <string name="health_connect_category_body_composition_detail">Weight, body fat, and lean mass</string>
     <string name="l10n_data_sources_screen_import_apple_health_export_533fca27">Import Apple Health export…</string>
     <string name="l10n_data_sources_screen_import_from_health_connect_35d55e21">Import from Health Connect</string>
     <string name="l10n_data_sources_screen_import_lifting_log_8fac7b68">Import lifting log…</string>
@@ -550,6 +560,9 @@
     <string name="l10n_devices_screen_battery_clamped_2494c8c9">Battery %1$s%%</string>
     <string name="l10n_devices_screen_battery_info_probe_592_re_1dbd4c0f">Battery-info probe (#592 RE)…</string>
     <string name="l10n_devices_screen_battery_info_probe_result_592_b97c0bb8">Battery-info probe result (#592)</string>
+    <string name="l10n_devices_screen_battery_pack_probe_151_re_d722af00">Battery-pack probe (151 RE)…</string>
+    <string name="l10n_devices_screen_battery_pack_probe_result_151_df43dff2">Battery-pack probe result (151)</string>
+    <string name="l10n_devices_screen_battery_pack_probe_explainer_40b3470d">Sends the read-only battery-pack command (151) and decodes the strap\'s reply — the pack\'s charge, serial and Bluetooth address. Nothing is written to the strap and nothing feeds your data. A WHOOP 4.0 has no pack command and is expected to stay silent; that silence is itself a useful result.</string>
     <string name="l10n_devices_screen_body_location_probe_690_re_7def8c39">Body-location probe (#690 RE)…</string>
     <string name="l10n_devices_screen_body_location_probe_result_690_60c5ee79">Body-location probe result (#690)</string>
     <string name="l10n_devices_screen_body_location_probe_explainer_a9363239">Sends the read-only body-location command (0x54) and dumps the strap\'s full raw reply to the strap log, decoding the record (revision / location / confidence / status) on WHOOP 4.0. Nothing is written to the strap, and it never changes wear detection or scoring.</string>
@@ -570,6 +583,7 @@
     <string name="l10n_devices_screen_leave_none_active_b5c858cb">Leave none active</string>
     <string name="l10n_devices_screen_name_709a2322">Name</string>
     <string name="l10n_devices_screen_pack_voltage_9af3c3ff">%1$.2f V</string>
+    <string name="l10n_devices_screen_pack_charge_0e9589da">Pack %1$.1f%%</string>
     <string name="l10n_devices_screen_paired_locally_noop_owns_this_ring_30c16190">Paired locally. NOOP owns this ring while it holds the key. If you reset it again or set it up in the Oura app, NOOP no longer owns it and you would re-add it to take it over.</string>
     <string name="l10n_devices_screen_pick_a_new_active_strap_edd73542">Pick a new active strap</string>
     <string name="l10n_devices_screen_rename_device_ee233604">Rename device</string>
@@ -635,6 +649,8 @@
     <string name="l10n_hrv_snapshot_screen_not_enough_clean_beats_sit_still_0893e6c2">Not enough clean beats - sit still and try again. %1$s of </string>
     <string name="l10n_hrv_snapshot_screen_rmssd_e240fd3c">RMSSD</string>
     <string name="l10n_hrv_snapshot_screen_sdnn_9ab9ee2a">SDNN</string>
+    <string name="l10n_hr_glance_widget_min_lo_max_hi_ef900e49">Min %1$d • Max %2$d</string>
+    <string name="l10n_hr_glance_widget_updated_time_1b5feedb">Updated %1$s</string>
     <string name="l10n_hydration_screen_a_simple_goal_that_adjusts_to_723dc08a">A simple goal that adjusts to your effort. General wellness guidance, not medical advice.</string>
     <string name="l10n_hydration_screen_bottle_3b8ac6c7">Bottle</string>
     <string name="l10n_hydration_screen_cancel_77dfd213">Cancel</string>
@@ -803,11 +819,14 @@
     <string name="l10n_mind_section_reading_your_check_ins_71a100a9">Reading your check-ins…</string>
     <string name="l10n_noop_compact_glance_widget_charge_49a8cb83">CHARGE</string>
     <string name="l10n_noop_compact_glance_widget_effort_660752e7">EFFORT</string>
+    <string name="l10n_noop_compact_glance_widget_heart_rate_410aa15c">Heart rate</string>
     <string name="l10n_noop_compact_glance_widget_rest_cbaaa181">REST</string>
     <string name="l10n_noop_compact_glance_widget_strap_battery_a6c7f09c">Strap battery</string>
     <string name="l10n_noop_glance_widget_charge_49a8cb83">CHARGE</string>
     <string name="l10n_noop_glance_widget_effort_660752e7">EFFORT</string>
+    <string name="l10n_noop_glance_widget_heart_rate_410aa15c">Heart rate</string>
     <string name="l10n_noop_glance_widget_rest_cbaaa181">REST</string>
+    <string name="l10n_noop_glance_widget_strap_battery_a6c7f09c">Strap battery</string>
     <string name="l10n_notifications_settings_screen_02d_02d_ce23a78c">%1$02d:%2$02d</string>
     <string name="l10n_notifications_settings_screen_all_other_apps_51a8af2c">All other apps</string>
     <string name="l10n_notifications_settings_screen_app_name_wrist_alerts_dd3540fa">%1$s wrist alerts</string>
@@ -899,7 +918,12 @@
     <string name="l10n_scoring_guide_screen_scorecardhighlight_4af6985c">scoreCardHighlight</string>
     <string name="l10n_scoring_guide_screen_these_are_independent_approximations_from_a_301457ed">These are independent approximations from a consumer strap, built on open science: not medical advice, and not WHOOP\'s official scores.</string>
     <string name="l10n_scoring_guide_screen_vs_whoop_9a8126a7">VS WHOOP</string>
+    <string name="l10n_settings_screen_12_hour_41c18ba0">12-hour</string>
+    <string name="l10n_settings_screen_24_hour_18e86819">24-hour</string>
     <string name="l10n_settings_screen_advancedchevron_f22dfa01">advancedChevron</string>
+    <string name="l10n_settings_screen_bottom_bar_overlay_f257c96f">Bottom bar overlay</string>
+    <string name="l10n_settings_screen_clock_04f6b3ea">Clock</string>
+    <string name="l10n_settings_screen_hide_bar_when_scrolling_b077d9f3">Hide bar when scrolling</string>
     <string name="l10n_settings_screen_note_a2481d6c">· %1$s</string>
     <string name="l10n_settings_screen_repo_note_0a694b50">%1$s, %2$s</string>
     <string name="l10n_skin_temp_cards_screen_cycle_awareness_ffb94783">Cycle awareness</string>
@@ -1057,7 +1081,7 @@
     <string name="l10n_today_screen_arrange_today_6b699147">Arrange Today</string>
     <string name="l10n_today_screen_calibrating_37c2c9bd">Calibrating</string>
     <string name="l10n_today_screen_no_new_nights_from_your_strap_for_stale_days_8863bcfe">No new nights from your strap for %1$d days. Check it\'s connected and saving data.</string>
-    <string name="l10n_today_screen_calibratingnights_of_baselines_minnightsseed_3b76e55c">%1$s of %2$s</string>
+    <string name="l10n_today_screen_calibratingnights_of_baselines_minnightsseed_3b76e55c">%1$s of %2$s nights</string>
     <string name="l10n_today_screen_choose_which_cards_show_on_today_f79942e1">Choose which cards show on Today and reorder them with the arrows. </string>
     <string name="l10n_today_screen_close_bbfa773e">Close</string>
     <string name="l10n_today_screen_customise_your_cards_2428d761">Customise your cards</string>
@@ -1075,6 +1099,8 @@
     <string name="l10n_today_screen_needs_a_tracked_night_ccfd532a">needs a tracked night</string>
     <string name="l10n_today_screen_new_here_b81f2e17">New here?</string>
     <string name="l10n_today_screen_now_e3b82040">Now</string>
+    <string name="l10n_today_screen_pending_sync_cbe01f9e">Pending sync</string>
+    <string name="l10n_today_screen_strap_history_still_offloading_80140264">strap history still offloading</string>
     <string name="l10n_today_screen_pct_roundtoint_05ba4549">%1$s</string>
     <string name="l10n_today_screen_quick_actions_e47e8042">Quick actions</string>
     <string name="l10n_today_screen_readiness_word_749b3330">Readiness: %1$s</string>
@@ -1596,6 +1622,7 @@
     <string name="l10n_settings_screen_broadcast_strap_hr_garmin_ant_a39d0654">Broadcast strap HR (Garmin/ANT)</string>
     <string name="l10n_settings_screen_buzz_the_time_on_your_strap_06fc879d">Buzz the time on your strap</string>
     <string name="l10n_settings_screen_cancel_77dfd213">Cancel</string>
+    <string name="l10n_settings_screen_restore_3cbe6d6b">Restore</string>
     <string name="l10n_settings_screen_card_transparency_c5c7b4f3">Card transparency</string>
     <string name="l10n_settings_screen_charge_d4e1aee4">Charge</string>
     <string name="l10n_settings_screen_charge_effort_and_rest_and_how_d2c423a4">Charge, Effort and Rest, and how they differ from WHOOP</string>
@@ -1973,6 +2000,12 @@
     <string name="smart_alarm_body">Your smart alarm just went off.</string>
     <string name="battery_channel_name">Battery alerts</string>
     <string name="battery_channel_desc">Alerts when the strap battery is low or fully charged.</string>
+    <!-- K5: scheduled Coach morning-brief notification. -->
+    <string name="coach_brief_channel_name">Coach morning brief</string>
+    <string name="coach_brief_channel_desc">Today\'s coaching brief, generated on-device at your chosen time.</string>
+    <string name="coach_brief_title">Today\'s coaching brief</string>
+    <string name="coach_brief_unavailable_title">Coach brief unavailable</string>
+    <string name="coach_brief_unavailable_body">Couldn\'t generate today\'s brief. Open Coach to try again.</string>
     <string name="l10n_app_changelog_battery_saver_quiets_the_gauges_translated_bdbe8650">Battery saver quiets the gauges, translated Android notifications, and instant chart loads</string>
     <string name="l10n_health_screen_no_spo_import_or_health_value_408f8c55">No SpO₂ import or Health value</string>
     <string name="l10n_health_screen_raw_counts_only_needs_an_import_d0e33552">Raw counts only — needs an import</string>
@@ -2070,6 +2103,8 @@
     <string name="l10n_app_changelog_widgets_stop_inventing_numbers_naps_count_4f7491bb">Widgets stop inventing numbers, naps count toward sleep debt, and the Android status chips speak your language</string>
     <string name="l10n_sleep_screen_may_be_incomplete_7230dc27">May be incomplete</string>
     <string name="l10n_sleep_screen_little_motion_was_recorded_over_f061b7e4">Little motion was recorded overnight, so this night may be under-detected and the sleep total can read short. Make sure the strap fully synced.</string>
+    <string name="l10n_sleep_screen_partly_recorded_f43509ab">Partly recorded</string>
+    <string name="l10n_sleep_screen_only_of_this_night_s_window_9660332a">Only %1$d%% of this night\'s window has stage data. The stage totals cover only that part of the night.</string>
     <string name="haptics_section_title">Haptics</string>
     <string name="haptics_breathing_label">Breathing pacer</string>
     <string name="haptics_intervals_label">Interval timer</string>
@@ -2441,7 +2476,9 @@
     <string name="today_steps_headline_calibrated">Estimated from %1$d days your phone also counted</string>
     <string name="today_steps_headline_connect_phone">Connect your phone’s step count to estimate steps</string>
     <string name="today_steps_headline_more_days">Need %1$d more days where your phone also counted steps</string>
+    <string name="today_steps_headline_no_motion">No motion synced yet</string>
     <string name="today_synthesis_learning_baseline">Learning your baseline, %1$d of %2$d nights.</string>
+    <string name="today_synthesis_nights_without_hrv">%1$d of the last %2$d nights recorded no HRV. Check the strap is worn overnight and syncing.</string>
     <string name="today_last_night_date">Last night · %1$s</string>
     <string name="today_hr_min">Min</string>
     <string name="today_hr_avg">Avg</string>
@@ -2654,6 +2691,7 @@
     <string name="raw_diag_broadcast_hr">Broadcast heart rate from the strap</string>
     <string name="raw_diag_pair">Ask Android to pair</string>
     <string name="raw_diag_unbonded_offload">Try history sync without pairing</string>
+    <string name="raw_diag_clear_stale_bond">Clear a stale phone pairing</string>
     <string name="raw_diag_r22">Legacy R22 feature-flag experiment</string>
     <string name="raw_diag_r22_enable">Send legacy R22 enable sequence</string>
     <string name="raw_diag_r22_clear">Clear legacy R22 flags on strap</string>
@@ -2703,4 +2741,65 @@
     <string name="sleep_negative_minutes">−%1$d min</string>
     <string name="sleep_debt_chart_semantics">Per-night sleep balance: %1$d of 14 nights recorded, scale plus or minus %2$d minutes, net %3$s</string>
     <string name="vo2max_method_change_caption">The line breaks where the estimation method changed or was not recorded.</string>
+    <string name="l10n_app_changelog_a_whoop_5_that_stays_connected_7b490eee">A WHOOP 5 that stays connected, your body clock on the Sleep screen, and a Journal that knows No from nothing</string>
+    <string name="l10n_app_changelog_choose_a_12_hour_clock_sleep_8a19db5c">Choose a 12-hour clock, sleep from straps that bank no motion, and a strap log that stops guessing</string>
+    <string name="l10n_settings_screen_skin_temperature_fc103030">Skin temperature</string>
+    <string name="l10n_health_screen_no_measured_temperature_for_these_nights_showing_the_differe_69d4efae">No measured temperature for these nights — showing the difference from your baseline. A sync re-scores recent nights and fills it in.</string>
+    <string name="l10n_health_screen_only_nights_with_a_measured_temperature_are_shown_the_others_b6f7c45b">Only nights with a measured temperature are shown; the others recorded a baseline difference only.</string>
+    <string name="l10n_today_screen_this_night_was_staged_from_heart_rate_4d0f1f9b">This night was staged from heart rate alone, with no motion recorded, so HRV and resting heart rate could not be measured. A strap that is not fully paired is the usual cause.</string>
+    <string name="settings_day_cycle_title">Day cycle</string>
+    <string name="settings_day_cycle_description">Choose when steps and in-progress Effort start over. Naps never start a new day.</string>
+    <string name="settings_day_cycle_starts">Day starts</string>
+    <string name="settings_day_cycle_sleep">Main sleep</string>
+    <string name="settings_day_cycle_midnight">00:00</string>
+    <string name="settings_day_cycle_sleep_description">Default. The cycle follows the beginning of your detected main sleep. Before a main sleep is detected, local midnight is used.</string>
+    <string name="settings_day_cycle_midnight_description">Uses a conventional local calendar day from 00:00 to 00:00.</string>
+    <string name="l10n_settings_screen_bottom_bar_f84098a9">Bottom bar</string>
+    <string name="l10n_settings_screen_how_the_navigation_bar_looks_f186b099">How the navigation bar looks — its size, and how much of the screen shows through it.</string>
+    <string name="l10n_settings_screen_bar_size_2304bfbb">Bar size</string>
+    <string name="l10n_settings_screen_bar_transparency_3f648fbb">Bar transparency</string>
+    <string name="l10n_settings_screen_how_see_through_the_bar_is_ddb0c208">How see-through the bar is. The faintest step still shows its rim, so it can always be found.</string>
+
+    <!-- Coach screen: clear-conversation dialog, morning-brief settings, message actions, and
+         voice input. Externalized from CoachScreen.kt / CoachViewModel.kt hardcoded literals. -->
+    <string name="coach_clear_conversation_confirm">Clear conversation?</string>
+    <string name="coach_clear_conversation_message">This deletes the saved conversation from this device. Coach history is your own notes, not medical advice.</string>
+    <string name="coach_clear_action">Clear</string>
+    <string name="coach_token_estimate">~%1$d tokens</string>
+    <string name="coach_token_warning"> · may exceed small context windows</string>
+    <string name="coach_morning_brief">Morning brief</string>
+    <string name="coach_morning_brief_desc">A local notification with today\'s readiness + training plan, generated on-device each morning.</string>
+    <string name="coach_morning_brief_off">Off: nothing is generated or sent on a schedule.</string>
+    <string name="coach_morning_brief_time">Time</string>
+    <string name="coach_morning_brief_best_effort">Best-effort: Android decides exactly when a backgrounded app wakes to generate it.</string>
+    <string name="coach_copy_action">Copy</string>
+    <string name="coach_share_action">Share</string>
+    <string name="coach_save_to_journal">Save to Journal</string>
+    <string name="coach_listening">Listening…</string>
+    <string name="coach_generating">Generating…</string>
+    <string name="coach_generate_now">Generate now</string>
+    <string name="coach_status_suffix">: %1$s</string>
+    <string name="coach_no_reply">(no reply)</string>
+    <string name="coach_stream_interrupted">%1$s\n\n*(stream interrupted)*</string>
+    <string name="coach_today_brief_format">Today\'s brief\n\n%1$s</string>
+    <string name="coach_brief_widget_title">✦ Coach Brief</string>
+    <string name="coach_brief_widget_empty">No brief yet</string>
+    <string name="coach_brief_widget_enable">Enable Morning Brief in Coach settings to see today\'s readiness here.</string>
+
+    <!-- K4: voice input error messages (CoachVoiceInput.mapError). -->
+    <string name="coach_voice_error_no_speech">No speech was heard.</string>
+    <string name="coach_voice_error_audio">Audio recording failed.</string>
+    <string name="coach_voice_error_busy">Speech recognizer is busy. Try again.</string>
+    <string name="coach_voice_error_permission">Microphone permission denied.</string>
+    <string name="coach_voice_error_generic">Voice input failed. Try again.</string>
+    <string name="coach_voice_error_server">On-device speech is unavailable for this locale.</string>
+    <string name="coach_voice_error_unavailable">On-device speech recognition is not available on this device or locale.</string>
+    <string name="coach_voice_unavailable">On-device speech recognition is not available on this device or locale.</string>
+    <string name="coach_voice_permission_denied">Microphone permission denied. Enable it in Settings to use voice input.</string>
+    <string name="units_settings_blurb">Choose body measurements and exercise distance separately. Your data is always stored the same way; these settings only change its display.</string>
+    <string name="units_body_measurements">Body measurements</string>
+    <string name="units_exercise_distance_pace">Exercise distance &amp; pace</string>
+    <string name="units_kilometres">Kilometres</string>
+    <string name="units_miles">Miles</string>
+    <string name="units_follow_body">Follow body</string>
 </resources>

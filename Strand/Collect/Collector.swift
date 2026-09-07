@@ -70,6 +70,11 @@ final class Collector {
     /// #1118: strap-log sink for the per-transport R-R census. Optional and defaulted to nil so the
     /// test fakes that construct a Collector are untouched; `BLEManager` wires its own `log`.
     private let log: ((String) -> Void)?
+    /// #1635: rows ACCEPTED per stream, handed up so `BLEManager` can tally them per LINK and say which
+    /// streams banked when it writes the link epitaph. The counts already exist — `StreamStore.insert`
+    /// returns them and the standard-HR path already binds them for its own trace line — so this carries
+    /// a measurement that was being discarded, rather than taking a new one.
+    private let onBanked: ((BankedCounts) -> Void)?
     /// #1118: last emit of each LIVE census line, unix seconds; 0 = never. Rate-limited — see
     /// `RrEmissionStats.shouldEmitLiveCensus`.
     ///
@@ -97,22 +102,32 @@ final class Collector {
     private var lastStdInsertFailureLogMs: Int64 = 0
     private var lastRealtimeInsertFailureLogMs: Int64 = 0
 
-    /// Standard 0x2A37 HR/RR buffer — the reliable, always-on stream, recorded continuously
+    /// Standard 0x2A37 HR/RR/contact buffer — the reliable, always-on stream, recorded continuously
     /// (independent of the custom realtime stream or which screen is open).
     private var stdHR: [HRSample] = []
     private var stdRR: [RRInterval] = []
+    private var stdContact: [WhoopEvent] = []
+    /// Last contact state buffered, so only transitions are recorded. See `shouldRecordContact`.
+    private var lastStdContact: StandardHRContact?
     private var batchStartedAt: TimeInterval
     var bufferedCount: Int { buffer.count }
+
+    /// The per-stream accepted-row counts `StreamStore.insert` returns, named so the closure that carries
+    /// them is readable at both ends.
+    typealias BankedCounts = (hr: Int, rr: Int, events: Int, battery: Int,
+                              spo2: Int, skinTemp: Int, resp: Int, gravity: Int)
 
     init(store: StoreWriting, deviceId: String,
          policy: CollectorPolicy = .default,
          enableRawCapture: Bool = false,
          log: ((String) -> Void)? = nil,
+         onBanked: ((BankedCounts) -> Void)? = nil,
          now: @escaping () -> Int = { Int(Date().timeIntervalSince1970) },
          monotonic: @escaping () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }) {
         self.store = store; self.deviceId = deviceId; self.policy = policy
         self.enableRawCapture = enableRawCapture
         self.log = log
+        self.onBanked = onBanked
         self.now = now; self.monotonic = monotonic
         self.batchStartedAt = monotonic()
         self.concreteStore = store as? WhoopStore
@@ -226,8 +241,9 @@ final class Collector {
             }
         }
         do {
-            try await store.insert(streams, deviceId: deviceId)   // DECODED FIRST (durable)
+            let inserted = try await store.insert(streams, deviceId: deviceId)   // DECODED FIRST (durable)
             realtimeInsertFailures = 0
+            onBanked?(inserted)
         } catch {
             // Re-buffer at the front so these frames (and their parses) are retried on the next cadence.
             buffer.insert(contentsOf: batch, at: 0)
@@ -265,20 +281,38 @@ final class Collector {
 
     /// Buffer one standard Heart-Rate-Measurement reading. No clock correlation needed —
     /// these carry a wall-clock `ts` directly. Auto-flushes ~every 30 readings (~30s).
-    func ingestStandardHR(hr: Int, rr: [Int], at ts: Int) {
-        if hr >= 30, hr <= 220 { stdHR.append(HRSample(ts: ts, bpm: hr)) }
-        for r in rr where r >= 250 && r <= 3000 { stdRR.append(RRInterval(ts: ts, rrMs: r)) }
-        if stdHR.count + stdRR.count >= 30 {
-            Task { @MainActor in await self.flushStandardHR() }
+    func ingestStandardHR(hr: Int, rr: [Int], contact: StandardHRContact? = nil, at ts: Int) {
+        let acceptedHR = (30...220).contains(hr) ? 1 : 0
+        let acceptedRR = rr.filter { (250...3000).contains($0) }
+        if acceptedHR == 1 { stdHR.append(HRSample(ts: ts, bpm: hr)) }
+        stdRR.append(contentsOf: acceptedRR.map { RRInterval(ts: ts, rrMs: $0) })
+        // Only the CHANGES. Advanced here rather than at flush because the event travels in the buffer
+        // until it persists: a failed insert re-inserts it at the front, so nothing has to be unwound.
+        if let contact, StandardHRMapping.shouldRecordContact(previous: lastStdContact, current: contact) {
+            lastStdContact = contact
+            stdContact.append(contentsOf: StandardHRMapping.samples(
+                fromHR: hr, rr: [], contact: contact, at: ts
+            ).events)
+        }
+        log?(LivePersistTrace.standardHRHostReceivedLine(
+            hostUnixSeconds: ts,
+            acceptedHRRows: acceptedHR, acceptedRRRows: acceptedRR.count,
+            rejectedHRRows: 1 - acceptedHR, rejectedRRRows: rr.count - acceptedRR.count,
+            pendingHRRows: stdHR.count, pendingRRRows: stdRR.count))
+        if stdHR.count + stdRR.count + stdContact.count >= 30 {
+            Task { @MainActor in await self.flushStandardHR(reason: .cadence) }
         }
     }
 
-    /// Persist the buffered standard HR/RR. Re-buffers on failure so nothing is lost.
-    func flushStandardHR() async {
-        guard !stdHR.isEmpty || !stdRR.isEmpty else { return }
-        let hr = stdHR, rr = stdRR
+    /// Persist the buffered standard HR/RR/contact. Re-buffers on failure so nothing is lost.
+    func flushStandardHR(reason: LivePersistTrace.StandardHRFlushReason = .explicit) async {
+        guard !stdHR.isEmpty || !stdRR.isEmpty || !stdContact.isEmpty else { return }
+        let hr = stdHR, rr = stdRR, contact = stdContact
         stdHR.removeAll(keepingCapacity: true)
         stdRR.removeAll(keepingCapacity: true)
+        stdContact.removeAll(keepingCapacity: true)
+        log?(LivePersistTrace.standardHRFlushAttemptLine(
+            reason: reason, offeredHRRows: hr.count, offeredRRRows: rr.count))
         // #1118: census this batch BEFORE it is stored, exactly as the historical path does, so a strap
         // log carries one `ratioRep` per transport. If each transport reports ~1.0 while the stored night
         // reads 2.77, the over-count is the UNION of the transports and no single decoder is at fault —
@@ -295,12 +329,21 @@ final class Collector {
             }
         }
         do {
-            try await store.insert(Streams(hr: hr, rr: rr), deviceId: deviceId)
+            let inserted = try await store.insert(Streams(hr: hr, rr: rr, events: contact), deviceId: deviceId)
             stdInsertFailures = 0
+            onBanked?(inserted)
+            log?(LivePersistTrace.standardHRFlushSucceededLine(
+                reason: reason, offeredHRRows: hr.count, offeredRRRows: rr.count,
+                insertedHRRows: inserted.hr, insertedRRRows: inserted.rr))
         } catch {
             stdHR.insert(contentsOf: hr, at: 0)
             stdRR.insert(contentsOf: rr, at: 0)
+            stdContact.insert(contentsOf: contact, at: 0)
             stdInsertFailures += 1
+            log?(LivePersistTrace.standardHRRebufferedForRetryLine(
+                reason: reason, attemptedHRRows: hr.count, attemptedRRRows: rr.count,
+                pendingHRRows: stdHR.count, pendingRRRows: stdRR.count,
+                consecutiveFailures: stdInsertFailures))
             let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
             if LivePersistTrace.shouldEmitLiveInsertFailure(lastEmitMs: lastStdInsertFailureLogMs,
                                                             nowMs: nowMs) {

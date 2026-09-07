@@ -313,7 +313,8 @@ struct SleepView: View {
     /// Locale-formatted clock time (no date) for the banner's window range.
     private func clockTime(_ ts: Int) -> String {
         Date(timeIntervalSince1970: TimeInterval(ts))
-            .formatted(date: .omitted, time: .shortened)
+            .formatted(Date.FormatStyle(date: .omitted, time: .shortened)
+                .locale(AppClock.formattingLocale))   // #1821
     }
 
     /// The transient undo strip: a Rest-tinted frosted banner with the suppressed window and a real Undo
@@ -833,6 +834,14 @@ struct SleepView: View {
             if stageStagingIsSparse(night) {
                 stageIncompleteNote
             }
+            // #1716 — a device-provided hypnogram assembled from records that never all arrived leaves a
+            // HOLE in the timeline while the session still spans the whole night, so a night we saw a
+            // fraction of renders as a complete one. Say which fraction. This is the only place the
+            // coverage guard becomes visible: the engine's matching Rest downgrade lands in a transient
+            // `DayResult` field no screen reads, so the gate was otherwise correct and inert.
+            if let coverage = stageCoverage(night), coverage < HypnogramCoverage.minCoverage {
+                stagePartialNote(coverage)
+            }
             // For an Oura-provided night, say plainly that this split is the ring's RAW on-device
             // classification — so the larger Awake / smaller Deep+REM here isn't misread as the polished
             // numbers the Oura app shows for the same night (the app post-processes the same stream).
@@ -962,6 +971,17 @@ struct SleepView: View {
         night.sourceBlocks.contains { $0.stagingSparse == true }
     }
 
+    /// How much of this night's window its stage timeline actually accounts for, or nil when coverage is
+    /// not a measurable question for the payloads it was built from (#1716). Asked of the bridged main-night
+    /// GROUP via the SAME shared accumulation `analyzeDay` uses, threading the same learned habitual so the
+    /// group resolves identically to the hero's — a per-row answer would be the wrong question for a
+    /// fragmented night. Mirror in Kotlin.
+    private func stageCoverage(_ night: Night) -> Double? {
+        let group = SleepView.mainNightGroup(night.sourceBlocks,
+                                             habitualMidsleepSec: night.habitualMidsleepSec)
+        return HypnogramCoverage.groupFraction(group.isEmpty ? night.sourceBlocks : group)
+    }
+
     /// Pure H9 gate (unit-testable without a live view) — true when a night's staging is low-confidence:
     /// a high-efficiency night whose deep+REM share is below the restorative floor. Built on the engine's
     /// own `ScoreConfidence.rest(...)` so the UI flag and the persisted Rest confidence agree. `asleepMin`,
@@ -1018,6 +1038,35 @@ struct SleepView: View {
         }
         .padding(.horizontal, 2)
         // `.combine` builds the a11y label from the badge + body Text (no separate localized string).
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The PARTIAL-TIMELINE caveat (#1716): this night's stage segments account for less than
+    /// `HypnogramCoverage.minCoverage` of the window the session claims, so the stage totals describe only
+    /// the part of the night the timeline accounts for. Distinct from BOTH notes above — H9 doubts the
+    /// deep/REM SPLIT of a fully-described night, #345 doubts a night staged on thin motion, and this one
+    /// says plainly that some of the night is MISSING rather than doubted. It is the visible half of the
+    /// engine-side guard: `analyzeDay` already downgrades Rest to `.building` on exactly this condition,
+    /// but that tier is transient engine output no screen reads, so without this the gate was inert.
+    ///
+    /// HONEST-DATA: it reports only what was observed and changes no number. The percentage is floored,
+    /// never rounded — 94.8% must not print as "95%" and appear to contradict the gate that flagged it.
+    /// The copy names NO cause and offers NO remedy, deliberately: on the 08-29/30 and 08-30/31 captures the
+    /// missing codes DID reach NOOP — the ring reported them unwritten (0xFF), the persist log trimmed
+    /// exactly as many as the hole is wide — and re-persisting the same night 5 and 8 times left the hole
+    /// intact. "The rest never reached NOOP" and "syncing again can fill in" were both wrong. Nor does the
+    /// copy point at the totals by DIRECTION: both hosts render this note below the stage-breakdown card
+    /// that carries them, so "the totals below" pointed the wrong way on every screen that shipped it.
+    private func stagePartialNote(_ coverage: Double) -> some View {
+        let pct = Int((coverage * 100).rounded(.down))
+        return HStack(alignment: .top, spacing: 8) {
+            SourceBadge("Partly recorded", tint: StrandPalette.statusWarning)
+            Text("Only \(pct)% of this night's window has stage data. The stage totals cover only that part of the night.")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 2)
         .accessibilityElement(children: .combine)
     }
 
@@ -1310,9 +1359,9 @@ struct SleepView: View {
     // MARK: - WHOOP stage-timeline rows (the sleep-details reference design, ryanAtriumAi #988)
 
     /// Clock labels for the timeline axis; "jmm" respects the device 12/24-hour setting.
-    private static let stageAxisFormatter: DateFormatter = {
-        let f = DateFormatter(); f.locale = AppLanguage.activeLocale; f.setLocalizedDateFormatFromTemplate("jmm"); return f
-    }()
+    /// #1821: routed through AppClock so the Clock format setting reaches this label. Was a `static
+    /// let`, which would have frozen the reader's choice at first use until the app relaunched.
+    private static var stageAxisFormatter: DateFormatter { AppClock.hourMinuteFormatter() }
 
     /// The WHOOP sleep-stages chart: a stack of four per-stage timeline rows (AWAKE · LIGHT ·
     /// DEEP · REM, WHOOP's order) over a shared onset→wake time axis. Each row is independently

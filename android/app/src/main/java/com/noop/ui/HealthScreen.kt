@@ -1219,8 +1219,13 @@ fun VitalSignsScreen(vm: AppViewModel, onVitalClick: (String) -> Unit = {}) {
     // Read the toggle here in the composable body, NOT inside remember{} — LocalContext.current is a
     // @Composable read and is illegal inside the calculation lambda; pass the resolved value in + key on it.
     val spo2CandidateDisplay = NoopPrefs.spo2CandidateDisplay(LocalContext.current)
-    val vitals = remember(selectedMetric, days, tempUnit, spo2CandidateByDay, spo2CandidateDisplay, hrvOverCountByDay) {
-        selectedMetric?.let { vitalsFor(it, days, tempUnit, spo2CandidateByDay, spo2CandidateDisplay, hrvOverCountByDay) }.orEmpty()
+    val skinTempPreferred = UnitPrefs.skinTempPreferred(LocalContext.current)   // #1846, same rule
+    val vitals = remember(selectedMetric, days, tempUnit, spo2CandidateByDay, spo2CandidateDisplay,
+                          hrvOverCountByDay, skinTempPreferred) {
+        selectedMetric?.let {
+            vitalsFor(it, days, tempUnit, spo2CandidateByDay, spo2CandidateDisplay, hrvOverCountByDay,
+                      skinTempPreferred)   // #1846
+        }.orEmpty()
     }
 
     ScreenScaffold(
@@ -1750,6 +1755,8 @@ private data class VitalDetailModel(
     val zeroReference: Boolean = false,
     val stepped: Boolean = false,
     val zoneBands: List<Pair<ClosedFloatingPointRange<Double>, Color>> = emptyList(),
+    /** #1847: why the screen is not showing what Settings asked for. Null when it is. */
+    val fallbackNote: String? = null,
 ) {
     /** (day, value) projection the trend chart + range helpers consume — SAME order as [readings], so the
      *  chart, the header count, and the table can never drift apart. */
@@ -1906,9 +1913,12 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
             seriesLoaded = true
         }
     }
+    // #1846: read the preference OUTSIDE remember (a Composable call is not allowed in its calculation)
+    // and make it a KEY, so flipping the setting rebuilds the model instead of serving a cached one.
+    val skinTempPreferred = UnitPrefs.skinTempPreferred(LocalContext.current)
     val detail = if (isSeriesBacked) seriesDetail
-    else remember(days, key, tempUnit, effortScale, spo2CandidateByDay) {
-        buildVitalDetail(days, key, tempUnit, effortScale, spo2CandidateByDay)
+    else remember(days, key, tempUnit, effortScale, spo2CandidateByDay, skinTempPreferred) {
+        buildVitalDetail(days, key, tempUnit, effortScale, spo2CandidateByDay, skinTempPreferred)
     }
     var range by remember { mutableStateOf(VitalDetailRange.MONTH) }
 
@@ -2061,6 +2071,14 @@ fun VitalDetailScreen(vm: AppViewModel, key: String) {
                             style = NoopType.footnote,
                             color = Palette.textTertiary,
                         )
+                        detail.fallbackNote?.let { note ->
+                            Text(
+                                text = note,
+                                style = NoopType.footnote,
+                                color = Palette.textTertiary,
+                                modifier = Modifier.padding(top = 6.dp),
+                            )
+                        }
                     }
                 }
                 SegmentedPillControl(
@@ -2252,6 +2270,9 @@ private fun buildVitalDetail(
     tempUnit: TemperatureUnit,
     effortScale: EffortScale = EffortScale.HUNDRED,
     spo2CandidateByDay: Map<String, Double> = emptyMap(),
+    // #1846: travels like tempUnit — read from prefs by the caller, never defaulted quietly here, so the
+    // setting cannot look wired while doing nothing.
+    skinTempPreferred: SkinTempDisplay.Kind = SkinTempDisplay.Kind.ABSOLUTE,
 ): VitalDetailModel? {
     return when (key) {
     // The Today Key-Metrics Recovery tile's drill-in: the Recovery (Charge) trend timeline, matching the
@@ -2318,25 +2339,90 @@ private fun buildVitalDetail(
         format = { it.roundToInt().toString() },
     )
     "skin" -> {
-        val deviations = days.mapNotNull { row ->
-            row.skinTempDevC?.takeIf { !VitalBands.isAbsoluteSkinTemp(it) }
-                ?.let { VitalReading(row.day, it, row.deviceId) }
-        }
-        if (deviations.isEmpty()) return null
-        val deviationKind = SkinTempDisplay.Kind.DEVIATION
         val fahrenheit = tempUnit == TemperatureUnit.FAHRENHEIT
-        val presentation = skinDeviationPresentation(deviations)
+        // #1850: the preference applies across the WINDOW, not just the newest row. Keying the whole
+        // screen off the newest night meant a wearer with twenty stored temperatures and one recent night
+        // without saw twenty-three deltas — the setting says Temperature and the app HAS temperatures.
+        // `leadReading`'s rule lifted to the window: the chosen kind wins whenever any night carries it,
+        // the other is still the fallback, so a choice can never empty the screen.
+        //
+        // An absolute may live in EITHER column (#622: a WHOOP CSV import writes absolute °C into
+        // skinTempDevC), so both count here and in the series below.
+        val anyAbsolute = days.any { row ->
+            row.skinTempC != null || row.skinTempDevC?.let { VitalBands.isAbsoluteSkinTemp(it) } == true
+        }
+        val anyDeviation = days.any { row ->
+            row.skinTempDevC?.let { !VitalBands.isAbsoluteSkinTemp(it) } == true
+        }
+        if (!anyAbsolute && !anyDeviation) return null
+        val leadsAbsolute = when (skinTempPreferred) {
+            SkinTempDisplay.Kind.ABSOLUTE -> anyAbsolute
+            SkinTempDisplay.Kind.DEVIATION -> !anyDeviation && anyAbsolute
+        }
+        val kind = if (leadsAbsolute) SkinTempDisplay.Kind.ABSOLUTE else SkinTempDisplay.Kind.DEVIATION
+        val unit = SkinTempDisplay.unitSymbol(kind, fahrenheit)
+        val skinReadings = if (leadsAbsolute) {
+            // An absolute-led series takes EVERY absolute reading, whichever column holds it. A WHOOP CSV
+            // import writes absolute °C straight into skinTempDevC (`skin_temp_celsius`, #622 bimodal), so
+            // reading skinTempC alone hid a wearer's imported temperatures from a temperature chart — and
+            // made the shortened-series note call them "a baseline difference only", which they are not.
+            // Mixing is only unsound ACROSS scales; these are the same scale.
+            days.mapNotNull { row ->
+                (row.skinTempC ?: row.skinTempDevC?.takeIf { VitalBands.isAbsoluteSkinTemp(it) })
+                    ?.let { VitalReading(row.day, it, row.deviceId) }
+            }
+        } else {
+            // Genuine deviations only — an imported absolute sitting in this column belongs to the other
+            // scale and is excluded, exactly as before.
+            days.mapNotNull { row ->
+                row.skinTempDevC
+                    ?.takeIf { !VitalBands.isAbsoluteSkinTemp(it) }
+                    ?.let { value -> VitalReading(row.day, value, row.deviceId) }
+            }
+        }
+        val title = if (kind == SkinTempDisplay.Kind.ABSOLUTE) {
+            uiString(R.string.l10n_health_screen_skin_temperature_f59127f6)
+        } else {
+            uiString(R.string.skin_temp_delta_title)
+        }
+        if (skinReadings.isEmpty()) return null
+        val presentation = if (kind == SkinTempDisplay.Kind.DEVIATION) {
+            skinDeviationPresentation(skinReadings)
+        } else {
+            null
+        }
         val band = presentation?.let { it.lowerBound..it.upperBound }
         VitalDetailModel(
             key = key,
-            title = uiString(R.string.l10n_health_screen_skin_temperature_f59127f6),
-            unit = SkinTempDisplay.unitSymbol(deviationKind, fahrenheit),
+            title = title,
+            unit = unit,
             color = Palette.metricAmber,
-            readings = deviations,
-            format = { c -> SkinTempDisplay.numberString(c, deviationKind, fahrenheit, decimals = 1) },
+            readings = skinReadings,
+            format = { c -> SkinTempDisplay.numberString(c, kind, fahrenheit, decimals = 1) },
             rangeBand = band,
-            fixedDomain = symmetricZeroDomain(deviations.map { it.value }, band),
-            zeroReference = true,
+            fixedDomain = if (kind == SkinTempDisplay.Kind.DEVIATION) {
+                symmetricZeroDomain(skinReadings.map { it.value }, band)
+            } else {
+                null
+            },
+            zeroReference = kind == SkinTempDisplay.Kind.DEVIATION,
+            // #1847: Settings asked for a temperature and none of these nights has one, so the screen shows
+            // the deviation instead. Say so — silently falling back is why the setting reads as broken.
+            // Nights scored before skinTempC shipped kept only the deviation; a scoring pass refills them.
+            fallbackNote = when {
+                shouldExplainSkinTempFallback(
+                    skinTempPreferred, leadsAbsolute, anyAbsolute,
+                ) ->
+                    uiString(R.string.l10n_health_screen_no_measured_temperature_for_these_nights_showing_the_differe_69d4efae)
+                // Leading with the absolute drops deviation-only nights from the series — which can now
+                // include the most recent one. Say why rather than letting history look like it vanished.
+                shouldExplainShortenedSkinTempSeries(
+                    leadsAbsolute = leadsAbsolute,
+                    shownReadings = skinReadings.size,
+                    rowsWithEitherNumber = days.count { it.skinTempC != null || it.skinTempDevC != null },
+                ) -> uiString(R.string.l10n_health_screen_only_nights_with_a_measured_temperature_are_shown_the_others_b6f7c45b)
+                else -> null
+            },
         )
     }
     else -> null

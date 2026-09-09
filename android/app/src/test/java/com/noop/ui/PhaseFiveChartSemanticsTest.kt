@@ -11,7 +11,11 @@ class PhaseFiveChartSemanticsTest {
     }
 
     @Test fun deviationDomainIsSymmetricAroundZeroAndIncludesBand() {
-        assertEquals(-0.8..0.8, symmetricZeroDomain(listOf(-0.2, 0.7), -0.6..0.6))
+        // The widest of the readings and the band bounds sets the (symmetric) extent…
+        assertEquals(-1.5..1.5, symmetricZeroDomain(listOf(-0.2, 1.5), -0.6..0.6))
+        assertEquals(-1.8..1.8, symmetricZeroDomain(listOf(-0.2, 0.7), -1.8..1.8))
+        // …with a ±1 floor, so a quiet night's tiny deviations don't get magnified into a scare.
+        assertEquals(-1.0..1.0, symmetricZeroDomain(listOf(-0.2, 0.7), -0.6..0.6))
         assertEquals(-1.0..1.0, symmetricZeroDomain(emptyList(), null))
     }
 

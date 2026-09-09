@@ -2760,4 +2760,21 @@
     <string name="l10n_hr_glance_widget_updated_time_1b5feedb">Zaktualizowano %1$s</string>
     <string name="widget_hr_name">NOOP Tętno</string>
     <string name="widget_hr_description">Tętno na żywo z ostatnimi trzema godzinami jako wykres.</string>
+    <string name="sleep_body_clock_explanation">Oszacowane na podstawie pory tętna z ostatnich 14 dni. Porównywana jest pora snu, a nie jego długość.</string>
+    <string name="sleep_estimated_body_clock">Szacowany zegar biologiczny</string>
+    <string name="sleep_movement_relative">Ruch (względny)</string>
+    <string name="sleep_movement_relative_explanation">Skalowane do szczytu tej nocy</string>
+    <string name="sleep_movement_relative_semantics">Ruch, względny; skalowane do szczytu tej nocy</string>
+    <string name="sleep_actual_window">Rzeczywisty sen  %1$s</string>
+    <string name="sleep_estimated_window">Szacowany zegar biologiczny  %1$s</string>
+    <string name="sleep_body_clock_semantics">%1$s. Rzeczywisty sen %2$s. Szacowany zegar biologiczny %3$s. Porównywana jest pora, a nie długość.</string>
+    <string name="sleep_sleeping_heart_rate">Tętno podczas snu</string>
+    <string name="sleep_heart_rate_range">%1$d–%2$d bpm</string>
+    <string name="sleep_duration_scale_top">%1$.1f h</string>
+    <string name="sleep_duration_scale_zero">0 h</string>
+    <string name="sleep_duration_need">Zapotrzebowanie %1$.1f h</string>
+    <string name="sleep_debt_coverage">Pokrycie: zarejestrowano %1$d z 14 nocy · słupki pokazują minuty powyżej lub poniżej zapotrzebowania</string>
+    <string name="sleep_positive_minutes">+%1$d min</string>
+    <string name="sleep_negative_minutes">−%1$d min</string>
+    <string name="sleep_debt_chart_semantics">Bilans snu na noc: zarejestrowano %1$d z 14 nocy, skala plus minus %2$d minut, netto %3$s</string>
 </resources>

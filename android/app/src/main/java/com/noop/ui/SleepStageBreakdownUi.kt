@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -101,6 +102,7 @@ private fun StageBreakdownRow(
             .then(if (onTap != null) Modifier.clickable(onClickLabel = "Select $stage stage", onClick = onTap) else Modifier)
             .alpha(visual.alpha)
             .semantics {
+                selected = visual.selected
                 contentDescription =
                     uiString(R.string.l10n_sleep_screen_stage_durationtext_minutes_percent_percent_of_477dbf14, stage, durationText(minutes), percent)
             },
@@ -649,7 +651,7 @@ private val garminSleepREM: Color get() = brand(BrandSleepRamp.GARMIN_REM_LIGHT,
 private val garminSleepLight: Color get() = brand(BrandSleepRamp.GARMIN_LIGHT_LIGHT, BrandSleepRamp.GARMIN_LIGHT_DARK)
 private val garminSleepDeep: Color get() = brand(BrandSleepRamp.GARMIN_DEEP_LIGHT, BrandSleepRamp.GARMIN_DEEP_DARK)
 
-private fun stageColorForRamp(name: String, palette: SleepStagePalette): Color = when (palette) {
+internal fun stageColorForRamp(name: String, palette: SleepStagePalette): Color = when (palette) {
     SleepStagePalette.NOOP -> stageColorFor(name)
     SleepStagePalette.OURA -> when (canonicalStage(name)) {
         "deep" -> ouraSleepDeep; "rem" -> ouraSleepREM; "light" -> ouraSleepLight

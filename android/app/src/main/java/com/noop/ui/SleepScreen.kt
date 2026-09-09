@@ -67,6 +67,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected as selectedSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -725,13 +726,12 @@ fun SleepScreen(
                     SleepReorderableSection(k, sleepListState, sleepSectionDrag, persistSleepOrder) {
                     Column {
                     Spacer(Modifier.height(Metrics.selectorTopUp))
-                    // #1537: the night's heart rate for the Classic view's line chart. Loaded here
-                    // because Hero takes data rather than a repo, and keyed on the night so paging the
-                    // carousel refetches. 60-second buckets, matching the iOS Sleep tab's hrBuckets call.
-                    val hrFrom = night?.session?.effectiveStartTs
-                    val hrTo = night?.session?.endTs
-                    var nightHr by remember(hrFrom, hrTo) { mutableStateOf(emptyList<HrBucket>()) }
-                    LaunchedEffect(hrFrom, hrTo, vm.activeStrapId) {
+                    // Read the whole bridged night, not just its winning fragment. Refresh after sync
+                    // even when the night bounds stay unchanged; never carry HR across a device switch.
+                    val hrFrom = night?.heroOnsetTs ?: night?.session?.effectiveStartTs
+                    val hrTo = night?.heroWakeTs ?: night?.session?.endTs
+                    var nightHr by remember(hrFrom, hrTo, vm.activeStrapId) { mutableStateOf(emptyList<HrBucket>()) }
+                    LaunchedEffect(hrFrom, hrTo, vm.activeStrapId, days, freshnessLive.lastSyncAt) {
                         nightHr = if (hrFrom != null && hrTo != null && hrTo > hrFrom) {
                             runCatching {
                                 vm.repo.hrBucketsUnion(vm.activeStrapId, hrFrom, hrTo, bucketSeconds = 60L)
@@ -1276,8 +1276,7 @@ private fun Hero(
     nightLabel: String,
     onNavigate: (Int) -> Unit,
     session: SleepSession? = null,
-    // #1537: the night's HR buckets for the Classic view's heart-rate line, loaded by the caller (which
-    // holds the repo) and passed in like every other input here. Empty = nothing to draw.
+    // The whole night's minute HR buckets, shared by every stage-breakdown chart style.
     nightHr: List<HrBucket> = emptyList(),
     // #1492: the bridged night's fragments, forwarded to the editor so it frames itself on the whole
     // night rather than on `session` (the winning fragment, which defines neither displayed bound).
@@ -1376,6 +1375,14 @@ private fun Hero(
                             StageBreakdownRows(s, chartStyle.stagePalette, selectedStage) { selectedStage = it }
                         },
                     ) {
+                        SleepHeartRateChart(
+                            buckets = nightHr,
+                            segments = filledSegments,
+                            onsetTs = windowOnsetTs ?: session?.effectiveStartTs,
+                            wakeTs = windowWakeTs ?: session?.endTs,
+                            selectedStage = selectedStage,
+                            palette = chartStyle.stagePalette,
+                        )
                         FilledHypnogram(
                             segments = filledSegments,
                             onsetTs = windowOnsetTs ?: session?.effectiveStartTs,
@@ -1402,6 +1409,8 @@ private fun Hero(
                             onsetTs = windowOnsetTs ?: session?.effectiveStartTs,
                             wakeTs = windowWakeTs ?: session?.endTs,
                             motionEpochs = motionEpochs,
+                            nightHr = nightHr,
+                            timestampedSegments = display.hypnogramSegments.orEmpty(),
                         )
                     }
                 }
@@ -1417,37 +1426,13 @@ private fun Hero(
                     // Reconstructed architecture (light → deep → light → rem → light → awake) as the
                     // flat proportional strip. No MotionStrip and no fake steps here: invented
                     // architecture has no genuine timeline to anchor to (mirrors the iOS else-branch).
-                    // #1537: heart rate across the night, above the stage strip — the twin of the iOS
-                    // Classic view's `sleepHRChart`, which Android never had. Same window as the stage
-                    // strip below (the night's own onset..wake), and the same 60-second buckets iOS asks
-                    // for, so the two platforms plot the same shape from the same rows. Drawn only with
-                    // at least two buckets, matching iOS's `buckets.count >= 2`: one point is not a line,
-                    // and a night the strap never sampled should show nothing rather than a flat stub.
-                    if (nightHr.size >= 2) {
-                        val hrValues = nightHr.map { it.avgBpm }
-                        Column(verticalArrangement = Arrangement.spacedBy(Metrics.space6)) {
-                            Row(modifier = Modifier.fillMaxWidth()) {
-                                Text(uiString(R.string.sleep_sleeping_heart_rate), style = NoopType.overline, color = Palette.textSecondary)
-                                Spacer(Modifier.weight(1f))
-                                Text(
-                                    uiString(R.string.sleep_heart_rate_range, Math.round(hrValues.min()).toInt(), Math.round(hrValues.max()).toInt()),
-                                    style = NoopType.captionNumber,
-                                    color = Palette.textPrimary,
-                                )
-                            }
-                            LineChart(
-                                values = hrValues,
-                                modifier = Modifier.fillMaxWidth().height(Metrics.compactChartHeight)
-                                    .semantics {
-                                        contentDescription = uiString(R.string.l10n_sleep_screen_sleep_heart_rate_chart_8ec47ae1)
-                                    },
-                                color = Palette.metricRose,
-                                fill = false,
-                                timestamps = nightHr.map { it.bucket },
-                                formatValue = { "${Math.round(it)} bpm" },
-                            )
-                        }
-                    }
+                    SleepHeartRateChart(
+                        buckets = nightHr,
+                        segments = display.hypnogramSegments.orEmpty(),
+                        onsetTs = windowOnsetTs ?: session?.effectiveStartTs,
+                        wakeTs = windowWakeTs ?: session?.endTs,
+                        selectedStage = selectedStage.takeIf { !display.hypnogramSegments.isNullOrEmpty() },
+                    )
                     val segments = stageSegments(s)
                     if (segments.isNotEmpty()) {
                         HypnogramWithAxis(
@@ -2044,7 +2029,8 @@ private const val STAGE_ROW_SMOOTH_SEC = 90.0
  * iOS #988 port — the WHOOP-style per-stage timeline stack that replaces the flat hypnogram strip
  * for real-stage nights. Four tappable rows in WHOOP order (AWAKE · LIGHT · DEEP · REM), each a
  * hatched full-night track with solid segments on the shared onset→wake axis; MotionStrip and the
- * clock-label axis sit under the rows on the SAME timeline; a fixed-height insight slot closes the
+ * clock-label axis sit under the rows on the SAME timeline; the HR plot above highlights recorded
+ * intervals of the tapped stage. A fixed-height insight slot closes the
  * stack. The rows ARE the legend — no dot row, no footer. Mirrors SleepView.stageTimeline.
  */
 @Composable
@@ -2054,6 +2040,8 @@ internal fun StageTimeline(
     onsetTs: Long?,
     wakeTs: Long?,
     motionEpochs: List<Double>,
+    nightHr: List<HrBucket> = emptyList(),
+    timestampedSegments: List<PersistedSegment> = emptyList(),
 ) {
     // Night span: the session window when we have one (the clock axis uses the same span), else
     // the segments' own summed minutes — the fractions are identical either way.
@@ -2067,9 +2055,18 @@ internal fun StageTimeline(
         displaySmoothed(stageIntervalsFromWeights(realSegments, spanSec), STAGE_ROW_SMOOTH_SEC)
     }
     // Tap-to-highlight; keyed on the night's segments so navigating nights clears the selection.
-    var selectedStage by remember(realSegments) { mutableStateOf<String?>(null) }
+    var selectedStage by remember(realSegments, onsetTs, wakeTs) { mutableStateOf<String?>(null) }
 
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.space8)) {
+        Box(modifier = Modifier.padding(horizontal = Metrics.stageRowPadH)) {
+            SleepHeartRateChart(
+                buckets = nightHr,
+                segments = timestampedSegments,
+                onsetTs = onsetTs,
+                wakeTs = wakeTs,
+                selectedStage = selectedStage,
+            )
+        }
         listOf(
             Triple("Awake", s.awake, Palette.sleepAwake),
             Triple("Light", s.light, Palette.sleepLight),
@@ -2190,6 +2187,7 @@ private fun StageTimelineRow(
             .clickable(onClickLabel = "Select $label stage", onClick = onTap)
             .padding(horizontal = Metrics.stageRowPadH, vertical = Metrics.stageRowPadV)
             .semantics(mergeDescendants = true) {
+                selectedSemantics = selected
                 contentDescription = uiString(R.string.l10n_sleep_screen_label_durationtext_minutes_percent_percent_of_6ab7ae87, label, durationText(minutes), percent)
             },
     ) {

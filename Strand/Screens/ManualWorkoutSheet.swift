@@ -215,7 +215,7 @@ struct ManualWorkoutSheet: View {
         // Reference pre-fill (fresh adds): picking a catalogue sport / changing the duration refreshes
         // the estimated Avg HR + Calories, but only while each field is still empty or untouched.
         .onChange(of: sport) { _ in refreshReferenceValues() }
-        .onChange(of: durationMin) { _ in refreshReferenceValues() }
+        .onChange(of: durationBinding.wrappedValue) { _ in refreshReferenceValues() }
     }
 
     // MARK: - Sport picker
@@ -438,7 +438,7 @@ struct ManualWorkoutSheet: View {
     private func refreshReferenceValues() {
         guard editing == nil else { return }
         let hrRef = ManualWorkoutEstimates.referenceAvgHr(sport: sport, hrMax: profile.hrMax)
-        let kcalRef = ManualWorkoutEstimates.referenceCalories(sport: sport, durationMin: durationMin,
+        let kcalRef = ManualWorkoutEstimates.referenceCalories(sport: sport, durationMin: durationBinding.wrappedValue,
                                                                weightKg: profile.weightKg)
         if avgHrText.isEmpty || avgHrText == autoAvgHrText {
             autoAvgHrText = hrRef.map(String.init) ?? ""

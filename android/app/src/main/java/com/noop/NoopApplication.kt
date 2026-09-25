@@ -50,6 +50,11 @@ class NoopApplication : Application() {
         // #1008: pin the pre-change Overnight-only default for existing installs before anything
         // reads it. Idempotent; a no-op on fresh installs and on every launch after the first.
         com.noop.ui.NoopPrefs.migrateContinuousHrvOvernightDefault(this)
+        // #2185: a stress widget placed by an older version fired its `onEnabled` long before the
+        // scheduler existed, so the receiver hook alone would never reach it. Enqueued with KEEP, so
+        // this is a no-op once a schedule exists, and the worker retires itself when no widget is
+        // placed — which is what stops this costing anything for an install that has never had one.
+        com.noop.widget.StressWidgetRefresh.ensureScheduled(this)
     }
 
     /** Process-wide Room-backed store. One instance shared by the UI and the background service. */
@@ -187,10 +192,20 @@ class NoopApplication : Application() {
      *  "noop.selectedWhoopModel" in the shared noop_prefs store. Defaults to [WhoopModel.WHOOP4] when
      *  unset or unparseable (the historical connect() default), so a fresh install is unchanged. Used to
      *  reconnect on the right service after a WHOOP->WHOOP switch (#74). */
-    private fun persistedWhoopModel(): WhoopModel =
+    private fun persistedWhoopModel(): WhoopModel = persistedWhoopModelOrNull() ?: WhoopModel.WHOOP4
+
+    /**
+     * The persisted family, or null when nothing has been recorded yet.
+     *
+     * Split from [persistedWhoopModel] because the default it applies, WHOOP4, is indistinguishable
+     * from a genuine recorded WHOOP4, and a caller choosing between this and some other source needs to
+     * know which it got. `AppViewModel` needs exactly that: a recorded family should beat the remembered
+     * pair, while an install that predates this pref must keep falling back to it rather than being
+     * silently reset to WHOOP4.
+     */
+    internal fun persistedWhoopModelOrNull(): WhoopModel? =
         NoopPrefs.of(this).getString("noop.selectedWhoopModel", null)
             ?.let { runCatching { WhoopModel.valueOf(it) }.getOrNull() }
-            ?: WhoopModel.WHOOP4
 
     companion object {
         @Volatile private var instance: NoopApplication? = null

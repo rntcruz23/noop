@@ -349,6 +349,7 @@ object NoopPrefs {
     const val KEY_HR_BROADCAST = "noop.hrBroadcast"
 
     const val KEY_ANALYZE_WATERMARK = "noop.analyzeWatermark"
+    const val KEY_STEPS_MOTION_CACHE = "noop.stepsMotionCache.v1"
 
     /** "Power saving" (#477): when on, NOOP stretches its periodic strap-sync cadence (15 → 45 min) while
      *  the STRAP is discharging at/below [KEY_POWER_SAVING_BATTERY_PCT].
@@ -493,6 +494,17 @@ object NoopPrefs {
 
     fun setAnalyzeWatermark(context: Context, fingerprint: String) {
         of(context).edit().putString(KEY_ANALYZE_WATERMARK, fingerprint).apply()
+    }
+
+    /** The persisted steps-calibration motion folds (see `StepsMotionCache`). A derived cache, so a missing
+     *  or unreadable payload costs one re-fold and nothing else; versioned in the key as well as in the
+     *  payload header so a format change cannot even be read. Mirrors the Swift
+     *  `analyzeRecent.stepsMotionCache.v1` UserDefaults key. */
+    fun stepsMotionCache(context: Context): String? =
+        of(context).getString(KEY_STEPS_MOTION_CACHE, null)
+
+    fun setStepsMotionCache(context: Context, payload: String) {
+        of(context).edit().putString(KEY_STEPS_MOTION_CACHE, payload).apply()
     }
 
     /** Whether NOOP should hold the strap connection open via a foreground service. Default true. */
@@ -674,6 +686,20 @@ object NoopPrefs {
 
     fun setOuraOnsetKeying(context: Context, enabled: Boolean) {
         of(context).edit().putBoolean(KEY_OURA_ONSET_KEYING, enabled).apply()
+    }
+
+    /** Oura packed-notification A/B (EXPERIMENTAL, default OFF): send the official app's SetNotification mask
+     *  `1c 01 ff` at the next connect instead of NOOP's `3f`. The ring packs ~10 packets per notification for
+     *  the official app (9x the drain throughput) and NOOP's session never gets that shape; the mask is the
+     *  first candidate switch (OURA_PROTOCOL.md s2.3). Read once per connect, so turning it off restores `3f`
+     *  on the next session — nothing persists on the ring. Twin of iOS AppModel.ouraNotifyMaskFullKey. */
+    const val KEY_OURA_NOTIFY_MASK_FULL = "noop.ouraNotifyMaskFull"
+
+    fun ouraNotifyMaskFull(context: Context): Boolean =
+        of(context).getBoolean(KEY_OURA_NOTIFY_MASK_FULL, false)
+
+    fun setOuraNotifyMaskFull(context: Context, enabled: Boolean) {
+        of(context).edit().putBoolean(KEY_OURA_NOTIFY_MASK_FULL, enabled).apply()
     }
 
     /** #1121: whether the opt-in "detailed capture" rolling strap-log file is on. Persisted so capture
@@ -1079,6 +1105,63 @@ object NoopPrefs {
         of(context).edit().putBoolean(KEY_QUIET_MOTION, enabled).apply()
     }
 
+    /** Which gauge Today draws: the GlowRing arc (default) or the liquid vessel it replaced (#2311).
+     *
+     *  Android-only, and deliberately NOT Apple's `noop.liquidTodayEnabled`. That key switches between two
+     *  whole Today SCREENS on iOS and macOS, `LiquidTodayView` (the default there) and the classic
+     *  `TodayView`. Android has a single Today screen, so this chooses a gauge inside it and nothing else.
+     *
+     *  Sharing the key would also INVERT it: `true` means liquid on Apple and rings (not liquid) here, so
+     *  one stored value would drive two opposite looks. Two unrelated meanings on one setting, and a future
+     *  divergence on either platform silently wrong.
+     *
+     *  Defaults to the rings, which is what #2311 shipped; the vessels stay available for anyone who
+     *  preferred them. */
+    const val KEY_TODAY_RING_GAUGES = "noop.todayRingGauges"
+
+    fun todayRingGauges(context: Context): Boolean =
+        of(context).getBoolean(KEY_TODAY_RING_GAUGES, true)
+
+    fun setTodayRingGauges(context: Context, enabled: Boolean) {
+        of(context).edit().putBoolean(KEY_TODAY_RING_GAUGES, enabled).apply()
+    }
+
+    /**
+     * When the live /models catalogue was last pulled for a provider, epoch millis, keyed per
+     * provider so switching does not hide a stale list behind another provider's refresh.
+     *
+     * Exists so the model picker can carry what the provider offers TODAY without this app shipping a
+     * new build for every model release. The built-in lists stay as the offline seed.
+     */
+    fun coachModelsRefreshedAt(context: Context, provider: String): Long =
+        of(context).getLong("noop.coachModelsRefreshed.$provider", 0L)
+
+    fun setCoachModelsRefreshedAt(context: Context, provider: String, atMillis: Long) {
+        of(context).edit().putLong("noop.coachModelsRefreshed.$provider", atMillis).apply()
+    }
+
+    /** Master switch for the AI Coach, offered in Settings under Bottom bar because the Coach tab is
+     *  what a wearer sees it as (#2218 promoted Coach to a top-level tab). Default ON, matching every
+     *  install that shipped with the tab.
+     *
+     *  This is NOT tab chrome. Turning it off disables the AI itself: the tab goes, the Today launcher
+     *  card goes, and the daily brief scheduler is cancelled. That last one is why this is a single pref
+     *  rather than a per-surface hide - CoachBriefScheduler is a SEPARATE default-off feature with its
+     *  own `enabled` flag that makes a provider call from the background and posts a notification, so
+     *  hiding only the tab would leave a wearer who had enabled briefs still receiving AI output from a
+     *  feature they had just switched off.
+     *
+     *  Saved provider keys are deliberately KEPT. The switch is meant to be reversible, and wiping a key
+     *  a wearer pasted in would make turning it back on a re-setup rather than a flip. */
+    const val KEY_COACH_ENABLED = "noop.coachEnabled"
+
+    fun coachEnabled(context: Context): Boolean =
+        of(context).getBoolean(KEY_COACH_ENABLED, true)
+
+    fun setCoachEnabled(context: Context, enabled: Boolean) {
+        of(context).edit().putBoolean(KEY_COACH_ENABLED, enabled).apply()
+    }
+
     /** Coach on-device signals (v5): when ON, the opt-in BYO-key Coach's grounding context may include a
      *  SUMMARY-ONLY line of on-device correlations + Lab Book markers (no raw egress). A SECOND opt-in on
      *  top of the existing "let the coach use my data" consent. Default OFF, keeps the anonymity posture. */
@@ -1122,7 +1205,8 @@ object NoopPrefs {
     /** "Auto-detect workouts" (MVP, opt-in, on-device, NON-DESTRUCTIVE). When ON, NOOP scans the last
      *  day or two of strap HR for a sustained-elevated bout and surfaces ONE dismissible Today card
      *  suggesting you save it, it NEVER creates a workout on its own (the user taps Save). Default OFF;
-     *  when off no detection runs and no card shows. Mirrors macOS/iOS @AppStorage("autoDetectWorkouts"). */
+     *  when off no detection runs and no card shows, while existing workout history is retained. Mirrors
+     *  macOS/iOS @AppStorage("autoDetectWorkouts"). */
     const val KEY_AUTO_DETECT_WORKOUTS = "noop.autoDetectWorkouts"
 
     fun autoDetectWorkouts(context: Context): Boolean =

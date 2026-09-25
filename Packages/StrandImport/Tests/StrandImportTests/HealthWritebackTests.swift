@@ -212,6 +212,27 @@ final class HealthWritebackTests: XCTestCase {
                        "the workout key must not embed a device id (#1503)")
     }
 
+    /// #2210: the orphan reconciliation recognises one of our workouts in Health by this prefix, on a
+    /// record whose timestamp it does not know and therefore cannot rebuild a key for. If the prefix and
+    /// the builder ever drift, that match silently stops finding anything and orphaned workouts come
+    /// back, with nothing failing to say so. Pinned against a real key rather than against itself.
+    func testWorkoutKeyPrefixMatchesTheKeysItIsUsedToRecognise() {
+        XCTAssertTrue(HealthWriteback.appleHealthWorkoutKey(startTs: 1_700_000_000)
+                        .hasPrefix(HealthWriteback.appleHealthWorkoutKeyPrefix))
+        XCTAssertTrue(HealthWriteback.appleHealthWorkoutKey(startTs: 0)
+                        .hasPrefix(HealthWriteback.appleHealthWorkoutKeyPrefix))
+        XCTAssertEqual(HealthWriteback.appleHealthWorkoutKeyPrefix, "noop:workout:")
+    }
+
+    /// The prefix must NOT match a sleep or vitals key, or the reconciliation would treat those as
+    /// workouts of ours and consider deleting them.
+    func testWorkoutKeyPrefixDoesNotMatchOtherKinds() {
+        XCTAssertFalse(HealthWriteback.appleHealthSleepKey(startTs: 1_700_000_000)
+                        .hasPrefix(HealthWriteback.appleHealthWorkoutKeyPrefix))
+        XCTAssertFalse(HealthWriteback.appleHealthVitalKey(metricId: "heartRateVariabilitySDNN", day: "2026-01-01")
+                        .hasPrefix(HealthWriteback.appleHealthWorkoutKeyPrefix))
+    }
+
     /// The key is deterministic: the same inputs always produce the same key, so the
     /// delete-then-write reconciliation can find prior records across app restarts and strap
     /// lifecycle changes.
@@ -317,5 +338,20 @@ final class HealthWritebackTests: XCTestCase {
         XCTAssertEqual(pending2, ["sleepAnalysis"], "the failed sleep delete must be retried")
         swept = HealthWriteback.strandedSweepResult(swept: swept, succeededThisRun: ["sleepAnalysis"])
         XCTAssertEqual(swept, ["restingHeartRate", "sleepAnalysis"])
+    }
+
+    func testANightEndingAtTheNewestHeartRateIsStillOpen() {
+        // Synced to 06:54 while the wearer slept on: the detected night ends at 06:53.
+        XCTAssertTrue(HealthWriteback.nightIsStillOpen(endTs: 1_000, newestHeartRateTs: 1_060, now: 1_600))
+    }
+
+    func testANightWithHeartRateWellPastItsEndIsClosed() {
+        XCTAssertFalse(HealthWriteback.nightIsStillOpen(endTs: 1_000, newestHeartRateTs: 1_000 + 20 * 60, now: 3_000))
+    }
+
+    func testANightIsWrittenAfterTheMaximumHoldEvenWithNoNewerHeartRate() {
+        // Strap taken off to charge at wake: no newer heart rate arrives.
+        XCTAssertTrue(HealthWriteback.nightIsStillOpen(endTs: 1_000, newestHeartRateTs: 1_000, now: 1_000 + 2 * 3_600 - 1))
+        XCTAssertFalse(HealthWriteback.nightIsStillOpen(endTs: 1_000, newestHeartRateTs: 1_000, now: 1_000 + 2 * 3_600))
     }
 }

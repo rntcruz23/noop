@@ -76,7 +76,6 @@ import com.noop.testcentre.TestDomain
 import com.noop.testcentre.TestMode
 import com.noop.testcentre.TestModeRegistry
 import com.noop.testcentre.TestReportFlow
-import com.noop.testcentre.TestReportLink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -688,8 +687,11 @@ private fun TestModeRow(
         }
         Row {
             Spacer(Modifier.weight(1f))
+            // "Share", not "Report", to match the strap-log button below and the preview sheet this
+            // opens, whose own copy already reads "Nothing leaves this phone until you tap Share".
+            // Reuses the Share string this screen already carries, so no new copy and no new locales.
             TextButton(onClick = onReport) {
-                Text(uiString(R.string.l10n_test_centre_screen_report_ee45c303), color = Palette.accent, style = NoopType.body)
+                Text(uiString(R.string.l10n_test_centre_screen_share_09ca55ca), color = Palette.accent, style = NoopType.body)
             }
         }
     }
@@ -819,6 +821,7 @@ private fun DiagnosticToolsCard(vm: AppViewModel) {
     // #1284 residual 3: the experimental Oura onset-keying toggle, shown only when an Oura ring is paired.
     var ouraPaired by remember { mutableStateOf(false) }
     var ouraOnsetKeying by remember { mutableStateOf(NoopPrefs.ouraOnsetKeying(context)) }
+    var ouraNotifyMaskFull by remember { mutableStateOf(NoopPrefs.ouraNotifyMaskFull(context)) }
     LaunchedEffect(Unit) {
         val paired = runCatching { vm.pairedDevices() }.getOrDefault(emptyList())
         polarIdentity = PolarModel.debugIdentification(paired.firstOrNull { PolarModel.isPolar(it.model) }?.model)
@@ -910,6 +913,14 @@ private fun DiagnosticToolsCard(vm: AppViewModel) {
                         "'onset-key(#1284)' lines.",
                     checked = ouraOnsetKeying,
                     onCheckedChange = { ouraOnsetKeying = it; vm.setOuraOnsetKeying(it) },
+                )
+                // Packed-notification A/B (OURA_PROTOCOL.md s2.3). Takes effect at the NEXT connect only;
+                // nothing is written until then and nothing persists on the ring.
+                ToggleRowTC(
+                    title = stringResource(R.string.oura_notify_mask_full_title),
+                    description = stringResource(R.string.oura_notify_mask_full_desc),
+                    checked = ouraNotifyMaskFull,
+                    onCheckedChange = { ouraNotifyMaskFull = it; vm.setOuraNotifyMaskFull(it) },
                 )
             }
             // #1121 Detailed capture: an adb-like rolling on-device log, no computer needed. Off by default.
@@ -1263,7 +1274,7 @@ private fun ReportReviewDialog(
                     // ships a report a maintainer can't act on. Twin of the Swift review-sheet warning.
                     Text(
                         uiString(R.string.l10n_test_centre_screen_heads_up_this_test_mode_is_8b82ed69) +
-                            "useful report, turn the mode on, reproduce the problem while wearing the " +
+                            " useful report, turn the mode on, reproduce the problem while wearing the " +
                             "strap, then report again.",
                         style = NoopType.footnote, color = Palette.statusWarning,
                         modifier = Modifier.padding(bottom = 8.dp),

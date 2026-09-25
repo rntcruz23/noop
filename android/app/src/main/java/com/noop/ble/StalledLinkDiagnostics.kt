@@ -126,9 +126,14 @@ internal fun backfillDeferredLine(
         // says where the toggle is rather than promising an answer.
         val probe = when {
             unbondedProbeOptedIn -> ""  // the probe is on — its own lines say what it found
-            unbondedProbeRetired -> " The \"Try history sync without pairing\" experiment has retired for" +
-                " this strap — turn it off and on in Test Centre to retry (#1804 fixed a false negative" +
-                " that could have latched it)."
+            // Reaching this branch PROVES the switch is off: the opted-in case above short-circuits to
+            // an empty hint. So "turn it off and on", which reads as advice to someone whose switch is
+            // on, is the one thing every reader of this sentence cannot do. Turning it ON is the whole
+            // action, and it is the off-to-ON edge `unbondedProbeBudgetRearms` looks for (#2135).
+            unbondedProbeRetired -> " The \"Try history sync without pairing\" experiment has retired" +
+                " for this strap and its switch is off, so turning it ON in Test Centre is what re-arms" +
+                " it (#1804 fixed a false negative that could have latched it, and #2135 made the" +
+                " re-arm clear that latch too)."
             else -> " The \"Try history sync without pairing\" experiment in Test Centre can test whether" +
                 " the offload works without a bond — its stage 3 is SET_CLOCK, the thing this gate" +
                 " blocks (#1635, #1802)."
@@ -256,6 +261,25 @@ internal fun liveInsertFailedLine(
     }
     return "Live persist FAILED on $transport — $throwableName$detail (hr=$hrFrames rr=$rrFrames).$run"
 }
+
+/**
+ * #2406: how long a PASSIVE reconnect waited before the OS answered.
+ *
+ * When the direct attempts are exhausted the client hands the strap to Android with
+ * `autoConnect = true` and stops doing anything: no scan, no timer, no line. In one field log that was
+ * 26 minutes of silence between "reconnecting passively in 12s (attempt 3)" and the next "Connected",
+ * and a strap log cannot tell that apart from the app having given up. Both look like nothing.
+ *
+ * Written when the wait ENDS rather than while it runs, which is the whole point: a heartbeat during a
+ * reconnect is a timer firing on a phone that is doing nothing else, and the question it answers is a
+ * question about the past, which one line at the end answers just as well.
+ *
+ * `attempts` is the involuntary-reconnect count the backoff had reached, so a long wait can be read
+ * against how hard the link had already been trying.
+ */
+internal fun passiveReconnectAnsweredLine(waitedSeconds: Long, attempts: Int): String =
+    "Reconnect: a passive reconnect was outstanding for ${waitedSeconds}s before the link came up" +
+        " (attempt $attempts, autoConnect: no scan, no timer, nothing logged while it waits)"
 
 /**
  * Rate-limit for [liveInsertFailedLine].

@@ -273,30 +273,159 @@ final class ConnectionReadoutTests: XCTestCase {
     func testLinkEpitaph() {
         let silent = ConnectionReadout.linkEpitaph(upMillis: 4_123, inboundFrames: 0, inboundBytes: 0,
                                                    cmdChannelFrames: 0, realtimeArmed: false,
-                                                   ended: "CBError.connectionTimeout(6)")
+                                                   ended: "CBError.connectionTimeout(6)",
+                                                   rssiDbm: nil, rssiAgeMillis: nil)
         XCTAssertEqual(silent,
                        "Link epitaph: up 4123ms, inbound 0 frames / 0 bytes (cmd-channel 0), "
-                       + "realtime armed=no, ended=CBError.connectionTimeout(6)"
+                       + "realtime armed=no, signal=never read on this link, "
+                       + "ended=CBError.connectionTimeout(6)"
                        + " - the strap sent NOTHING on this link")
 
         // A link that carried traffic must NOT claim silence.
         let alive = ConnectionReadout.linkEpitaph(upMillis: 61_000, inboundFrames: 812,
                                                   inboundBytes: 40_990, cmdChannelFrames: 9,
-                                                  realtimeArmed: true, ended: "intentional")
+                                                  realtimeArmed: true, ended: "intentional",
+                                                  rssiDbm: -63, rssiAgeMillis: 28_400)
         XCTAssertEqual(alive,
                        "Link epitaph: up 61000ms, inbound 812 frames / 40990 bytes (cmd-channel 9), "
-                       + "realtime armed=yes, ended=intentional")
+                       + "realtime armed=yes, signal=-63dBm (read 28400ms before the drop), "
+                       + "ended=intentional")
         XCTAssertFalse(alive.contains("NOTHING"))
 
         // Negatives are clamped rather than printed: a monotonic-clock hiccup must not emit "up -3ms".
         XCTAssertTrue(ConnectionReadout.linkEpitaph(upMillis: -3, inboundFrames: -1, inboundBytes: -9,
                                                     cmdChannelFrames: -2, realtimeArmed: false,
-                                                    ended: "x")
+                                                    ended: "x", rssiDbm: nil, rssiAgeMillis: nil)
                         .hasPrefix("Link epitaph: up 0ms, inbound 0 frames / 0 bytes (cmd-channel 0)"))
+    }
+
+    /// #2332: the signal half is only evidence about the DROP if its age travels with it, so the three
+    /// states are pinned separately. The nil-value case is the one that must never be filled in with a
+    /// stale reading from the previous link - it has to say so out loud.
+    func testLinkEpitaphSignal() {
+        func epitaph(_ rssi: Int?, _ age: Int?) -> String {
+            ConnectionReadout.linkEpitaph(upMillis: 1_000, inboundFrames: 5, inboundBytes: 10,
+                                          cmdChannelFrames: 0, realtimeArmed: false, ended: "status=8",
+                                          rssiDbm: rssi, rssiAgeMillis: age)
+        }
+        XCTAssertTrue(epitaph(nil, nil).contains("signal=never read on this link"))
+        // An age with no value is still no reading: the age alone must not manufacture one.
+        XCTAssertTrue(epitaph(nil, 4_000).contains("signal=never read on this link"))
+        XCTAssertTrue(epitaph(-92, nil).contains("signal=-92dBm (age unknown)"))
+        XCTAssertTrue(epitaph(-92, 1_587_000).contains("signal=-92dBm (read 1587000ms before the drop)"))
+        // RSSI must survive unclamped; clamping it to zero would erase every real reading.
+        XCTAssertFalse(epitaph(-92, 0).contains("signal=0dBm"))
+        XCTAssertTrue(epitaph(-92, 0).contains("signal=-92dBm (read 0ms before the drop)"))
+        // A negative age is a clock hiccup, not a reading from the future.
+        XCTAssertTrue(epitaph(-92, -5).contains("signal=-92dBm (read 0ms before the drop)"))
     }
 
     func testLastFrameLabel() {
         XCTAssertEqual(ConnectionReadout.lastFrameLabel(lastFrameUnix: 990, nowUnix: 1_002), "12s ago")
         XCTAssertEqual(ConnectionReadout.lastFrameLabel(lastFrameUnix: nil, nowUnix: 1_002), "no frames yet")
+    }
+}
+
+/// #2117: the R-R transport line, which separates "banked nothing" from "banked beats the policy refused".
+final class UniversalTraceRRTransportTests: XCTestCase {
+
+    /// A device the WHOOP 5 unit policy does not govern says nothing at all, so a WHOOP 4 export is
+    /// byte-unchanged by this line existing.
+    func testANonStrictDeviceEmitsNothing() {
+        XCTAssertNil(UniversalTrace.rrTransportLine(strictWhoop5: false, firstRecordedUnix: 1_750_000_000,
+                                                    firstScorableUnix: nil))
+    }
+
+    /// The state that blanks every night at once: beats on disk, none the policy will score. This is the
+    /// one worth recognising at a glance, because it looks identical to "no data" from the analyzer's side.
+    func testBeatsOnDiskButNoneScorableIsNamed() {
+        let line = UniversalTrace.rrTransportLine(strictWhoop5: true, firstRecordedUnix: 1_750_000_000,
+                                                  firstScorableUnix: nil)
+        XCTAssertNotNil(line)
+        XCTAssertTrue(line!.contains("scorable=none"))
+        XCTAssertTrue(line!.contains("unscorableHistory=yes"))
+    }
+
+    /// A strap that has never banked a beat is a DIFFERENT report from one whose beats were refused, and
+    /// the line must not blur them: no "unscorableHistory" claim when there is no history to be unscorable.
+    func testNoHistoryAtAllIsNotReportedAsUnscorable() {
+        let line = UniversalTrace.rrTransportLine(strictWhoop5: true, firstRecordedUnix: nil,
+                                                  firstScorableUnix: nil)
+        XCTAssertEqual(line, "rrTransport recorded=none scorable=none")
+        XCTAssertFalse(line!.contains("unscorableHistory"))
+    }
+
+    /// Partly scorable: the gap is what says how much history was refused, and it is the number that
+    /// distinguishes "upgraded last week" from "lost a year".
+    func testAPartlyScorableHistoryReportsTheGapInDays() {
+        let line = UniversalTrace.rrTransportLine(strictWhoop5: true, firstRecordedUnix: 1_750_000_000,
+                                                  firstScorableUnix: 1_750_000_000 + 30 * 86_400)
+        XCTAssertNotNil(line)
+        XCTAssertTrue(line!.contains("unscorableHistory=yes"))
+        XCTAssertTrue(line!.contains("gapDays=30"))
+    }
+
+    /// The WHOLE line, byte for byte, with the identical literal pinned on the Kotlin side.
+    ///
+    /// The other cases here assert fragments, which would let the two platforms drift on anything a
+    /// `contains` does not look at: field order, spacing, or the shared date format. A report is diffed
+    /// across platforms, so the line has to be the same line, not merely the same facts.
+    func testTheWholeLineIsPinnedByteForByte() {
+        XCTAssertEqual(
+            UniversalTrace.rrTransportLine(strictWhoop5: true, firstRecordedUnix: 1_750_000_000,
+                                           firstScorableUnix: 1_752_592_000),
+            "rrTransport recorded=2025-06-15 15:06:40 scorable=2025-07-15 15:06:40 unscorableHistory=yes gapDays=30"
+        )
+    }
+
+    /// Fully scorable from the first beat: nothing was refused, and the line must say so plainly rather
+    /// than leaving a reader to infer it from a missing field.
+    func testAFullyScorableHistorySaysSo() {
+        let line = UniversalTrace.rrTransportLine(strictWhoop5: true, firstRecordedUnix: 1_750_000_000,
+                                                  firstScorableUnix: 1_750_000_000)
+        XCTAssertNotNil(line)
+        XCTAssertTrue(line!.contains("unscorableHistory=no"))
+        XCTAssertTrue(line!.contains("gapDays=0"))
+    }
+
+    /// #2397: the link's signal SHAPE, from readings the periodic read already takes.
+    ///
+    /// A last value alone cannot separate a link that was marginal all along from one that walked out
+    /// of range, and a supervision timeout asks exactly that. The field log that prompted this carried
+    /// 467 readings across three links and reported two of them. Twin of the Kotlin test, so the two
+    /// platforms print the same bytes.
+    func testLinkEpitaphReportsTheSignalShape() {
+        let line = ConnectionReadout.linkEpitaph(upMillis: 60_000, inboundFrames: 100,
+                                                 inboundBytes: 2_000, cmdChannelFrames: 0,
+                                                 realtimeArmed: true, ended: "status=8",
+                                                 rssiDbm: -58, rssiAgeMillis: 52_658,
+                                                 rssiReads: 203, rssiWorstDbm: -88,
+                                                 rssiSumDbm: -203 * 64)
+        XCTAssertTrue(line.contains("signal=-58dBm (read 52658ms before the drop; "
+                                    + "n=203 worst=-88dBm mean=-64dBm)"), line)
+    }
+
+    /// One reading is not a shape: worst and mean would restate the value already printed.
+    func testLinkEpitaphOmitsTheShapeUntilThereAreTwoReadings() {
+        for n in 0...1 {
+            let line = ConnectionReadout.linkEpitaph(upMillis: 60_000, inboundFrames: 100,
+                                                     inboundBytes: 2_000, cmdChannelFrames: 0,
+                                                     realtimeArmed: true, ended: "status=8",
+                                                     rssiDbm: -58, rssiAgeMillis: 1_000,
+                                                     rssiReads: n, rssiWorstDbm: n == 0 ? nil : -58,
+                                                     rssiSumDbm: -58 * n)
+            XCTAssertFalse(line.contains("n="), line)
+            XCTAssertTrue(line.contains("signal=-58dBm (read 1000ms before the drop)"), line)
+        }
+    }
+
+    /// A link that never read carries no shape and says so in the words it already used.
+    func testLinkEpitaphNeverReadIsUnchanged() {
+        let line = ConnectionReadout.linkEpitaph(upMillis: 60_000, inboundFrames: 100,
+                                                 inboundBytes: 2_000, cmdChannelFrames: 0,
+                                                 realtimeArmed: true, ended: "status=8",
+                                                 rssiDbm: nil, rssiAgeMillis: nil,
+                                                 rssiReads: 0, rssiWorstDbm: nil, rssiSumDbm: 0)
+        XCTAssertTrue(line.contains("signal=never read on this link"), line)
     }
 }

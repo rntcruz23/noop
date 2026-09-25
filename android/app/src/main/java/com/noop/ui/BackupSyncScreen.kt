@@ -71,6 +71,9 @@ fun BackupSyncScreen() {
     var auto by remember { mutableStateOf(BackupSyncPrefs.autoEnabled(context)) }
     var lastMs by remember { mutableStateOf(BackupSyncPrefs.lastBackupMs(context)) }
     var busy by remember { mutableStateOf(false) }
+    // #1014 family: these failures carry a next step in their LAST clause, which is exactly what a
+    // Toast drops. Held here and shown in a dialog, the same way Settings does.
+    var backupFailure by remember { mutableStateOf<String?>(null) }
     // How many dated snapshots to keep; pruning deletes the oldest beyond this (BackupSync.snapshotsToPrune).
     var keep by remember { mutableStateOf(BackupSyncPrefs.keepCount(context)) }
     var keepMenu by remember { mutableStateOf(false) }
@@ -119,13 +122,12 @@ fun BackupSyncScreen() {
                             Runtime.getRuntime().exit(0)
                         }
                     }
-                    is DataBackup.ImportResult.Failed ->
-                        Toast.makeText(context, r.message, Toast.LENGTH_LONG).show()
+                    is DataBackup.ImportResult.Failed -> backupFailure = r.message
                     // #1807: recoverable, but not from here — this screen restores a folder snapshot
                     // directly and has no confirm step to hang the override on. Settings → Backup & restore
-                    // → Import does, and shows the same sentence with a way through.
-                    is DataBackup.ImportResult.TooLarge ->
-                        Toast.makeText(context, r.message, Toast.LENGTH_LONG).show()
+                    // → Import does, and shows the same sentence with a way through. Which is the reason
+                    // it has to be READABLE here: the dialog is where the reader learns where to go.
+                    is DataBackup.ImportResult.TooLarge -> backupFailure = r.message
                 }
             } finally {
                 busy = false
@@ -175,7 +177,7 @@ fun BackupSyncScreen() {
                     )
                     Text(
                         uiString(R.string.l10n_backup_sync_screen_tip_a_desktop_drive_dropbox_app_2eaff1e3) +
-                            "folder a sync app (e.g. FolderSync / Autosync) keeps in your cloud.",
+                            " folder a sync app (e.g. FolderSync / Autosync) keeps in your cloud.",
                         style = NoopType.caption, color = Palette.accent,
                     )
                     // #644: these .noopbak snapshots are a plain, unencrypted ZIP — pointing this folder
@@ -216,7 +218,7 @@ fun BackupSyncScreen() {
                             Text(uiString(R.string.l10n_backup_sync_screen_daily_auto_backup_e5627357), style = NoopType.body, color = Palette.textPrimary)
                             Text(
                                 uiString(R.string.l10n_backup_sync_screen_writes_a_fresh_dated_backup_to_bd964fc5) +
-                                    "the latest $keep. Off by default - flip it on if you want it.",
+                                    " the latest $keep. Off by default - flip it on if you want it.",
                                 style = NoopType.footnote, color = Palette.textTertiary,
                             )
                         }
@@ -248,7 +250,7 @@ fun BackupSyncScreen() {
                             Text(uiString(R.string.l10n_backup_sync_screen_keep_last_snapshots_cd5c9ea9), style = NoopType.body, color = Palette.textPrimary)
                             Text(
                                 uiString(R.string.l10n_backup_sync_screen_older_backups_beyond_this_many_are_00b7daa6) +
-                                    "daily backups). For recovery: if data ever corrupts, grab the newest snapshot.",
+                                    " daily backups). For recovery: if data ever corrupts, grab the newest snapshot.",
                                 style = NoopType.footnote, color = Palette.textTertiary,
                             )
                         }
@@ -378,7 +380,7 @@ fun BackupSyncScreen() {
                     Text(uiString(R.string.l10n_backup_sync_screen_restore_3cbe6d6b), style = NoopType.headline, color = Palette.textPrimary)
                     Text(
                         uiString(R.string.l10n_backup_sync_screen_replace_this_device_s_data_with_b8679c51) +
-                            "so back up first if unsure.",
+                            " so back up first if unsure.",
                         style = NoopType.footnote, color = Palette.textTertiary,
                     )
                     NoopButton(
@@ -492,6 +494,10 @@ fun BackupSyncScreen() {
                 }
             },
         )
+    }
+
+    backupFailure?.let { failure ->
+        BackupFailureDialog(message = failure, onDismiss = { backupFailure = null })
     }
 }
 

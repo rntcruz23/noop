@@ -31,14 +31,14 @@ import UIKit
 
 struct SleepView: View {
     @EnvironmentObject var repo: Repository
-    /// For `circadianPhase` only (the body-clock dial). Named `appModel` because `model` on this screen is
-    /// already the built `SleepModel`.
-    @EnvironmentObject var appModel: AppModel
-    // NOTE: SleepView itself deliberately does NOT observe `LiveState`. A connected strap publishes
-    // at ~1 Hz; observing here would re-evaluate this heavy body on every tick. The only two live
-    // dependencies — the "going to sleep / awake" mark card (it appends to the strap log) and the
-    // "Syncing strap history…" note — each own their OWN `@EnvironmentObject var live` in a small
-    // leaf below (mirrors the Today leaf-scoping pattern), so a tick refreshes only that leaf.
+    // NOTE: SleepView itself deliberately does NOT observe `LiveState` OR `AppModel`. A connected strap
+    // publishes at ~1 Hz, and `AppModel` itself publishes `bpm` at that same ~1 Hz (AppModel.swift:202) —
+    // `@EnvironmentObject` subscribes to the WHOLE object's `objectWillChange` regardless of which
+    // properties are read, so holding either here would re-evaluate this heavy ~3000-line body on every
+    // tick. The live dependencies — the "going to sleep / awake" mark card (appends to the strap log),
+    // the "Syncing strap history…" note, and the body-clock dial's `circadianPhase` (#1680) — each own
+    // their OWN `@EnvironmentObject var live`/`appModel` in a small leaf below (mirrors the Today
+    // leaf-scoping pattern and HealthView.swift:17-22), so a tick refreshes only that leaf.
     @EnvironmentObject var intelligence: IntelligenceEngine
 
     /// Memoized snapshot of every expensive derivation (latest Night with its intervals
@@ -69,6 +69,15 @@ struct SleepView: View {
     /// merges each day into one Night, so a split day reads as one correctly-totalled night with the
     /// gaps preserved. Oldest→newest. Falls back to `repo.sleeps` until loaded. (#170)
     @State private var allSessions: [CachedSleepSession] = []
+    /// `navDays` memoized, rebuilt where `model` is.
+    ///
+    /// Grouping calls `Calendar.startOfDay` once per session, and the browsable history is every block
+    /// ever recorded, so recomputing it per render is a per-frame pass over years of nights. Body reaches
+    /// it more than once (the wake-timestamp list, and `dayBlocks(at:)` for the source blocks), so a
+    /// scroll paid it repeatedly. Invalidated by the same two paths that rebuild `model`: `dataKey`
+    /// covers a `repo.sleeps` change, and the refresh task covers `allSessions` reloading. Nil falls back
+    /// to computing it, so a first render before either has run is correct rather than empty.
+    @State private var navDaysCache: [[CachedSleepSession]]?
 
     /// The user's LEARNED habitual midsleep (local time-of-day seconds), or nil under the cold-start
     /// threshold. Loaded from `repo.habitualMidsleepSec()` — the SAME value `AnalyticsEngine.analyzeDay`
@@ -181,6 +190,7 @@ struct SleepView: View {
             // `resolved` already drives THIS frame, so there is no flash and no extra rebuild.
             .onChangeCompat(of: key) { newKey in
                 modelKey = newKey
+                navDaysCache = SleepModel.navDays(navSessions: navSessions)
                 model = buildModel()
                 // New data invalidates a navigated offset — the same offset would silently
                 // point at a different session. Snap back to last night. (#160)
@@ -216,6 +226,7 @@ struct SleepView: View {
                 nightOffset = 0
                 navNight = nil
                 modelKey = dataKey
+                navDaysCache = SleepModel.navDays(navSessions: navSessions)
                 model = buildModel()
             }
             .sheet(item: $wakeEdit) { edit in
@@ -364,22 +375,25 @@ struct SleepView: View {
         return n == 0 ? "Last night" : (n == 1 ? "1 night ago" : "\(n) nights ago")
     }
 
-    /// #1311: how many CALENDAR nights back the carousel night at `offset` is from the newest recorded
-    /// night. The ◀/▶ carousel steps by RECORDED night (`navDays`, newest-first), so a night with no
-    /// data (strap off-body) is a gap the flat index can't see — labelling by index makes two nights
-    /// either side of a skipped night read as consecutive and desyncs the "N nights ago" labels (and the
-    /// Rest value they name). Uses the same local start-of-day `navDays` is grouped by; falls back to the
-    /// raw index if it can't resolve. 0 = last night. Mirrors Android SleepHeroLogic.calendarNightsAgo.
-    private func nightsAgo(_ offset: Int) -> Int {
-        let days = navDays
-        guard offset >= 0, offset < days.count,
-              let newestTs = days.first?.first?.endTs, let shownTs = days[offset].first?.endTs
-        else { return offset }
-        let cal = Calendar.current
-        let shown = cal.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(shownTs)))
-        let newest = cal.startOfDay(for: Date(timeIntervalSince1970: TimeInterval(newestTs)))
-        let d = cal.dateComponents([.day], from: shown, to: newest).day ?? offset
-        return d >= 0 ? d : offset
+    /// #1311: how many nights back the carousel night at `offset` is, counted in CALENDAR nights rather
+    /// than carousel index. The ◀/▶ carousel steps by RECORDED night (`navDays`, newest-first), so a
+    /// night with no data (strap off-body) is a gap the flat index can't see — labelling by index makes
+    /// two nights either side of a skipped night read as consecutive and desyncs the "N nights ago"
+    /// labels (and the Rest value they name).
+    ///
+    /// Counted FROM TODAY, not from the newest recorded night.
+    ///
+    /// Delegates to `SleepNightLabel.nightsAgo`, which is where this logic is tested. It lived inline
+    /// and private here, which is why the newest-anchored defect went uncaught on this platform.
+    /// Kotlin twin: `calendarNightsAgo`.
+    private func nightsAgo(_ offset: Int, now: Date = Date()) -> Int {
+        SleepNightLabel.nightsAgo(
+            // Optional per entry, NOT `?? 0`: a day group with no session must fall back to the offset
+            // the way the Kotlin twin does. Zero would be 1970 and would read as ~20,000 nights ago.
+            wakeTimestamps: navDays.map { $0.first.map { s in Int(s.endTs) } },
+            offset: offset,
+            today: Repository.logicalDay(now)
+        )
     }
 
     /// The night the Rest hero reflects: the ◀/▶-navigated night while browsing (falling back to
@@ -425,11 +439,10 @@ struct SleepView: View {
     /// affordance every other card on this screen already has, rather than a new setting of its own.
     @ViewBuilder
     private func bodyClockDial(_ model: SleepModel) -> some View {
-        if let phase = appModel.circadianPhase, phase.confidence != .unreadable {
-            BodyClockDialCard(estimate: phase,
-                              actualBedHour: Self.localClockHour(model.night.session.effectiveStartTs),
+        // PERF: `circadianPhase` lives on `AppModel`, isolated into its own leaf (`BodyClockDialSection`)
+        // rather than read via an `appModel: AppModel` property on this screen — see the NOTE above.
+        BodyClockDialSection(actualBedHour: Self.localClockHour(model.night.session.effectiveStartTs),
                               actualWakeHour: Self.localClockHour(model.night.session.endTs))
-        }
     }
 
     /// A unix second as a fractional local clock hour — the dial's only input beyond the phase estimate.
@@ -830,8 +843,10 @@ struct SleepView: View {
             // #345 follow-up: when a night was staged on SPARSE motion coverage it can UNDER-detect — the
             // gravity-only spine fragments and the sub-60-min pieces are dropped, so a real ~8h night can
             // collapse to a fraction ("slept 8h, app shows 1h"). Say so honestly so the short total isn't
-            // read as fact. Distinct from the H9 note above (a plausible-duration night with an off split).
-            if stageStagingIsSparse(night) {
+            // read as fact — but only when the night ACTUALLY reads short, since the sparse flag alone fires
+            // on one long motion dropout at any length. The rule lives in `stageSparseNoteApplies`.
+            // Distinct from the H9 note above (a plausible-duration night with an off split).
+            if stageShowsIncompleteNote(night) {
                 stageIncompleteNote
             }
             // #1716 — a device-provided hypnogram assembled from records that never all arrived leaves a
@@ -962,13 +977,44 @@ struct SleepView: View {
             asleepMin: s.asleep, deepMin: s.deep, remMin: s.rem, efficiency: effPct / 100.0)
     }
 
-    /// True when this night was staged on SPARSE motion coverage — the persisted `stagingSparse` flag the
-    /// engine sets from `SleepStager.isGravitySparse` (#345). Such a night can UNDER-detect: the gravity-only
-    /// spine fragments and sub-60-min pieces are dropped, so a real night collapses to a fraction. Reads the
-    /// day's REAL stored blocks (each carries the day's value), never the synthetic merged `session`; a nil
-    /// flag (imported / pre-migration night) is never flagged. Mirror in Kotlin.
-    private func stageStagingIsSparse(_ night: Night) -> Bool {
-        night.sourceBlocks.contains { $0.stagingSparse == true }
+    /// True when this night earns the "May be incomplete" caveat: staged on SPARSE motion coverage AND
+    /// actually reading short (#345). The rule itself lives in `stageSparseNoteApplies` below, which carries
+    /// the reasoning and is what Kotlin mirrors; this wrapper only supplies the two inputs. Reads the day's
+    /// REAL stored blocks (each carries the day's value), never the synthetic merged `session`; a nil flag
+    /// (imported / pre-migration night) is never flagged.
+    private func stageShowsIncompleteNote(_ night: Night) -> Bool {
+        SleepView.stageSparseNoteApplies(
+            stagingSparse: night.sourceBlocks.contains { $0.stagingSparse == true },
+            asleepMin: night.stages.asleep)
+    }
+
+    /// Pure #345 gate (unit-testable without a live view) — whether the "May be incomplete" caveat applies.
+    /// Mirror EXACTLY in Kotlin.
+    ///
+    /// `stagingSparse` alone is NOT the question the note asks. It is a STAGING-MECHANISM verdict:
+    /// `SleepStager.isGravitySparse` returns true when the gravity span is short against the HR span OR when
+    /// the LARGEST inter-sample gap exceeds `maxGapMin`, and its own doc calls that second branch "the
+    /// typical WHOOP 4.0 backfill (#28)" whose only consequence is to ENABLE `buildRuns`' HR-vouched bridge.
+    /// So a single long motion dropout sets it on a night of ANY length, including a complete twelve-hour
+    /// one, and the flag is raised precisely where the engine has already applied its own mitigation.
+    ///
+    /// The note's copy, though, claims something narrower and checkable: that the night "may be
+    /// under-detected and the sleep total can read short". So require the total to actually read short. A
+    /// night at or above the wearer's need cannot honestly be captioned as possibly reading short, whatever
+    /// the motion trace looked like.
+    ///
+    /// A night that staged to NOTHING keeps the caveat: zero asleep is the strongest form of the collapse
+    /// this note exists to explain, not an exemption from it.
+    ///
+    /// `needHours` is a parameter rather than a constant so a personalised need
+    /// (`AnalyticsEngine.Rest.personalizedNeedHours`) can be threaded in later without moving the rule. It
+    /// is computed per pass today and not persisted on the row a screen can reach, so the shared default
+    /// stands in.
+    static func stageSparseNoteApplies(stagingSparse: Bool,
+                                       asleepMin: Double,
+                                       needHours: Double = AnalyticsEngine.Rest.defaultNeedHours) -> Bool {
+        guard stagingSparse else { return false }
+        return asleepMin < needHours * 60.0
     }
 
     /// How much of this night's window its stage timeline actually accounts for, or nil when coverage is
@@ -1826,7 +1872,7 @@ struct SleepView: View {
     /// The browsable DAY list — a thin wrapper over the shared `SleepModel.navDays`, which is the
     /// source of truth the builder and the ◀/▶ nav both read (no duplicated grouping). (#170)
     private var navDays: [[CachedSleepSession]] {
-        SleepModel.navDays(navSessions: navSessions)
+        navDaysCache ?? SleepModel.navDays(navSessions: navSessions)
     }
 
     /// The device's current UTC offset (seconds east), evaluated once per pick. Feeds the selector's
@@ -2230,14 +2276,6 @@ struct SleepView: View {
         return stages.total > 0 ? (stages, intervals) : nil
     }
 
-    /// yyyy-MM-dd → Date (en_US_POSIX, UTC), per task spec.
-    private static let dayParser: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
 }
 
 /// Original atmospheric night hero — photographic moonlit lake plus lightweight static depth layers.
@@ -2617,8 +2655,15 @@ func resolveSleepFreshness(hasCurrentNight: Bool, morningReady: Bool, syncing: B
                            calculating: Bool, syncedSinceDayStart: Bool,
                            syncFailed: Bool) -> SleepFreshnessStatus? {
     if syncing { return .syncing }
+    // #2108: a night already in hand outranks .calculating. It used to sit below, so `hasCurrentNight`
+    // could only silence the missing-night states and a finished night was structurally unable to
+    // silence this one: the banner said "detecting and staging the night now" directly above that same
+    // night scored, timed and staged on screen. A note that contradicts the content beside it is worse
+    // than no note, and one that is always on is read by nobody the day it matters. .syncing stays
+    // above, because data still arriving can genuinely change what is shown.
+    if hasCurrentNight { return nil }
     if calculating { return .calculating }
-    if hasCurrentNight || !morningReady { return nil }
+    if !morningReady { return nil }
     if syncFailed { return .syncFailed }
     return syncedSinceDayStart ? .notDetected : .awaitingSync
 }
@@ -2942,9 +2987,12 @@ private struct SleepTimeEditor: View {
 
 #if DEBUG
 #Preview("Sleep") {
-    SleepView()
-        .environmentObject(Repository.previewSleep())
+    let repo = Repository.previewSleep()
+    return SleepView()
+        .environmentObject(repo)
         .environmentObject(LiveState())
+        .environmentObject(AppModel())
+        .environmentObject(IntelligenceEngine(repo: repo, profile: ProfileStore(), deviceId: "preview"))
         .frame(width: 980, height: 1180)
         .preferredColorScheme(.dark)
 }

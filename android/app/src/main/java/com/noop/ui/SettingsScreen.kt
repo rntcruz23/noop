@@ -57,6 +57,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Sensors
@@ -144,6 +145,8 @@ import com.noop.ble.WhoopModel
 import com.noop.data.DataBackup
 import com.noop.ingest.RawSensorExport
 import com.noop.ingest.WhoopCsvExporter
+import com.noop.testcentre.TestCentre
+import com.noop.testcentre.TestDomain
 import com.noop.update.UpdateCheck
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -516,6 +519,9 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val live by vm.live.collectAsStateWithLifecycle()
+    // #2338: the read-only advertising-name probe result. Its own flow on the BLE client rather than a
+    // LiveState field, matching the other opcode probes.
+    val advertisingNameProbe by vm.advertisingNameProbe.collectAsStateWithLifecycle()
 
     // The profile store is stable for the lifetime of this screen; a version counter
     // forces recomposition after each mutating write (SharedPreferences isn't reactive).
@@ -550,6 +556,10 @@ fun SettingsScreen(
      * need to send the user back through the picker.
      */
     var oversizeRestore by remember { mutableStateOf<Pair<android.net.Uri, String>?>(null) }
+    // #1014 family: a failed import/export ends on a multi-sentence message whose LAST clause is the
+    // part the reader can act on. A Toast truncated it, so what survived was the SQLite banner and
+    // nothing else. Held here and shown in a dialog instead.
+    var backupFailure by remember { mutableStateOf<String?>(null) }
 
     // #646/#651: LogExport's zip build + file read now run on Dispatchers.IO instead of blocking the
     // caller, so these buttons no longer freeze the UI — but nothing else stopped a second tap mid-export
@@ -700,6 +710,8 @@ fun SettingsScreen(
     }
     val distanceUnitSystem = UnitPrefs.resolveDistance(unitSystem, distanceSystemRaw)
     var clockFormat by remember { mutableStateOf(ClockPrefs.preference(context)) }   // #1821
+    // #2346: gauge numeral weight, mirrored locally so the pill is live; AppearancePrefs is the store.
+    var gaugeNumerals by remember { mutableStateOf(AppearancePrefs.gaugeNumerals) }
     var temperatureRaw by remember {
         mutableStateOf(NoopPrefs.of(context).getString(NoopPrefs.KEY_TEMPERATURE_UNIT, "") ?: "")
     }
@@ -729,6 +741,9 @@ fun SettingsScreen(
     // In-app quiet motion (#941), default OFF. The process-wide preference observer in NoopMotion makes
     // this take effect on every currently composed looping surface as soon as the switch is flipped.
     var quietMotion by remember { mutableStateOf(NoopPrefs.quietMotion(context)) }
+    // Ring vs vessel gauges on Today (#2311 follow-up), default ON (rings). Unlike quietMotion directly
+    // above, this one is NOT live: Today reads it on entry, like the other Today-screen display toggles.
+    var todayRingGauges by remember { mutableStateOf(NoopPrefs.todayRingGauges(context)) }
     // HRV window (#141) — whole-night vs deep-sleep (WHOOP-style). NOT display-only: it changes the computed
     // avgHrv, so a switch clears the analyze watermark to force a re-score + re-baseline on the next pass.
     var hrvWindow by remember { mutableStateOf(UnitPrefs.hrvWindow(context)) }
@@ -767,7 +782,10 @@ fun SettingsScreen(
                     Toast.makeText(context, note, Toast.LENGTH_LONG).show()
                 },
                 onFailure = { e ->
-                    Toast.makeText(context, "Backup problem: ${e.message}", Toast.LENGTH_LONG).show()
+                    // The EXPORT-side integrity refusal lands here (#1014): a corrupt store is caught
+                    // before it is archived, and the message names the CSV route that still works. That
+                    // is a next step, so it needs the dialog for the same reason the import failures do.
+                    backupFailure = "Backup problem: ${e.message}"
                 },
             )
         }
@@ -815,9 +833,7 @@ fun SettingsScreen(
                     "Backup imported. Fully close and reopen NOOP for it to take effect.",
                     Toast.LENGTH_LONG,
                 ).show()
-                is DataBackup.ImportResult.Failed -> Toast.makeText(
-                    context, result.message, Toast.LENGTH_LONG,
-                ).show()
+                is DataBackup.ImportResult.Failed -> backupFailure = result.message
                 // #1807: refused ONLY for size, which is recoverable — offer to go ahead rather than
                 // ending on a Toast the user can do nothing about. The cap is a decompression guard
                 // against a hostile archive; a backup they just picked out of their own files is not
@@ -1436,6 +1452,27 @@ fun SettingsScreen(
                 )
             }
             SettingsRowDivider()
+            // #2346: how heavy the numeral over a gauge is drawn. A reporter found the Today gauges "too
+            // much in your face"; bold display numerals are the house style on BOTH platforms, so this is
+            // a preference rather than a defect and Bold stays the default. Only the WEIGHT is offered:
+            // the size is pinned to the iOS ratio and is not a per-platform knob. Twin of the Apple row.
+            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_gauge_numbers_db0d45e3)) {
+                SegmentedPillControl(
+                    items = listOf(GaugeNumeralStyle.BOLD, GaugeNumeralStyle.SOFT),
+                    selection = gaugeNumerals,
+                    label = {
+                        when (it) {
+                            GaugeNumeralStyle.BOLD -> uiString(R.string.l10n_settings_screen_bold_19e07430)
+                            GaugeNumeralStyle.SOFT -> uiString(R.string.l10n_settings_screen_softer_9edfeba1)
+                        }
+                    },
+                    onSelect = {
+                        gaugeNumerals = it
+                        AppearancePrefs.setGaugeNumerals(context, it)
+                    },
+                )
+            }
+            SettingsRowDivider()
             // Theme presets — one-tap bundles coordinating accent + chart world + backdrop + card opacity.
             // Derived (no stored value): tweaking any control below flips this to Custom.
             SettingsFormRow(label = uiString(R.string.l10n_settings_screen_preset)) {
@@ -1567,6 +1604,20 @@ fun SettingsScreen(
                 onCheckedChange = {
                     quietMotion = it
                     NoopPrefs.setQuietMotion(context, it)
+                },
+            )
+
+            // Which gauge Today draws (#2311 follow-up). Sits with the display toggles rather than in an
+            // experimental section: neither option is a prototype, one replaced the other. Like the
+            // day-cycle background below, the pref is read when Today is entered.
+            SettingsRowDivider()
+            SettingsToggleRow(
+                title = uiString(R.string.l10n_settings_screen_ring_gauges_on_today_7a532de2),
+                detail = uiString(R.string.l10n_settings_screen_off_returns_the_liquid_vessels_6bb9236e),
+                checked = todayRingGauges,
+                onCheckedChange = {
+                    todayRingGauges = it
+                    NoopPrefs.setTodayRingGauges(context, it)
                 },
             )
 
@@ -1732,6 +1783,18 @@ fun SettingsScreen(
             title = uiString(R.string.l10n_settings_screen_bottom_bar_f84098a9),
             blurb = uiString(R.string.l10n_settings_screen_how_the_navigation_bar_looks_f186b099),
         ) {
+            // The Coach tab's master switch. It sits in this section because the tab is where a wearer
+            // meets the feature, but it is NOT tab chrome: switching it off disables the AI itself, takes
+            // the Today launcher card with it, and cancels the daily brief (which otherwise keeps calling
+            // a provider from the background and posting notifications, with no UI attached to reveal that
+            // it is still running). The saved provider key is kept, so this is a flip and not a re-setup.
+            SettingsFormRow(label = uiString(R.string.l10n_settings_screen_ai_coach_130c3eab)) {
+                Switch(
+                    checked = BottomBarStyleStore.coachEnabled,
+                    onCheckedChange = { BottomBarStyleStore.setCoachEnabled(context, it) },
+                )
+            }
+            SettingsRowDivider()
             // #1836: which bottom-bar layout to draw. Default OFF — the shipped reserved slot. The
             // overlay lets a screen's own backdrop show through the bar's glass, which is what it was
             // built for, but it is app-shell layout no test can judge, so it ships switchable.
@@ -1994,6 +2057,74 @@ fun SettingsScreen(
                     )
                 }
 
+                // #2338: the section is shown for a 5/MG too, where it used to be absent entirely. A
+                // second-hand band arrives carrying the previous owner's name, and a section that is not
+                // rendered cannot say why it can do nothing about it.
+                //
+                // The SECTION renders for any connected 5/MG; only the CONTROLS sit behind Test Centre
+                // Connection. Gating the whole thing put it back to invisible on a default install,
+                // which is the state that had this reported as "you cannot change it" rather than "not
+                // supported yet" — the regression this split exists to prevent.
+                //
+                // The controls are gated because opcode 140 has never been confirmed on this family and
+                // the payload shape is mirrored from the 4.0 form rather than observed. Reversible
+                // (rename again), which is what the BLE contract asks, and the read-only check beside it
+                // is how you find out whether the write landed.
+                val fiveMgRenameUnlocked = TestCentre.from(context).active(TestDomain.CONNECTION)
+                if (live.connected && live.whoop5Detected) {
+                    var nameDraft5 by remember(live.advertisingName) { mutableStateOf(live.advertisingName ?: "") }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(uiString(R.string.l10n_settings_screen_strap_name_350de547), style = NoopType.subhead, color = Palette.textPrimary)
+                        Text(
+                            uiString(
+                                if (fiveMgRenameUnlocked) R.string.l10n_settings_screen_experimental_on_a_whoop_5_0_711d5341
+                                else R.string.l10n_settings_screen_renaming_is_not_supported_on_a_02f7af2c,
+                            ),
+                            style = NoopType.footnote,
+                            color = Palette.textTertiary,
+                        )
+                        if (fiveMgRenameUnlocked) {
+                            OutlinedTextField(
+                                value = nameDraft5,
+                                onValueChange = { nameDraft5 = it.take(24) },
+                                singleLine = true,
+                                placeholder = { Text(uiString(R.string.l10n_settings_screen_whoop_a3650379), style = NoopType.body, color = Palette.textTertiary) },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = Palette.textPrimary,
+                                    unfocusedTextColor = Palette.textPrimary,
+                                    focusedBorderColor = Palette.accent,
+                                    unfocusedBorderColor = Palette.hairline,
+                                    cursorColor = Palette.accent,
+                                    focusedContainerColor = Palette.surfaceInset,
+                                    unfocusedContainerColor = Palette.surfaceInset,
+                                ),
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                NoopButton(
+                                    text = uiString(R.string.l10n_settings_screen_rename_d3f4cb89),
+                                    leadingIcon = Icons.Filled.Edit,
+                                    kind = NoopButtonKind.Primary,
+                                    enabled = live.bonded && nameDraft5.isNotBlank(),
+                                    onClick = { vm.ble.renameStrap(nameDraft5) },
+                                )
+                                // Read-only: GET_ADVERTISING_NAME(141), nothing is written. This is how you
+                                // check whether the write above did anything at all.
+                                NoopButton(
+                                    text = uiString(R.string.l10n_settings_screen_check_current_name_read_only_acb2f01a),
+                                    leadingIcon = Icons.Filled.Search,
+                                    kind = NoopButtonKind.Secondary,
+                                    enabled = live.bonded,
+                                    onClick = { vm.ble.probeAdvertisingName() },
+                                )
+                            }
+                            (live.renameStatus ?: advertisingNameProbe)?.let {
+                                Text(it, style = NoopType.footnote, color = Palette.textSecondary)
+                            }
+                        }
+                    }
+                }
+
                 // Rename the strap's BLE advertising name (WHOOP 4.0 only). Writes the name to the strap
                 // firmware (cmd 77); it reboots to apply, so the new name shows on the next connect. Handy
                 // for a second-hand band stuck on the previous owner's name. Reversible.
@@ -2003,7 +2134,7 @@ fun SettingsScreen(
                         Text(uiString(R.string.l10n_settings_screen_strap_name_350de547), style = NoopType.subhead, color = Palette.textPrimary)
                         Text(
                             uiString(R.string.l10n_settings_screen_rename_your_strap_s_bluetooth_name_6032668b) +
-                                "reboots to apply, then reconnects with the new name.",
+                                " reboots to apply, then reconnects with the new name.",
                             style = NoopType.footnote,
                             color = Palette.textTertiary,
                         )
@@ -2324,7 +2455,7 @@ fun SettingsScreen(
                             )
                             Text(
                                 uiString(R.string.l10n_settings_screen_runs_the_continuous_hrv_stream_only_3fed47c5) +
-                                "Note: continuous background HRV capture (including daytime naps) is paused outside this window. " +
+                                " Note: continuous background HRV capture (including daytime naps) is paused outside this window. " +
                                 "For on-demand daytime HRV readings (including naps), use the \"Take an HRV reading\" button on the Live screen.",
                                 style = NoopType.footnote,
                                 color = Palette.textTertiary,
@@ -2410,8 +2541,7 @@ fun SettingsScreen(
                 }
 
                 // "WHOOP 4.0 vs 5.0/MG — what each can read and why" (FI-2 / #490). Shown to BOTH model
-                // owners, so a 4.0 user understands their strap is fully supported (and why the firmware
-                // broadcast-out is 5/MG-only while NOOP's own re-broadcast in Data Sources works on a 4.0).
+                // owners, so either generation's supported features and protocol differences are clear.
                 val modelComparisonInteraction = remember { MutableInteractionSource() }
                 Box(
                     modifier = Modifier
@@ -2931,7 +3061,7 @@ fun SettingsScreen(
                 }
                 Text(
                     uiString(R.string.l10n_settings_screen_a_transparent_cardiorespiratory_recipe_that_recovers_eebe00c2) +
-                        "V1 staging, and is now the default. It only changes how already-detected nights are " +
+                        " V1 staging, and is now the default. It only changes how already-detected nights are " +
                         "split into stages (detection and scores are unchanged); turn it off to fall back to " +
                         "V1. Takes effect on the next nights staged.",
                     style = NoopType.caption,
@@ -2970,7 +3100,7 @@ fun SettingsScreen(
                 }
                 Text(
                     uiString(R.string.l10n_settings_screen_reviews_each_scored_wake_block_for_537924ea) +
-                        "change in body position) instead of just a heart-rate rise. A wake block with no " +
+                        " change in body position) instead of just a heart-rate rise. A wake block with no " +
                         "locomotion and a stable posture -- a hot night, a brief turn-over -- is folded back " +
                         "into light sleep; a real get-up is left alone. Self-checks how much motion detail " +
                         "your strap actually recorded and stays off on a night that's too sparse to trust " +
@@ -3181,7 +3311,7 @@ fun SettingsScreen(
                 SettingsRowDivider()
                 SettingsToggleRow(
                     title = uiString(R.string.l10n_settings_screen_auto_detect_workouts_bed4cf2a),
-                    detail = "After a sync, NOOP looks over your recent heart rate for a sustained, raised stretch that looks like exercise and offers to save it. It only ever suggests. Nothing is saved until you tap Save, and you can dismiss any suggestion. Deliberately conservative, so the odd workout may be missed. On this phone only.",
+                    detail = "After a sync, NOOP looks over your recent heart rate for a sustained, raised stretch that looks like exercise and offers to save it. It only ever suggests. Nothing is saved until you tap Save, and you can dismiss any suggestion. Turning this off stops future suggestions; workouts already in your history remain. Deliberately conservative, so the odd workout may be missed. On this phone only.",
                     checked = autoDetectWorkouts,
                     onCheckedChange = {
                         autoDetectWorkouts = it
@@ -3323,6 +3453,10 @@ fun SettingsScreen(
             }
         }
 
+        backupFailure?.let { failure ->
+            BackupFailureDialog(message = failure, onDismiss = { backupFailure = null })
+        }
+
         oversizeRestore?.let { (pendingUri, pendingMessage) ->
             AlertDialog(
                 onDismissRequest = { oversizeRestore = null },
@@ -3341,13 +3475,17 @@ fun SettingsScreen(
                                 DataBackup.importFrom(context, pendingUri, allowOversize = true)
                             }
                             backupBusy = false
-                            val note = when (again) {
-                                is DataBackup.ImportResult.NeedsRestart ->
-                                    "Backup imported. Fully close and reopen NOOP for it to take effect."
-                                is DataBackup.ImportResult.Failed -> again.message
-                                is DataBackup.ImportResult.TooLarge -> again.message
+                            when (again) {
+                                is DataBackup.ImportResult.NeedsRestart -> Toast.makeText(
+                                    context,
+                                    "Backup imported. Fully close and reopen NOOP for it to take effect.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                // Same reason as the first attempt: these carry a next step, and a Toast
+                                // is where a next step goes to be truncated.
+                                is DataBackup.ImportResult.Failed -> backupFailure = again.message
+                                is DataBackup.ImportResult.TooLarge -> backupFailure = again.message
                             }
-                            Toast.makeText(context, note, Toast.LENGTH_LONG).show()
                         }
                     }) {
                         Text(
@@ -3511,7 +3649,7 @@ fun SettingsScreen(
                     icon = Icons.Filled.Info,
                     iconTint = Palette.textTertiary,
                     text = uiString(R.string.l10n_settings_screen_importing_overwrites_everything_currently_on_this_297b76ae) +
-                        "Export CSV writes a WHOOP-format zip of your days, sleeps, workouts and journal that re-imports into NOOP on Android or Mac. On-device computed rows are marked APPROXIMATE in its Source column; the .noopbak backup stays the lossless restore path.",
+                        " Export CSV writes a WHOOP-format zip of your days, sleeps, workouts and journal that re-imports into NOOP on Android or Mac. On-device computed rows are marked APPROXIMATE in its Source column; the .noopbak backup stays the lossless restore path.",
                 )
 
                 // #644: .noopbak is a plain ZIP, not an encrypted container — anyone who gets the file

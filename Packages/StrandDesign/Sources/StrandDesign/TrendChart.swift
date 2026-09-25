@@ -12,6 +12,46 @@ import Charts
 // score), but any gradient + value-range can be supplied — pass the blue sleep
 // ramp for sleep, the teal HRV scale for HRV, the amber strain ramp for strain.
 
+/// The index runs that `hrGapSegments` implies: one range per unbroken stretch, in order.
+///
+/// Charts can hand a segment id to the plotting library and let it split the line. A hand-drawn sparkline
+/// cannot, so it needs the runs themselves to know where to lift the pen. Same rule, same source of truth,
+/// rather than a second walk that could disagree with the first (#2082).
+///
+/// An empty input yields no runs. A run of one is still a run: a lone bucket between two gaps is real data
+/// and a caller that drops it would be hiding a reading rather than a gap.
+public func hrGapRuns(segments: [String]) -> [ClosedRange<Int>] {
+    guard !segments.isEmpty else { return [] }
+    var runs: [ClosedRange<Int>] = []
+    var start = 0
+    for i in 1..<segments.count where segments[i] != segments[i - 1] {
+        runs.append(start...(i - 1))
+        start = i
+    }
+    runs.append(start...(segments.count - 1))
+    return runs
+}
+
+/// Segment ids for a bucketed time series, changing wherever the series SKIPS a bucket.
+///
+/// A bucket aggregate only emits rows for buckets that had samples, so an hour the strap was off simply
+/// is not in the list. Without this the line joins the two neighbours across that hour and draws a
+/// steady climb the wearer never had, which is a reading invented out of an absence. Handing these to
+/// `TrendPoint.segment` renders the two sides as separate lines, so a gap looks like a gap.
+///
+/// A step of exactly one bucket is contiguous. Anything longer means at least one bucket held nothing,
+/// and that is the break. No tolerance for "just one missing": a five-minute hole is still five minutes
+/// of invention, and the stress trace made the same call when it stopped drawing through unscored hours.
+///
+/// Byte-identical twin of the Kotlin `hrGapSegmentIds`.
+public func hrGapSegments(bucketTs: [Int], bucketSeconds: Int) -> [String] {
+    var segment = 0
+    return bucketTs.enumerated().map { i, ts in
+        if i > 0, ts - bucketTs[i - 1] > bucketSeconds { segment += 1 }
+        return String(segment)
+    }
+}
+
 /// One point on a trend line.
 public struct TrendPoint: Identifiable, Sendable {
     public var date: Date
@@ -78,6 +118,18 @@ public struct TrendChart: View {
     public var showsBars: Bool
     public var markStyle: TrendChartMarkStyle
     public var markColor: Color?
+    public var yAxisStep: Double?
+    public var showsBarValues: Bool
+    public var largeSelection: Bool
+    @State private var selectedPoint: TrendPoint?
+    @State private var holdingBar = false
+
+    /// Optional personal-baseline reference, drawn as a dashed rule UNDER the series.
+    ///
+    /// A reference the readings are judged against, not a second series, so it is dashed and faint. Nil
+    /// (the default) draws nothing, and the rule rides the chart's own y domain, so a value outside the
+    /// plotted range simply falls off it rather than being clamped to an edge it does not sit on.
+    public var baselineValue: Double?
     public var height: CGFloat
     /// Whether hovering reveals a crosshair + tooltip for the nearest point.
     public var showsHover: Bool
@@ -130,6 +182,7 @@ public struct TrendChart: View {
         showsBars: Bool = false,
         markStyle: TrendChartMarkStyle? = nil,
         markColor: Color? = nil,
+        baselineValue: Double? = nil,
         height: CGFloat = 220,
         showsHover: Bool = true,
         valueFormat: @escaping (Double) -> String = { String(Int($0.rounded())) },
@@ -146,7 +199,10 @@ public struct TrendChart: View {
         gapPolicy: TrendChartGapPolicy = .none,
         calendar: Calendar = .current,
         onSelectionChange: ((TrendPoint?) -> Void)? = nil,
-        accessibilityValue: String? = nil
+        accessibilityValue: String? = nil,
+        yAxisStep: Double? = nil,
+        showsBarValues: Bool = false,
+        largeSelection: Bool = false
     ) {
         let sortedInput = points.filter { $0.value.isFinite }.sorted { $0.date < $1.date }
         let sorted = gapPolicy == .daily
@@ -159,6 +215,7 @@ public struct TrendChart: View {
         self.showsBars = showsBars
         self.markStyle = markStyle ?? (showsBars ? .bars : .line)
         self.markColor = markColor
+        self.baselineValue = baselineValue
         self.height = height
         self.showsHover = showsHover
         self.valueFormat = valueFormat
@@ -175,6 +232,9 @@ public struct TrendChart: View {
         self.calendar = calendar
         self.onSelectionChange = onSelectionChange
         self.accessibilityValue = accessibilityValue
+        self.yAxisStep = yAxisStep
+        self.showsBarValues = showsBarValues
+        self.largeSelection = largeSelection
         let avg = sorted.isEmpty
             ? valueRange.lowerBound
             : sorted.map(\.value).reduce(0, +) / Double(sorted.count)
@@ -238,6 +298,13 @@ public struct TrendChart: View {
         })
     }
 
+    /// The days the x-axis marks, so the marks and their label format agree about which days are shown.
+    ///
+    /// Spans `displayPoints`, the set the marks are actually built from, rather than `points`. Bucketing
+    /// keeps the extremes, so the two agree today; deriving the axis from a collection the chart is not
+    /// drawing is the kind of thing that stops being true quietly.
+    private var axisDays: [Date] { ChartAxisDays.spanning(displayPoints.map(\.date)) }
+
     // Map data values onto the unit interval for gradient stops.
     private func unit(_ value: Double) -> Double {
         let lo = valueRange.lowerBound, hi = valueRange.upperBound
@@ -260,6 +327,9 @@ public struct TrendChart: View {
     /// unaffected. Exposed internally alongside `resolvedYDomain` for the same test-without-rendering
     /// reason.
     var plotYDomain: ClosedRange<Double> {
+        if let step = yAxisStep, step > 0 {
+            return 0...max(step, ceil((points.map(\.value).max() ?? 0) / step) * step)
+        }
         let contextDomain = ChartGeometry.expandingDomain(resolvedYDomain, toInclude: contextRange)
         let domain = referenceValue.map { ChartGeometry.expandingDomain(contextDomain, toInclude: $0...$0) }
             ?? contextDomain
@@ -300,6 +370,17 @@ public struct TrendChart: View {
     }
 
     public var body: some View {
+        // Resolve against current data so the marker and readout never refer to a removed date.
+        let currentSelection = selectedPoint.flatMap { selected in points.first { $0.date == selected.date } }
+        VStack(alignment: .leading, spacing: 8) {
+        if largeSelection {
+            let point = currentSelection ?? points.last
+            VStack(alignment: .leading, spacing: 3) {
+                Text(point.map { dateFormat($0.date) } ?? "—").font(.headline)
+                Text(point.map { valueFormat($0.value) } ?? "—").font(.title2.bold()).monospacedDigit()
+            }
+            .foregroundStyle(StrandPalette.textPrimary)
+        }
         Chart {
             if let contextRange,
                let clipped = ChartGeometry.clippedRange(contextRange, to: plotYDomain),
@@ -331,6 +412,11 @@ public struct TrendChart: View {
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                     .foregroundStyle(referenceColor)
             }
+            if let baselineValue {
+                RuleMark(y: .value("Baseline", baselineValue))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .foregroundStyle(.secondary.opacity(0.45))
+            }
             if markStyle == .bars {
                 // Semantic bars preserve every daily observation and use one metric-identity color.
                 ForEach(points) { p in
@@ -339,6 +425,20 @@ public struct TrendChart: View {
                         y: .value("Value", p.value)
                     )
                     .foregroundStyle(markColor ?? StrandPalette.sample(stops: gradient.toStops(), at: 0.7))
+                    .cornerRadius(min(2, max(0, CGFloat(p.value / max(1, plotYDomain.upperBound)) * height * 0.2)))
+                    .opacity(holdingBar && currentSelection != nil && currentSelection?.date != p.date ? 0.3 : 1)
+                    .annotation(position: .top, spacing: 3) {
+                        if showsBarValues {
+                            Text(p.value.formatted(.number.precision(.fractionLength(0))))
+                                .font(.system(size: 9, weight: .medium)).monospacedDigit()
+                                .foregroundStyle(StrandPalette.textSecondary)
+                        }
+                    }
+                }
+                if showsHover, let selectedPoint = currentSelection {
+                    RuleMark(x: .value("Date", selectedPoint.date))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                        .foregroundStyle(StrandPalette.textSecondary)
                 }
             } else if markStyle == .chargeZones {
                 ForEach(points) { p in
@@ -431,7 +531,19 @@ public struct TrendChart: View {
         // on sharp turns, and the AreaMark gradient is drawn UNCLIPPED — so on a spiky HR curve the
         // rose fill bled down the page behind the cards below the chart. Clipping the plot area bounds
         // every mark (line, area, points, overshoot) to the chart rectangle.
-        .chartPlotStyle { plotArea in plotArea.clipped() }
+        .chartPlotStyle { plotArea in
+            if showsBarValues { plotArea.padding(.top, 18) } else { plotArea.clipped() }
+        }
+        // Marks are pinned to WHOLE DAYS, not asked for by count (#2431-style label smear on Trends).
+        //
+        // `.automatic(desiredCount: 5)` is free to choose the stride that best fits the count, and over a
+        // short window the best fit is sub-day: several marks then land inside one calendar day, the label
+        // formats each to a date, and the axis prints "Sep 21" twice over itself. What the screenshot
+        // shows is not crowding but DUPLICATION, which is why more room would not have helped.
+        //
+        // Naming the days outright makes a duplicate structurally impossible: the marks are distinct
+        // start-of-day instants, so no two can format to the same date, whatever the window. The explicit
+        // day-only format keeps a mark from ever printing a time as well.
         .chartXAxis {
             if chrome == .summary {
                 AxisMarks(values: summaryAxisDates) { _ in
@@ -439,26 +551,42 @@ public struct TrendChart: View {
                         .font(StrandFont.footnote)
                 }
             } else if rendersPersistentXAxis {
-                AxisMarks(values: .automatic(desiredCount: 5)) { _ in
+                AxisMarks(values: axisDays) { _ in
                     AxisGridLine().foregroundStyle(StrandPalette.hairline.opacity(0.4))
-                    AxisValueLabel().foregroundStyle(StrandPalette.textTertiary)
+                    AxisValueLabel(format: ChartAxisDays.labelFormat(for: axisDays))
+                        .foregroundStyle(StrandPalette.textTertiary)
                         .font(StrandFont.footnote)
                 }
             }
         }
         .chartYAxis {
             if rendersPersistentYAxis {
-                AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
-                    AxisGridLine().foregroundStyle(StrandPalette.hairline.opacity(0.4))
-                    AxisValueLabel().foregroundStyle(StrandPalette.textTertiary)
-                        .font(StrandFont.footnote)
+                if let step = yAxisStep, step > 0 {
+                    AxisMarks(position: .leading, values: Array(stride(from: 0.0, through: plotYDomain.upperBound, by: step))) { value in
+                        if let number = value.as(Double.self), number > 0, number < plotYDomain.upperBound {
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                                .foregroundStyle(StrandPalette.textSecondary.opacity(0.45))
+                        }
+                        AxisValueLabel {
+                            if let number = value.as(Double.self) {
+                                Text(number.formatted(.number.precision(.fractionLength(0))))
+                                    .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                            }
+                        }
+                    }
+                } else {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
+                        AxisGridLine().foregroundStyle(StrandPalette.hairline.opacity(0.4))
+                        AxisValueLabel().foregroundStyle(StrandPalette.textTertiary)
+                            .font(StrandFont.footnote)
+                    }
                 }
             }
         }
         .chartOverlay { proxy in
             GeometryReader { geo in
                 let plot = proxy.plotRectCompat(in: geo)
-                let selectedPoint = hoverX.flatMap { nearestPoint(toX: $0, proxy: proxy, plot: plot) }
+                let hoveredPoint = hoverX.flatMap { nearestPoint(toX: $0, proxy: proxy, plot: plot) }
                 ZStack(alignment: .topLeading) {
                     if showsHover,
                        let hx = hoverX,
@@ -498,7 +626,7 @@ public struct TrendChart: View {
                     // not via a sibling overlay guessing the axis insets, which floated it left/below.
                     if markStyle != .bars,
                        let capColor = nowCapColor ?? (chrome == .summary ? contextRangeColor : nil),
-                       let last = ChartGeometry.selectedOrLatestPoint(selectedDate: selectedPoint?.date,
+                       let last = ChartGeometry.selectedOrLatestPoint(selectedDate: hoveredPoint?.date,
                                                                       points: points),
                        let px = proxy.position(forX: last.date),
                        let py = proxy.position(forY: last.value) {
@@ -508,7 +636,18 @@ public struct TrendChart: View {
                     }
                 }
                 .animation(StrandMotion.fade, value: hoverX)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
                 .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard showsHover, markStyle == .bars else { return }
+                        let x = min(max(value.location.x, plot.minX), plot.maxX)
+                        selectedPoint = nearestPoint(toX: x, proxy: proxy, plot: plot)
+                        holdingBar = true
+                        hoverX = largeSelection ? nil : x
+                    }
+                    .onEnded { _ in holdingBar = false; hoverX = nil },
+                    including: showsHover && markStyle == .bars ? .all : .none)
                 .onContinuousHover(coordinateSpace: .local) { phase in
                     guard showsHover else { return }
                     // Update the hover position in a NON-animating transaction. Otherwise entering or
@@ -532,7 +671,8 @@ public struct TrendChart: View {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .local)
                         .onChanged { value in
-                            guard showsHover else { return }
+                            // Bar charts own their press-and-hold selection (the gesture above).
+                            guard showsHover, markStyle != .bars else { return }
                             hoverX = value.location.x
                             onSelectionChange?(nearestPoint(toX: value.location.x, proxy: proxy, plot: plot))
                         }
@@ -573,6 +713,12 @@ public struct TrendChart: View {
             onSelectionChange?(points[nextIndex])
         }
         .accessibilityHidden(!showsHover && accessibilityLabel == nil)
+        }
+        .onChange(of: points.map(\.date)) { _ in
+            selectedPoint = nil
+            holdingBar = false
+            hoverX = nil
+        }
     }
 }
 
@@ -698,26 +844,39 @@ enum ChartGeometry {
 // survives and the rendered envelope is identical at normal chart widths. First and last points are
 // always kept so the line spans the full domain. Pure + deterministic — same input → same output.
 
-enum ChartDownsample {
+public enum ChartDownsample {
     /// Above this many points we downsample; at or below it the series is passed through untouched (so
     /// the common 7/30/90-day trends and the ≤60-point dotted series are byte-for-byte unchanged).
-    static let markThreshold = 120
+    public static let markThreshold = 120
     /// Target drawn-vertex budget — a touch above a typical ~360pt plot so the line stays crisp.
-    static let targetVertices = 400
+    public static let targetVertices = 400
 
     /// Min/max-bucketed copy of `points` when it exceeds `threshold`, else `points` unchanged.
     /// Assumes `points` is already sorted by date (both chart callers sort in their init).
-    static func minMaxBucketed(_ points: [TrendPoint], threshold: Int, targetCount: Int) -> [TrendPoint] {
+    public static func minMaxBucketed(_ points: [TrendPoint], threshold: Int, targetCount: Int) -> [TrendPoint] {
+        // Bucket each line segment on its own, so a min/max pair can never bridge a gap the chart
+        // deliberately leaves open.
         ChartGeometry.segmentRanges(points: points).flatMap { range in
-            minMaxBucketedSingleSegment(Array(points[range]), threshold: threshold, targetCount: targetCount)
+            minMaxBucketed(Array(points[range]), threshold: threshold, targetCount: targetCount,
+                           date: { $0.date }, value: { $0.value })
         }
     }
 
-    private static func minMaxBucketedSingleSegment(
-        _ points: [TrendPoint],
+    /// Generic form of the same algorithm, keyed by caller-supplied `date`/`value` accessors instead of
+    /// `TrendPoint`'s own properties. `ChartDownsample` used to be internal-by-default and `TrendPoint`-only,
+    /// so a chart type living outside this package (an app-target screen) couldn't call it and instead
+    /// hand-duplicated the algorithm for its own point type (see `CompareView.Model.minMaxBucketed`, which
+    /// predates this generic form and documents the mirroring). This overload is `public` and generic so
+    /// new app-target chart types can share the ONE implementation instead of adding a third copy.
+    /// Pure + deterministic; identical behaviour to the `TrendPoint` overload when `date`/`value` project
+    /// the same fields it does.
+    public static func minMaxBucketed<Point>(
+        _ points: [Point],
         threshold: Int,
-        targetCount: Int
-    ) -> [TrendPoint] {
+        targetCount: Int,
+        date: (Point) -> Date,
+        value: (Point) -> Double
+    ) -> [Point] {
         let n = points.count
         guard n > threshold, n > 2, targetCount >= 4 else { return points }
 
@@ -729,11 +888,11 @@ enum ChartDownsample {
         let bucketCount = max(1, (targetCount - 2) / 2)
         guard bucketCount < interior else { return points }
 
-        var out: [TrendPoint] = []
+        var out: [Point] = []
         out.reserveCapacity(targetCount)
         out.append(first)
 
-        var lastEmittedDate = first.date
+        var lastEmittedDate = date(first)
         for b in 0..<bucketCount {
             // Interior indices [1 ... n-2] split into `bucketCount` contiguous ranges.
             let lo = 1 + (b * interior) / bucketCount
@@ -744,8 +903,8 @@ enum ChartDownsample {
             var minIdx = lo, maxIdx = lo
             var i = lo + 1
             while i < hi {
-                if points[i].value < points[minIdx].value { minIdx = i }
-                if points[i].value > points[maxIdx].value { maxIdx = i }
+                if value(points[i]) < value(points[minIdx]) { minIdx = i }
+                if value(points[i]) > value(points[maxIdx]) { maxIdx = i }
                 i += 1
             }
 
@@ -756,14 +915,15 @@ enum ChartDownsample {
             let bIdx = lowFirst ? maxIdx : minIdx
             for idx in [aIdx, bIdx] {
                 let p = points[idx]
-                if p.date > lastEmittedDate {
+                let d = date(p)
+                if d > lastEmittedDate {
                     out.append(p)
-                    lastEmittedDate = p.date
+                    lastEmittedDate = d
                 }
             }
         }
 
-        if last.date > lastEmittedDate { out.append(last) }
+        if date(last) > lastEmittedDate { out.append(last) }
         return out
     }
 }

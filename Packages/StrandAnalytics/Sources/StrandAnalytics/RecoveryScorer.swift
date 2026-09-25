@@ -289,8 +289,9 @@ public enum RecoveryScorer {
     ///   - rhr: tonight's resting HR (bpm).
     ///   - resp: tonight's respiration (raw or calibrated — z is scale-invariant);
     ///           nil drops the term.
-    ///   - hrvBaseline: HRV baseline (required for a score).
-    ///   - rhrBaseline: resting-HR baseline; nil drops the RHR term.
+    ///   - hrvBaseline: HRV baseline (required for a score — nil returns nil).
+    ///   - rhrBaseline: resting-HR baseline; nil drops the RHR term. On the `BaselineState` overload an
+    ///     UNUSABLE baseline (#1988) is treated as nil, so a synthetic cold-start midpoint never scores.
     ///   - respBaseline: respiration baseline; nil drops the resp term.
     ///   - sleepPerf: Rest quality (Rest composite ÷100, 0..1; was raw efficiency);
     ///     nil drops the term.
@@ -327,6 +328,11 @@ public enum RecoveryScorer {
         // Cold-start gate: HRV is the dominant driver; if its baseline isn't
         // usable, refuse to score (more honest than a fabricated value).
         if !hrvBaselineUsable { return nil }
+        // Required-driver gate: the HRV baseline is REQUIRED for a score. It is Optional here only
+        // for callers that may not have one yet, and hrvBaselineUsable defaults to true, so without
+        // this an absent baseline let any other optional term (sleepPerf alone, say) produce a
+        // Charge score carrying no HRV term at all.
+        guard let hrvB = hrvBaseline else { return nil }
 
         var terms: [(z: Double, w: Double)] = []
 
@@ -337,9 +343,7 @@ public enum RecoveryScorer {
         // signature is still detected and reported out-of-band (Charge trace + ChargeDrivers verdict)
         // so real firings can be counted first. See the MARK header for why, and swap in
         // `parasympatheticSaturation(hrvZ:rhrZ:).easedHrvZ` here to enable it.
-        if let b = hrvBaseline {
-            terms.append((zScore(hrv, mean: b.mean, spread: b.spread), wHRV))
-        }
+        terms.append((zScore(hrv, mean: hrvB.mean, spread: hrvB.spread), wHRV))
         // RHR term: lower is better → (μ − x) / σ.
         if let b = rhrBaseline {
             terms.append((zScore(b.mean, mean: rhr, spread: b.spread), wRHR))
@@ -404,7 +408,13 @@ public enum RecoveryScorer {
                  rhr: rhr,
                  resp: resp,
                  hrvBaseline: DriverBaseline(hrvBaseline),
-                 rhrBaseline: rhrBaseline.map(DriverBaseline.init),
+                 // #1988: an UNUSABLE resting-HR baseline is treated as absent. foldHistory returns
+                 // the config's synthetic midpoint (about 75 bpm) for an empty or all-implausible
+                 // history, which is nobody's resting HR, so scoring against it moved Charge on a
+                 // baseline the user never had. Gated here, in the one place every BaselineState
+                 // caller passes through, rather than at each call site: the headline and the driver
+                 // breakdown then agree by construction. Mirrors hrvBaselineUsable below.
+                 rhrBaseline: rhrBaseline.flatMap { $0.usable ? $0 : nil }.map(DriverBaseline.init),
                  respBaseline: respBaseline.map(DriverBaseline.init),
                  sleepPerf: sleepPerf,
                  skinTempDev: skinTempDev,

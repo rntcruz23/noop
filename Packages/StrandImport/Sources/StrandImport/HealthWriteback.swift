@@ -181,10 +181,37 @@ public enum HealthWriteback {
         appleHealthExternalUUID(kind: metricId, identity: day)
     }
 
+    /// How close to the newest heart rate a night may end and still be read as unfinished.
+    public static let openNightMarginSeconds = 20 * 60
+
+    /// How long after its end a night is final even with no newer heart rate, so a strap taken off at
+    /// wake (charging, say) does not hold the night back indefinitely.
+    public static let openNightMaxHoldSeconds = 2 * 3_600
+
+    /// Whether a detected night may still be growing: it ends where the synced heart rate ends.
+    ///
+    /// A night is detected from whatever has synced so far, so a pass during the night ends it at the
+    /// newest sample. That truncated night used to reach Apple Health like a finished one, and a reader
+    /// took its end as the wake: a field night slept to 09:36 was in Health as ending 06:53, with vitals
+    /// scored from the first six hours, until a later write-back replaced it. Holding a night whose end
+    /// sits within `openNightMarginSeconds` of the newest heart rate keeps it out until the strap has
+    /// seen the wearer awake; after `openNightMaxHoldSeconds` it is written regardless.
+    public static func nightIsStillOpen(endTs: Int, newestHeartRateTs: Int, now: Int) -> Bool {
+        newestHeartRateTs - endTs < openNightMarginSeconds && now - endTs < openNightMaxHoldSeconds
+    }
+
     /// The sleep key: `noop:sleep:<startTs>`.
     public static func appleHealthSleepKey(startTs: Int) -> String {
         appleHealthExternalUUID(kind: "sleep", identity: "\(startTs)")
     }
+
+    /// The prefix every workout key carries, without the identity.
+    ///
+    /// Exists so a reader can recognise one of our workouts in Health without reconstructing a key it
+    /// does not know the timestamp for: the orphan reconciliation in `HealthKitBridge` matches on this
+    /// to tell a workout WE wrote from one another app wrote, before deciding anything about it. Kept
+    /// beside the key builder so the two cannot drift. (#2210)
+    public static let appleHealthWorkoutKeyPrefix = "noop:workout:"
 
     /// The workout key: `noop:workout:<startTs>`.
     public static func appleHealthWorkoutKey(startTs: Int) -> String {

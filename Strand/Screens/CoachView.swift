@@ -25,25 +25,21 @@ struct CoachView: View {
     @State private var draft: String = UserDefaults.standard.string(forKey: "coach.composerDraft") ?? ""
     /// Pending key text in the setup card (never persisted here, handed to `setKey`).
     @State private var keyDraft: String = ""
+    /// The corrected key, typed into the editor a rejection opens. Separate from `keyDraft` so the
+    /// setup card's own field is untouched, and cleared on save so a secret does not sit in view state
+    /// after it has been stored. Twin of the Kotlin `keyFix`.
+    @State private var keyFix: String = ""
     /// Whether the model selector is in free-text "Custom…" mode.
     @State private var customModel: Bool = false
     /// The id typed in the "Custom…" field.
     @State private var customModelDraft: String = ""
-    /// Whether the editable-system-prompt section is expanded. Collapsed by default so the settings
-    /// stay compact; most users never touch the prompt.
-    @State private var promptExpanded: Bool = false
-    /// Working copy of the system prompt while editing, committed to the engine on change so an edit
-    /// takes effect on the next send. Seeded from the engine when the editor opens.
-    @State private var promptDraft: String = ""
     @FocusState private var composerFocused: Bool
 
-    // K5: scheduled morning-brief notification settings (CoachBriefScheduler).
-    @State private var briefEnabled: Bool = CoachBriefScheduler.isEnabled
-    @State private var briefMinutes: Int = CoachBriefScheduler.timeMinutes
-    @State private var briefGenerating = false
-    @State private var briefStatus: String?
     /// K2: confirmation gate for the destructive "Clear conversation" toolbar action.
     @State private var showClearConfirm = false
+    /// #2243: the coach settings, presented as a sheet. See `CoachSettingsView` for why a sheet
+    /// rather than a push.
+    @State private var showSettings = false
 
     // K4: on-device voice input for the composer (iOS only). macOS gets a no-op stub via
     // `#if os(iOS)` guards — the shared file keeps compiling for both targets.
@@ -68,16 +64,14 @@ struct CoachView: View {
                        topBackground: liquidScaffoldSky()) {
             if coach.isConfigured {
                 connectedHeader
-                consentBar
-                // v5: a SECOND opt-in, only meaningful once data access is on, folds a summary of the
-                // new on-device signals (your strongest patterns + Lab Book) into the coach context.
-                if coach.dataConsent { onDeviceSignalsBar }
-                if coach.dataConsent && coach.provider == .gemini { multimodalChartBar }
-                systemPromptBar
-                morningBriefBar
                 transcript
                 if let error = coach.errorText, !error.isEmpty {
                     errorBanner(error)
+                    // A rejected key is the one failure the wearer can act on from here, and the
+                    // message already tells them to: "Check the key and the provider you selected".
+                    // Until this, the screen offered nowhere to check it. Rendered INSIDE the error
+                    // branch, never on its own flag, so it cannot outlive the message justifying it.
+                    if coach.keyRejected { keyRepairPanel }
                 }
                 // K7: show follow-up chips after each assistant reply (when the transcript is
                 // non-empty and the last message is from the assistant and not mid-send);
@@ -98,6 +92,13 @@ struct CoachView: View {
                 setupCard
             }
         }
+        // macOS only. On iOS these two live in `connectionMenu` instead, because this bar is hidden for
+        // a primary tab root and VISIBLE in the pillar sheet, so leaving them here would render nothing
+        // on the Coach tab and a duplicate of the menu in the sheet. One control per platform, reachable
+        // in both of iOS's presentations. The `#if` sits on the CHAIN rather than inside the builder:
+        // `ToolbarContentBuilder` is not relied on to accept an empty body, and the one other
+        // conditional toolbar here (CoupledView) always yields an item on both platforms. (#2206)
+        #if os(macOS)
         .toolbar {
             if coach.isConfigured {
                 // K2: wipe the persisted + in-memory conversation. Confirmed, since it's destructive.
@@ -123,6 +124,14 @@ struct CoachView: View {
                 }
             }
         }
+        #endif
+        // #2243: coach settings. `repo` rides along because the scaffold's environment is not
+        // inherited by a sheet's own view tree.
+        .sheet(isPresented: $showSettings) {
+            CoachSettingsView()
+                .environmentObject(coach)
+                .environmentObject(repo)
+        }
         .confirmationDialog(
             "Clear conversation?",
             isPresented: $showClearConfirm,
@@ -141,7 +150,11 @@ struct CoachView: View {
         // transcript genuinely empty.
         .task {
             await coach.loadPersistedMessagesIfNeeded()
-            if let stored = CoachBriefScheduler.consumeStoredBrief() {
+            // Gated on the transcript BEFORE consuming. `consumeStoredBrief()` clears the unconsumed
+            // flag, and `surfaceScheduledBrief` then drops the text if a transcript exists, so a brief
+            // that arrived on a day with a conversation already open was consumed and thrown away, gone
+            // for good. Android checked first and so only ever failed to SHOW it (#2087).
+            if coach.messages.isEmpty, let stored = CoachBriefScheduler.consumeStoredBrief() {
                 coach.surfaceScheduledBrief(stored)
             }
             CoachBriefScheduler.activateIfEnabled { await coach.generateBrief() }
@@ -172,237 +185,6 @@ struct CoachView: View {
         // a conversation exists.
         .onChangeCompat(of: coach.dataConsent) { _ in
             Task { await coach.startBriefIfNeeded() }
-        }
-    }
-
-    /// K5: the scheduled morning-brief notification settings — enable toggle, time-of-day picker, and an
-    /// explicit "Generate now" button. Mirrors the `ScheduledDebugExport` settings row shape (TestCentreView).
-    private var morningBriefBar: some View {
-        NoopCard(padding: 14, tint: StrandPalette.chargeColor) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Image(systemName: briefEnabled ? "sunrise.fill" : "sunrise")
-                        .foregroundStyle(briefEnabled ? StrandPalette.accent : StrandPalette.textTertiary)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Morning brief").font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
-                        Text(briefEnabled
-                             ? "A local notification with today's readiness + training plan, generated on-device each morning."
-                             : "Off: nothing is generated or sent on a schedule.")
-                            .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle("", isOn: $briefEnabled)
-                        .labelsHidden().toggleStyle(.switch).tint(StrandPalette.accent)
-                        .accessibilityLabel("Morning brief")
-                }
-                .onChangeCompat(of: briefEnabled) { on in
-                    CoachBriefScheduler.setEnabled(on, generateBrief: { await coach.generateBrief() }) { outcome in
-                        if outcome == .denied {
-                            briefEnabled = false
-                            briefStatus = "Notifications are off for NOOP — enable them in Settings first."
-                        }
-                    }
-                }
-
-                if briefEnabled {
-                    Divider().overlay(StrandPalette.hairline)
-                    HStack {
-                        Text("Time").font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
-                        Spacer()
-                        DatePicker("", selection: briefTimeBinding, displayedComponents: .hourAndMinute)
-                            .labelsHidden()
-                            .accessibilityLabel("Morning brief time")
-                    }
-                    Text("At \(Platform.deviceNounPhrase == "Mac" ? "this time" : "or soon after"), NOOP will use your key to generate today's brief. Best-effort: \(Platform.deviceNounPhrase) decides exactly when a backgrounded app wakes.")
-                        .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    NoopButton(briefGenerating ? "Generating…" : "Generate now", systemImage: "sparkles", kind: .secondary) {
-                        generateBriefNow()
-                    }
-                    .disabled(briefGenerating)
-                    if let briefStatus {
-                        Text(briefStatus).font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
-                    }
-                }
-            }
-        }
-    }
-
-    private var briefTimeBinding: Binding<Date> {
-        Binding(
-            get: {
-                var c = DateComponents()
-                c.hour = briefMinutes / 60
-                c.minute = briefMinutes % 60
-                return Calendar.current.date(from: c) ?? Date()
-            },
-            set: { date in
-                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
-                let m = (c.hour ?? 7) * 60 + (c.minute ?? 0)
-                briefMinutes = m
-                CoachBriefScheduler.setTimeMinutes(m, generateBrief: { await coach.generateBrief() })
-            }
-        )
-    }
-
-    private func generateBriefNow() {
-        Task {
-            briefGenerating = true
-            briefStatus = nil
-            defer { briefGenerating = false }
-            let text = await CoachBriefScheduler.generateNow { await coach.generateBrief() }
-            if let text {
-                coach.appendGeneratedBrief(text)
-            } else {
-                briefStatus = "Couldn't generate a brief right now — check your key and data access."
-            }
-        }
-    }
-
-    /// Explicit, revocable permission for the coach to read & send the user's data. Off by default.
-    /// A frosted Charge-tinted card so it reads as part of the green Coach world, not a flat panel.
-    private var consentBar: some View {
-        NoopCard(padding: 14, tint: StrandPalette.chargeColor) {
-            HStack(spacing: 10) {
-                Image(systemName: coach.dataConsent ? "lock.open.fill" : "lock.fill")
-                    .foregroundStyle(coach.dataConsent ? StrandPalette.accent : StrandPalette.textTertiary)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Let the coach use my data")
-                        .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
-                    Text(coach.dataConsent
-                         ? "On: your charge, rest, HRV and workouts are shared with the provider for tailored coaching."
-                         : "Off: the coach answers generally and sends none of your metrics.")
-                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Toggle("", isOn: $coach.dataConsent)
-                    .labelsHidden().toggleStyle(.switch).tint(StrandPalette.accent)
-                    .accessibilityLabel("Let the coach use my data")
-            }
-        }
-    }
-
-    /// The v5 second opt-in: include a SUMMARY of the new on-device signals (strongest n-of-1 patterns +
-    /// Lab Book markers). Summary-only, never raw readings, so the no-raw-egress posture holds.
-    private var onDeviceSignalsBar: some View {
-        NoopCard(padding: 14, tint: StrandPalette.chargeColor) {
-            HStack(spacing: 10) {
-                Image(systemName: coach.includeOnDeviceSignals ? "checklist.checked" : "checklist")
-                    .foregroundStyle(coach.includeOnDeviceSignals ? StrandPalette.accent : StrandPalette.textTertiary)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Also share my patterns & Lab Book")
-                        .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
-                    Text(coach.includeOnDeviceSignals
-                         ? "On: a short summary of your strongest patterns and logged health numbers is added. Summaries only, never raw readings."
-                         : "Off: only your core metrics are shared, not your patterns or Lab Book.")
-                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Toggle("", isOn: $coach.includeOnDeviceSignals)
-                    .labelsHidden().toggleStyle(.switch).tint(StrandPalette.accent)
-                    .accessibilityLabel("Also share my patterns and Lab Book with the coach")
-            }
-        }
-    }
-
-    /// K11: Third opt-in — send a chart image alongside the text when using Gemini's multimodal
-    /// API. Only shown when the provider is Gemini. OFF by default.
-    private var multimodalChartBar: some View {
-        NoopCard(padding: 14, tint: StrandPalette.chargeColor) {
-            HStack(spacing: 10) {
-                Image(systemName: coach.multimodalChartEnabled ? "photo.badge.checkmark" : "photo")
-                    .foregroundStyle(coach.multimodalChartEnabled ? StrandPalette.accent : StrandPalette.textTertiary)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Send chart image to Gemini")
-                        .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
-                    Text(coach.multimodalChartEnabled
-                         ? "On: a chart snapshot of your trends is sent with each question. Gemini can analyze the visual."
-                         : "Off: only text is sent. Enable to let Gemini see your charts.")
-                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Toggle("", isOn: $coach.multimodalChartEnabled)
-                    .labelsHidden().toggleStyle(.switch).tint(StrandPalette.accent)
-                    .accessibilityLabel("Send chart image to Gemini")
-            }
-        }
-    }
-
-    /// Editable system prompt, the instructions that frame the coach. Collapsed by default; expanding
-    /// reveals a TextEditor bound to the engine (edits persist to UserDefaults and take effect on the
-    /// next message) plus a Reset-to-default control. Lives inline in the existing settings, NOT a modal.
-    private var systemPromptBar: some View {
-        NoopCard(padding: 14, tint: StrandPalette.chargeColor) {
-            VStack(alignment: .leading, spacing: promptExpanded ? 10 : 0) {
-                Button {
-                    withAnimation(StrandMotion.fade) {
-                        promptExpanded.toggle()
-                        if promptExpanded { promptDraft = coach.customSystemPrompt }
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "text.alignleft")
-                            .foregroundStyle(coach.hasCustomSystemPrompt ? StrandPalette.accent : StrandPalette.textTertiary)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Coach instructions")
-                                .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
-                            Text(coach.hasCustomSystemPrompt
-                                 ? "Customised. Your edited instructions frame every reply."
-                                 : "Edit how the coach thinks and talks. Takes effect on your next message.")
-                                .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 8)
-                        Image(systemName: promptExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(StrandPalette.textTertiary)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(promptExpanded ? "Collapse coach instructions" : "Edit coach instructions")
-
-                if promptExpanded {
-                    TextEditor(text: $promptDraft)
-                        .font(StrandFont.body)
-                        .foregroundStyle(StrandPalette.textPrimary)
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 140, maxHeight: 240)
-                        .padding(8)
-                        .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(StrandPalette.hairline, lineWidth: 1))
-                        .onChangeCompat(of: promptDraft) { newValue in
-                            coach.customSystemPrompt = newValue
-                        }
-                        .accessibilityLabel("Coach instructions editor")
-
-                    HStack {
-                        Spacer()
-                        Button {
-                            coach.resetSystemPrompt()
-                            promptDraft = coach.customSystemPrompt
-                        } label: {
-                            Label("Reset to default", systemImage: "arrow.uturn.backward")
-                                .font(StrandFont.footnote)
-                                .labelStyle(.titleAndIcon)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(StrandPalette.accent)
-                        .disabled(!coach.hasCustomSystemPrompt)
-                        .accessibilityLabel("Reset coach instructions to default")
-                    }
-                }
-            }
         }
     }
 
@@ -508,6 +290,15 @@ struct CoachView: View {
                     Spacer()
                 }
 
+                // Whatever the last attempt from THIS card ran into. The setup card had no error line
+                // at all, so every way it can fail before a key is committed failed silently: a Refresh
+                // the provider turned away, a Connect to a server that wants auth. The wearer saw a
+                // button do nothing. No repair affordance beside it, unlike the chat: the key field is
+                // already on screen, which is the whole point of the card.
+                if let error = coach.errorText, !error.isEmpty {
+                    errorBanner(error)
+                }
+
                 Divider().overlay(StrandPalette.hairline)
                 privacyFootnote
             }
@@ -603,8 +394,75 @@ struct CoachView: View {
             if coach.sending {
                 StatePill("Thinking", tone: .accent, pulsing: true)
             }
+            // #2243: the way through to what used to be stacked under this header.
+            Button {
+                showSettings = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(StrandPalette.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(String(localized: "Coach settings"))
+            #if os(iOS)
+            connectionMenu
+            #endif
         }
     }
+
+    #if os(iOS)
+    /// #2206: the same two actions the toolbar above carries, drawn where iPhone can reach them.
+    ///
+    /// `RootTabView.tab(...)` wraps every primary tab root in a NavigationStack and applies
+    /// `.toolbar(.hidden, for: .navigationBar)`, because each screen draws its own in-content header.
+    /// So Clear conversation and Disconnect were being placed into a bar this platform never shows, and
+    /// rendered nowhere. Disconnect is the ONLY route back to the setup card, which is the only place
+    /// an API key can be typed: `isConfigured` gates that card away the moment a key is saved. The
+    /// result was a key that could be set once and then never changed, with reinstalling the app the
+    /// only way out, which on an offline-first app costs the wearer their entire history.
+    ///
+    /// macOS keeps the toolbar and does not get this, so its behaviour is untouched. On iOS the toolbar
+    /// route is withdrawn rather than kept alongside: CoachView is presented twice on this platform, as
+    /// a primary tab whose bar is hidden and as a pillar sheet whose bar is NOT (it draws a Done button
+    /// and only hides the bar's background). Keeping both would render nothing on the tab and two of
+    /// everything in the sheet. One control, reachable in both presentations.
+    ///
+    /// A menu rather than a bare button because it needs two taps to reach a destructive action,
+    /// matching the protection the toolbar's separation gives, and because both actions belong to the
+    /// same connection.
+    ///
+    /// Worth knowing before changing `disconnect()`: neither `hasKey` nor `isConfigured` is published,
+    /// since `hasKey` reads the Keychain on each evaluation. The setup card reappears because
+    /// `disconnect()` ALSO assigns the published `messages`, which is what re-evaluates the body. A
+    /// future disconnect that stopped clearing the transcript would clear the key and leave this screen
+    /// showing a chat for a connection that no longer exists. macOS has depended on the same coupling
+    /// since its toolbar button existed, so this is a latent edge being written down, not a new one.
+    private var connectionMenu: some View {
+        Menu {
+            Button {
+                showClearConfirm = true
+            } label: {
+                Label("Clear conversation", systemImage: "trash")
+            }
+            .disabled(coach.messages.isEmpty)
+            Button(role: .destructive) {
+                coach.disconnect()
+                keyDraft = ""
+            } label: {
+                Label("Disconnect", systemImage: "gearshape")
+            }
+        } label: {
+            // Same affordance DevicesView uses for its per-device menu, headline size included. The
+            // size is not decoration here: the report this came from was that the option could not be
+            // FOUND, so a control that matches the one the wearer has already learned, at a size worth
+            // aiming at, is doing part of the work.
+            Image(systemName: "ellipsis.circle")
+                .font(StrandFont.headline)
+                .foregroundStyle(StrandPalette.textSecondary)
+        }
+        .accessibilityLabel("Connection")
+    }
+    #endif
 
     private var transcript: some View {
         StrandCard(padding: 16) {
@@ -749,6 +607,48 @@ struct CoachView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Error: \(message)")
+    }
+
+    /// The inline "your key was turned away, here is the field" repair, shown under a rejection.
+    ///
+    /// Saving goes through `setKey`, which replaces the stored key and leaves the transcript alone. The
+    /// existing route was the Disconnect button, which also wipes the conversation and un-commits a
+    /// custom provider: far more than correcting a typo asks for, and named for an outcome the wearer
+    /// is trying to avoid. Twin of the Kotlin editor in `CoachChat`.
+    private var keyRepairPanel: some View {
+        StrandCard(padding: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Paste the corrected key. Your conversation is kept.")
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                SecureField("Paste your \(coach.provider.displayName) API key", text: $keyFix)
+                    .textFieldStyle(.plain)
+                    .font(StrandFont.body)
+                    .foregroundStyle(StrandPalette.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(StrandPalette.hairline, lineWidth: 1))
+                    .onSubmit(saveRepairedKey)
+                    .accessibilityLabel("Corrected API key")
+                HStack {
+                    NoopButton("Update key", systemImage: "key.fill", kind: .primary, action: saveRepairedKey)
+                        .disabled(keyFix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    /// Store the corrected key and drop it from view state. `setKey` clears the error and the rejection
+    /// flag, which is what closes this panel.
+    private func saveRepairedKey() {
+        let trimmed = keyFix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        coach.setKey(trimmed)
+        keyFix = ""
     }
 
     private var suggestionChips: some View {

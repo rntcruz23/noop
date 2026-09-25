@@ -3,6 +3,7 @@ package com.noop.analytics
 import com.noop.data.HrSample
 import com.noop.data.RrInterval
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -93,20 +94,92 @@ class SleepStagerWindowEndpointTest {
         }
     }
 
+    // MARK: - #1943: sessionRestingHR bin-population + plausibility gates
+
+    @Test
+    fun thinBinCannotWinTheFloor() {
+        // 300 samples at 60 in the first bin (qualifies), one sample at 38 in the final bin (thin).
+        // Before #1943 the floor was 38; now the thin bin is excluded and the floor is 60.
+        val samples = ArrayList<HrSample>()
+        for (i in 0 until 300) samples.add(hr(i.toLong(), 60))
+        samples.add(hr(600L, 38))
+        assertEquals(
+            "a one-sample bin cannot win the floor under the #1943 gate",
+            60, SleepStager.sessionRestingHR(0L, 600L, samples)
+        )
+    }
+
+    @Test
+    fun implausibleBinCannotWinTheFloor() {
+        // 300 samples at 60 (qualifies), then 300 samples at 20 (well-populated but implausible).
+        // Before #1943 the floor was 20; now the implausible bin is excluded and the floor is 60.
+        val samples = ArrayList<HrSample>()
+        for (i in 0 until 300) samples.add(hr(i.toLong(), 60))
+        for (i in 300 until 600) samples.add(hr(i.toLong(), 20))
+        assertEquals(
+            "a sub-25 bpm bin cannot win the floor under the #1943 gate",
+            60, SleepStager.sessionRestingHR(0L, 600L, samples)
+        )
+    }
+
+    @Test
+    fun allBinsGatedFallsBackToUngatedMin() {
+        // Two bins, each with one sample: 40 and 50. Neither qualifies (both thin). The fallback
+        // is the min of all bin means = 40, the same value the ungated path produced.
+        val samples = listOf(hr(0L, 40), hr(300L, 50))
+        assertEquals(
+            "when no bin qualifies, the floor falls back to the ungated min",
+            40, SleepStager.sessionRestingHR(0L, 600L, samples)
+        )
+    }
+
+    @Test
+    fun denseNightUnchangedByGate() {
+        val samples = (0 until 1800).map { hr(it.toLong(), 60) }
+        assertEquals(
+            "a well-populated night is unchanged by the gate",
+            60, SleepStager.sessionRestingHR(0L, 1800L, samples)
+        )
+    }
+
+    @Test
+    fun binSampleCountBoundary() {
+        // First bin: 300 samples at 70 (qualifies). Final bin: 4 samples at 40 (below threshold).
+        val samples = ArrayList<HrSample>()
+        for (i in 0 until 300) samples.add(hr(i.toLong(), 70))
+        for (i in 0 until 4) samples.add(hr(600L, 40))
+        assertEquals(
+            "a 4-sample bin is below the minBinSamples=5 threshold and cannot win",
+            70, SleepStager.sessionRestingHR(0L, 600L, samples)
+        )
+    }
+
+    @Test
+    fun plausibilityBoundary() {
+        // First bin: 300 samples at 60 (qualifies). Final bin: 300 samples at 24 (implausible).
+        val samples = ArrayList<HrSample>()
+        for (i in 0 until 300) samples.add(hr(i.toLong(), 60))
+        for (i in 300 until 600) samples.add(hr(i.toLong(), 24))
+        assertEquals(
+            "a 24-bpm mean is below the minPlausibleBpm=25 threshold and cannot win",
+            60, SleepStager.sessionRestingHR(0L, 600L, samples)
+        )
+    }
+
     @Test
     fun alignedEndpointBeatsFillTheFinalHrvWindow() {
-        // 120 beats in the opening window plus three beats exactly on an aligned end = 600. The
-        // second window is the final one, so it closes on `end` and holds those three beats; before
+        // 120 beats in the opening window plus 25 beats exactly on an aligned end = 600 (enough to clear
+        // the MIN_BEATS floor). The second window is the final one, so it closes on `end` and holds them; before
         // the fix it was emitted empty and its RMSSD was null. Constant 900 ms RR keeps the RMSSD
         // analytically 0.0 on both platforms — this pins the BINNING, not the RMSSD math.
         val beats = ArrayList<RrInterval>()
         for (i in 0 until 120) beats.add(rr(i.toLong(), 900))
-        for (i in 0 until 3) beats.add(rr(600L, 900))
+        for (i in 0 until 25) beats.add(rr(600L, 900))
         val wins = SleepStager.sessionHrvWindows(0L, 600L, beats, emptyList())
         assertEquals(listOf(0L, 300L), wins.map { it.startTs })
         assertEquals(
             "the endpoint beats must fill the final window",
-            listOf(120, 3), wins.map { it.cleanBeats }
+            listOf(120, 25), wins.map { it.cleanBeats }
         )
         assertEquals(listOf(0.0, 0.0), wins.map { it.rmssd })
     }
@@ -127,7 +200,29 @@ class SleepStagerWindowEndpointTest {
     fun sessionAvgHrvZeroLengthWindowUsesTheEndpointBeats() {
         // The value-level consequence: a zero-length window (start == end) is one closed bin, so
         // beats admitted by the prefilter produce a number instead of null.
-        val beats = (0 until 3).map { rr(1000L, 900) }
+        val beats = (0 until 25).map { rr(1000L, 900) }
         assertEquals(0.0, SleepStager.sessionAvgHRV(1000L, 1000L, beats)!!, 1e-9)
+    }
+
+    @Test
+    fun hrvWindowNeedsMinBeatsCleanIntervals() {
+        // A window emits an RMSSD only with HrvAnalyzer.MIN_BEATS (20) clean intervals: 19 is null, 20 is a
+        // value. Before the floor a window needed just 2, and weighed as much as a full one in the mean.
+        fun window(n: Int): Double? {
+            val beats = (0 until n).map { rr(it.toLong(), 900) }
+            return SleepStager.sessionHrvWindows(0L, 300L, beats, emptyList()).first().rmssd
+        }
+        assertNull(window(HrvAnalyzer.MIN_BEATS - 1))
+        assertEquals(0.0, window(HrvAnalyzer.MIN_BEATS)!!, 1e-9)
+    }
+
+    @Test
+    fun sessionAvgHrvIgnoresASparseWindow() {
+        // Same fixture as Swift testSessionAvgHRVIgnoresASparseWindow: a full window of alternating
+        // 900/1000 ms (RMSSD 100) next to a sparse one of 900/1300 ms (RMSSD 400, 10 beats). Without the
+        // floor the sparse window counted equally and the mean was 250.
+        val full = (0 until 300).map { rr(it.toLong(), if (it % 2 == 0) 900 else 1000) }
+        val sparse = (0 until 10).map { rr(300L + it * 25L, if (it % 2 == 0) 900 else 1300) }
+        assertEquals(100.0, SleepStager.sessionAvgHRV(0L, 600L, full + sparse)!!, 1e-9)
     }
 }

@@ -492,36 +492,52 @@ class UnbondedOffloadProbeTest {
     /** A latched refusal is the strap's verdict — it retires the probe, so the handshake must resume. */
     @Test
     fun `a latched refusal retires the probe`() {
-        assertTrue(unbondedProbeRetired(previouslyRefused = true, silentLinksSoFar = 0))
+        assertTrue(unbondedProbeRetired(previouslyRefused = true, silentLinksSoFar = 0,
+            inconclusiveLinksSoFar = 0))
     }
 
     /** Silence spends a budget rather than latching, so the probe stays live while it has one. */
     @Test
     fun `silence retires the probe only once its budget is spent`() {
-        assertFalse(unbondedProbeRetired(previouslyRefused = false, silentLinksSoFar = 0))
+        assertFalse(unbondedProbeRetired(previouslyRefused = false, silentLinksSoFar = 0,
+            inconclusiveLinksSoFar = 0))
         assertFalse(unbondedProbeRetired(
-            previouslyRefused = false, silentLinksSoFar = UNBONDED_PROBE_MAX_SILENT_LINKS - 1))
+            previouslyRefused = false, silentLinksSoFar = UNBONDED_PROBE_MAX_SILENT_LINKS - 1,
+            inconclusiveLinksSoFar = 0))
         assertTrue(unbondedProbeRetired(
-            previouslyRefused = false, silentLinksSoFar = UNBONDED_PROBE_MAX_SILENT_LINKS))
+            previouslyRefused = false, silentLinksSoFar = UNBONDED_PROBE_MAX_SILENT_LINKS,
+            inconclusiveLinksSoFar = 0))
     }
 
     /**
      * The two gates must agree by construction, not by both being edited together. Whenever the probe
      * declines for a RETIREMENT reason, the skip must decline too — otherwise the strap is stranded with a
      * suppressed handshake and nothing using the link it creates.
+     *
+     * All THREE retirement grounds are swept. The inconclusive axis was held at 0 here while the ground
+     * itself was live, so this pinned the agreement on two thirds of the rule, and stranding is precisely
+     * what the omission of that axis caused in `WhoopBleClient`. To be accurate about what this test can
+     * and cannot do: a pure-function sweep cannot see a CALL SITE that forgets an argument, which is why
+     * `unbondedProbeRetired` no longer offers a default for it. This pins that the two rules agree once
+     * they are both given it.
      */
     @Test
     fun `the skip and the probe retire on exactly the same conditions`() {
         for (refused in listOf(false, true)) {
             for (silent in 0..UNBONDED_PROBE_MAX_SILENT_LINKS + 1) {
-                val retired = unbondedProbeRetired(refused, silent)
-                val probeWouldRun = shouldProbeUnbondedOffload(
-                    isWhoop5 = true, optedIn = true, bonded = false, helloWrittenThisLink = false,
-                    alreadyProbedThisLink = false, previouslyRefused = refused, silentLinksSoFar = silent)
-                val skips = unbondedProbeSupersedesHandshake(
-                    optedIn = true, isWhoop5 = true, appLevelBonded = false, userInitiated = false,
-                    probeRetired = retired)
-                assertEquals("refused=$refused silent=$silent", probeWouldRun, skips)
+                for (inconclusive in 0..UNBONDED_PROBE_MAX_INCONCLUSIVE_LINKS + 1) {
+                    val retired = unbondedProbeRetired(refused, silent, inconclusive)
+                    val probeWouldRun = shouldProbeUnbondedOffload(
+                        isWhoop5 = true, optedIn = true, bonded = false, helloWrittenThisLink = false,
+                        alreadyProbedThisLink = false, previouslyRefused = refused,
+                        silentLinksSoFar = silent, inconclusiveLinksSoFar = inconclusive)
+                    val skips = unbondedProbeSupersedesHandshake(
+                        optedIn = true, isWhoop5 = true, appLevelBonded = false, userInitiated = false,
+                        probeRetired = retired)
+                    assertEquals(
+                        "refused=$refused silent=$silent inconclusive=$inconclusive",
+                        probeWouldRun, skips)
+                }
             }
         }
     }
@@ -607,5 +623,150 @@ class UnbondedOffloadProbeTest {
             silentLinksSoFar = UNBONDED_PROBE_MAX_SILENT_LINKS,
         )!!
         assertTrue(spent, spent.contains("silent-link budget is spent"))
+    }
+
+    // MARK: - #1804: local teardown is inconclusive, not a strap verdict
+
+    /** The field capture: status=22 (GATT_CONN_TERMINATE_LOCAL_HOST). This is the exact case that
+     *  latched the probe permanently on the reporting install — a local teardown counted as a strap
+     *  refusal. The origin is NOT a parameter: it does not affect the verdict, and a parameter that
+     *  cannot change the answer invites the next reader to believe it can. */
+    @Test
+    fun `a local teardown is inconclusive regardless of origin`() {
+        assertTrue(unbondedProbeLinkLostIsLocalTeardown(status = 22))
+    }
+
+    /** A supervision timeout (status=8, GATT_CONN_TIMEOUT) is the STRAP dropping the link — that IS
+     *  evidence about the strap and should charge the silence budget. */
+    @Test
+    fun `a strap-side timeout is not a local teardown`() {
+        assertFalse(unbondedProbeLinkLostIsLocalTeardown(status = 8))
+    }
+
+    /** Any other status (e.g. 19, 133) is also not a local teardown. */
+    @Test
+    fun `other statuses are not local teardowns`() {
+        assertFalse(unbondedProbeLinkLostIsLocalTeardown(status = 19))
+        assertFalse(unbondedProbeLinkLostIsLocalTeardown(status = 133))
+    }
+
+    /** The inconclusive line names the stage and the origin, and says it does not consume a SILENCE
+     *  budget attempt — so a reader of the log knows the silence budget is not spent. It DOES charge
+     *  the inconclusive budget, but that has its own larger cap (#1804). */
+    @Test
+    fun `the inconclusive line names stage and origin and says it does not charge silence`() {
+        val line = unbondedProbeLinkLostLocalTeardownLine(
+            uptimeMs = 10776, stage = 1, localTeardownOrigin = null,
+        )
+        assertTrue(line, line.contains("terminated locally"))
+        assertTrue(line, line.contains("10776ms"))
+        assertTrue(line, line.contains("while subscribing"))
+        assertTrue(line, line.contains("via=unknown"))
+        assertTrue(line, line.contains("inconclusive"))
+        assertTrue(line, line.contains("does not consume"))
+    }
+
+    @Test
+    fun `the inconclusive line for stage 2 names GET_CLOCK`() {
+        val line = unbondedProbeLinkLostLocalTeardownLine(
+            uptimeMs = 10761, stage = 2, localTeardownOrigin = "bondWatchdog",
+        )
+        assertTrue(line, line.contains("after GET_CLOCK went out"))
+        assertTrue(line, line.contains("via=bondWatchdog"))
+    }
+
+    // MARK: - #1804: inconclusive budget bounds the retry
+
+    /** A local teardown is weaker evidence than silence, so it gets its own LARGER cap. The probe
+     *  retires when the inconclusive budget is spent, so a strap whose every link is torn down
+     *  locally does not retry forever. */
+    @Test
+    fun `inconclusive budget is larger than the silence budget`() {
+        assertTrue(UNBONDED_PROBE_MAX_INCONCLUSIVE_LINKS > UNBONDED_PROBE_MAX_SILENT_LINKS)
+    }
+
+    @Test
+    fun `probe retires when inconclusive budget is spent`() {
+        assertTrue(unbondedProbeRetired(
+            previouslyRefused = false,
+            silentLinksSoFar = 0,
+            inconclusiveLinksSoFar = UNBONDED_PROBE_MAX_INCONCLUSIVE_LINKS,
+        ))
+    }
+
+    @Test
+    fun `probe does not retire when inconclusive budget is not yet spent`() {
+        assertFalse(unbondedProbeRetired(
+            previouslyRefused = false,
+            silentLinksSoFar = 0,
+            inconclusiveLinksSoFar = UNBONDED_PROBE_MAX_INCONCLUSIVE_LINKS - 1,
+        ))
+    }
+
+    /** The skipped line names the inconclusive budget when that is what retired the probe. */
+    @Test
+    fun `skipped line names inconclusive budget when it is the reason`() {
+        val line = unbondedProbeSkippedLine(
+            isWhoop5 = true,
+            optedIn = true,
+            bonded = false,
+            helloWrittenThisLink = false,
+            alreadyProbedThisLink = false,
+            previouslyRefused = false,
+            silentLinksSoFar = 0,
+            inconclusiveLinksSoFar = UNBONDED_PROBE_MAX_INCONCLUSIVE_LINKS,
+        )
+        assertNotNull(line, line)
+        assertTrue(line!!, line.contains("inconclusive-link budget is spent"))
+        assertTrue(line, line.contains("our own stack"))
+    }
+
+    /**
+     * #2135: the key a refusal is WRITTEN under must be reachable by the prefix a re-arm sweeps.
+     *
+     * The two drifting apart is the whole bug: the sweep cleared the two budgets, the latch kept its own
+     * spelling in another file, and the probe stayed retired through every re-arm while the diagnostic
+     * kept suggesting one. Building the key from the prefix makes that unrepresentable; this pins it.
+     */
+    @Test
+    fun aRefusalKeyIsReachableByTheRearmSweep() {
+        val key = unbondedOffloadRefusedPrefKey("AA:BB:CC:DD:EE:FF")
+        assertNotNull(key)
+        assertTrue(
+            "a refusal latch the re-arm cannot sweep is a retirement with no way out",
+            key!!.startsWith(UNBONDED_OFFLOAD_REFUSED_KEY_PREFIX),
+        )
+    }
+
+    /**
+     * #1804's budget must reach every consumer, not only the gate.
+     *
+     * `unbondedProbeRetired` used to default `inconclusiveLinksSoFar` to 0, and BOTH consumers in
+     * WhoopBleClient silently took that default while the gate passed the real count. So a strap retired
+     * only by the inconclusive budget, which is exactly the strap #1804 was written for since every one
+     * of its links is a local teardown, reported NOT retired: the handshake stayed suppressed for a probe
+     * that would never run, the harm `unbondedProbeSupersedesHandshake.probeRetired` exists to prevent.
+     *
+     * The parameter is required now, so a consumer cannot omit it in silence. This pins the behaviour the
+     * omission hid.
+     */
+    @Test
+    fun `a spent inconclusive budget retires the probe on its own`() {
+        assertTrue(
+            "every link torn down locally is a retirement, whatever silence and refusal say",
+            unbondedProbeRetired(
+                previouslyRefused = false,
+                silentLinksSoFar = 0,
+                inconclusiveLinksSoFar = UNBONDED_PROBE_MAX_INCONCLUSIVE_LINKS,
+            ),
+        )
+        assertFalse(
+            "one short of the cap is still worth asking",
+            unbondedProbeRetired(
+                previouslyRefused = false,
+                silentLinksSoFar = 0,
+                inconclusiveLinksSoFar = UNBONDED_PROBE_MAX_INCONCLUSIVE_LINKS - 1,
+            ),
+        )
     }
 }

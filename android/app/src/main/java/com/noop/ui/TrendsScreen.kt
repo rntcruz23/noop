@@ -1344,6 +1344,60 @@ internal fun vitalStateText(position: VitalBands.Position): String = stringResou
     VitalBands.Position.NO_DATA -> R.string.trends_no_reading
 })
 
+/**
+ * One Trends metric trend, rendered as a Today host card (#today-hosted-cards).
+ *
+ * Renders the SAME [MetricTrendCard] the Trends tab draws, so the hosted copy cannot drift into a
+ * second chart of the same numbers. What it does NOT carry is the range selector: a home-screen card
+ * has nowhere to put one and no obvious place to persist a per-card choice, so it takes a fixed
+ * trailing month projected by the same [metricTrendSummary] the tab uses (today-anchored, no silent
+ * widening onto stale history). The Trends tab remains where you change the window.
+ *
+ * Costs nothing to host. [metricTrendSummary] is a pure walk over the `days` list Today already holds, so
+ * unlike the sleep model or the stress curve there is no read behind this and nothing to gate.
+ */
+@Composable
+internal fun TrendHostCard(card: HostedCard, days: List<DailyMetric>, effortScale: EffortScale) {
+    val range = TrendsRange.Month
+    val todayKey = LocalDate.now().toString()
+    when (card) {
+        HostedCard.TREND_HRV -> MetricTrendCard(
+            title = stringResource(R.string.trends_hrv_full), unit = "ms",
+            color = Palette.metricPurple,
+            higherIsBetter = true,
+            resolved = remember(days, todayKey) {
+                metricTrendSummary(days.map { it.day to it.avgHrv }, todayKey, range.days)
+            },
+            fmt = { "${it.roundToInt()}" },
+        )
+        HostedCard.TREND_RESTING_HR -> MetricTrendCard(
+            title = stringResource(R.string.trends_resting_hr_full), unit = "bpm",
+            color = Palette.metricRose,
+            higherIsBetter = false,
+            resolved = remember(days, todayKey) {
+                metricTrendSummary(days.map { it.day to it.restingHr?.toDouble() }, todayKey, range.days)
+            },
+            fmt = { "${it.roundToInt()}" },
+        )
+        HostedCard.TREND_EFFORT -> MetricTrendCard(
+            // Plotted values stay on the stored 0-100 scale (line shape unchanged); only the displayed
+            // numbers and unit follow the Effort-scale toggle, converted inside `fmt`, exactly as the
+            // Trends tab does it (#268).
+            title = stringResource(R.string.trends_effort),
+            unit = "/ ${UnitFormatter.effortScaleMax(effortScale)}",
+            color = Palette.effortColor,
+            tint = Palette.effortColor,
+            tipColor = Palette.effortBright,
+            higherIsBetter = null,
+            resolved = remember(days, todayKey) {
+                metricTrendSummary(days.map { it.day to it.strain }, todayKey, range.days)
+            },
+            fmt = { UnitFormatter.effortDisplay(it, effortScale) },
+        )
+        else -> Unit
+    }
+}
+
 /** A labelled metric-trend card built from an exact selected-window projection with mean / min / max. */
 @Composable
 private fun MetricTrendCard(

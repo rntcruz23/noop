@@ -31,8 +31,21 @@ public final class FrameRouter {
         // #900: a fresh connection is a fresh capture session — re-arm the per-command raw-frame dump so
         // each connect can re-capture the disputed COMMAND_RESPONSE prefix once. `family` is set fresh per
         // connection by BLEManager (connectCore), so this is the per-session reset hook.
-        didSet { rawDumpedRespCmds.removeAll(); loggedFirmwareGate = nil; deviceId = nil }
+        didSet {
+            rawDumpedRespCmds.removeAll(); loggedFirmwareGate = nil; deviceId = nil
+            rejectTally = FrameRejectTally(); loggedRejectReasons.removeAll()
+        }
     }
+
+    /// Rejected frames on this connection, per reason, plus the one named counter for the class that
+    /// used to pass the gates (payload CRC32 verified, envelope not). Reset per connection alongside the
+    /// other per-connection routing state, since that is the unit the readout is about.
+    public private(set) var rejectTally = FrameRejectTally()
+
+    /// Reasons already reported on this connection, so the Test Centre line is one per REASON rather
+    /// than one per frame: a noisy link rejects continuously, and a per-frame line would bury the
+    /// transition that carries the information.
+    private var loggedRejectReasons: Set<FrameRejectReason> = []
 
     /// #900: resp command names (e.g. "GET_BATTERY_LEVEL(26)") whose raw COMMAND_RESPONSE frame has already
     /// been dumped this connection. The provenance dump fires once per command per session so a 4.0's
@@ -64,9 +77,14 @@ public final class FrameRouter {
         assert(parsed == parseFrame(frame, family: family),
                "FrameRouter.handle: threaded ParsedFrame != fresh parse (#47 parse-once invariant)")
         #endif
-        guard parsed.ok else { return }
-        // Reject frames that failed their checksum — never let bad bytes drive state.
-        if parsed.crcOK == false { return }
+        // ONE gate, the verifier's FULL verdict: header checksum, payload CRC32 and structural length
+        // together. This used to be two steps — a parse-succeeded flag, then a separate payload-CRC
+        // check — and between them sat the class this change closes: a frame whose payload CRC32 is
+        // right while its header checksum or declared length is not. Never let bad bytes drive state.
+        guard parsed.ok else {
+            noteRejectedFrame(parsed)
+            return
+        }
 
         // #987: stamp frame liveness for the Connection readout's "last frame" row. A plain (non-
         // published, see LiveState) Int write, so the raw flood costs no re-renders here.
@@ -96,6 +114,7 @@ public final class FrameRouter {
             // BLE_REALTIME_HR_ON, so the UI can consume it even though persistence still ignores raw43.
             // live perf: skip the publish when HR is unchanged — the raw flood carries the same HR
             // byte across many frames, so an unguarded write re-renders the whole console for nothing.
+            if let hr = parsed.parsed["heart_rate"]?.intValue, hr >= 30, hr <= 220 { state.noteReadableHeartRate() }
             if let hr = parsed.parsed["heart_rate"]?.intValue, hr >= 30, hr <= 220, state.heartRate != hr {
                 state.heartRate = hr
                 // Sleep & Rest test mode (Group E): bank the live HR sample for the readout's HR-density
@@ -189,7 +208,16 @@ public final class FrameRouter {
                              domain: .connection)
             }
             if family == .whoop4, let cmd = parsed.cmdName {
-                if cmd.hasPrefix("GET_ADVERTISING_NAME_HARVARD") {
+                if cmd.hasPrefix("TOGGLE_GENERIC_HR_PROFILE") {
+                    // #2400: this is evidence that the strap answered opcode 14, not a read-back of the
+                    // advertising state. Preserve the raw result byte + frame so another firmware's
+                    // response can be compared without turning an acknowledgement into a false verdict.
+                    let r = Self.commandResultByte(in: frame, family: family)
+                    let rhex = r.map { String(format: "0x%02x", UInt8(truncatingIfNeeded: $0)) } ?? "none"
+                    state.append(log: "Broadcast HR: WHOOP 4 command response received "
+                                 + "resultByte=\(rhex), effect not confirmed "
+                                 + "frame=\(Self.fullFrameHex(frame))")
+                } else if cmd.hasPrefix("GET_ADVERTISING_NAME_HARVARD") {
                     if let name = Self.advertisingName(in: frame), !name.isEmpty {
                         state.advertisingName = name
                     }
@@ -236,11 +264,25 @@ public final class FrameRouter {
                                 sentEpoch: sent,
                                 reportedEpoch: Int(epoch),
                                 sentDeviceId: d.string(forKey: "alarm.lastArmDeviceId"),
-                                reportedDeviceId: deviceId)   // the local, not a re-read of what we just wrote
+                                reportedDeviceId: deviceId,   // the local, not a re-read of what we just wrote
+                                // #2322: this readback is arriving NOW, so it cannot be stale here and the
+                                // guard is a no-op on this path. Passed anyway so both call sites ask the
+                                // same question: a future caller that judges a STORED readback gets the
+                                // staleness check for free rather than rediscovering the gap.
+                                sentAt: d.object(forKey: "alarm.lastArmAt") as? Double,
+                                reportedAt: Date().timeIntervalSince1970)
                             if AlarmReadback.countsAsRejection(verdict) {
                                 d.set(d.integer(forKey: "alarm.rejectStreak") + 1, forKey: "alarm.rejectStreak")
                             } else if AlarmReadback.clearsRejectionStreak(verdict) {
                                 d.set(0, forKey: "alarm.rejectStreak")
+                            } else if verdict == .staleReadback {
+                                // #2322: deliberately does NOTHING to the streak, and deliberately does
+                                // NOT repeat the one-time discard below. #1706 could discard because
+                                // EVERY comparison it replaced was cross-strap and therefore invalid. A
+                                // streak standing here is not like that: most of its increments came from
+                                // readbacks that did answer their arm, so wiping it would hide a real
+                                // refusal to spare a few false ones. Leaving it untouched is the same
+                                // "no evidence either way" stance the verdict itself takes.
                             } else if verdict == .unattributed {
                                 // Any streak standing here was built by the cross-strap comparison this
                                 // replaces, so it cannot be trusted — and since only a proven match clears
@@ -409,6 +451,16 @@ public final class FrameRouter {
                 if !ev.hasPrefix("BLE_REALTIME_HR") {
                     state.lastEvent = ev
                 }
+                // A double-tap is handed on BEFORE the sync kick below, because what it triggers is
+                // usually a buzz that says "that registered", and a write that follows the sync
+                // request reaches the strap after it. The strap then starts the history transfer
+                // first and plays the buzz behind it: in a 16 Sep 2026 gym log the four taps that
+                // kicked a sync buzzed 1.0–2.8 s after the strap sensed them, and most of the others
+                // in under one. Live only (this path never sees historical replay, which goes through
+                // the Backfiller). Event strings are "NAME(rawValue)".
+                if ev.hasPrefix("DOUBLE_TAP") {
+                    dispatchDoubleTapOnce(eventTimestamp: parsed.parsed["event_timestamp"]?.intValue)
+                }
                 // Strap-pushed event = "I may have new data" → kick a (rate-limited) sync.
                 onSyncTrigger?()
                 // Belt-and-suspenders: a BLE_BONDED event confirms the link is bonded.
@@ -462,14 +514,12 @@ public final class FrameRouter {
                 } else if ev.hasPrefix("BATTERY_PACK_REMOVED") {
                     state.charging = false
                 }
-                // Physical inputs the strap exposes — live only (this path never sees historical
-                // replay, which goes through the Backfiller). Event strings are "NAME(rawValue)".
-                if ev.hasPrefix("DOUBLE_TAP") {
-                    state.onDoubleTap?()
-                } else if ev.hasPrefix("WRIST_ON") {
-                    if !state.worn { state.worn = true; state.onWristChange?(true) }
+                // The other physical inputs the strap exposes — live only, as above. The double-tap
+                // was handled before the sync kick.
+                if ev.hasPrefix("WRIST_ON") {
+                    handleWrist(on: true, duringSync: false)
                 } else if ev.hasPrefix("WRIST_OFF") {
-                    if state.worn { state.worn = false; state.onWristChange?(false) }
+                    handleWrist(on: false, duringSync: false)
                 } else if ev.hasPrefix("STRAP_DRIVEN_ALARM_EXECUTED") {
                     // Fire observability (#401 close-out): Android has always logged this line
                     // (WhoopBleClient.handleFrame); iOS/macOS silently ran the callback, which is why a
@@ -653,6 +703,10 @@ public final class FrameRouter {
     /// backfill offload (old ts) is ignored, but a real-time one fires even mid-sync.
     static let liveGestureWindowSeconds = 45
 
+    /// How far back a DOUBLE_TAP arriving through a sync still earns a log line. Ten minutes covers a
+    /// gym session's syncs; anything older is ordinary history being offloaded, and stays silent.
+    static let lateGestureLogSeconds = 600
+
     /// Parse an EVENT frame and fire ONLY the live physical-gesture handlers (double-tap / wrist) iff the
     /// event is recent. Called for offload frames during backfill — where `handle(frame:)` is skipped —
     /// so a real-time gesture still works mid-offload (#69: the 5/MG offload runs for minutes). `now`
@@ -675,8 +729,76 @@ public final class FrameRouter {
     func mirrorStrapConsoleIfPresent(frame: [UInt8]) {
         guard frameTypeName(frame, family: family) == "CONSOLE_LOGS" else { return }
         let parsed = parseFrame(frame, family: family)
-        guard parsed.ok, parsed.crcOK != false else { return }
+        // The full verdict, in one step — the frame is parsed right here, so `ok` already covers the
+        // payload CRC32 the second condition used to check separately.
+        guard parsed.ok else { return }
         appendStrapConsole(parsed)
+    }
+
+    /// Count one rejected frame and say something about it exactly once (D3).
+    ///
+    /// Two different visibility rules, on purpose:
+    ///
+    /// - The class where the payload CRC32 VERIFIED while the envelope did not is announced always-on,
+    ///   at its first sighting. It is the class that passed every gate before this change, it is what
+    ///   the hardware run's abort criterion reads, and it costs nothing on a link where it never
+    ///   happens — which is the whole point of leaving rare-event evidence unconditional.
+    /// - The ordinary per-connection detail sits behind the Test Centre's Connection domain, one line
+    ///   per REASON. A resync after a lost notification rejects frames routinely and always has; a line
+    ///   per frame would be noise, and the general per-reason counter is explicitly NOT the abort signal.
+    ///
+    /// Each line reports only what the parse result observed: the reason the verifier gave, and the
+    /// packet type the decoder actually read (a rejected frame keeps it).
+    private func noteRejectedFrame(_ parsed: ParsedFrame) {
+        let hadAdmittedClass = rejectTally.payloadCRCOKButEnvelopeRejected > 0
+        let reason = rejectTally.note(parsed)
+        if !hadAdmittedClass && rejectTally.payloadCRCOKButEnvelopeRejected > 0 {
+            state.append(log: "Frame rejected while its payload CRC32 verified "
+                         + "(reason=\(reason.rawValue), type=\(parsed.typeName), \(parsed.lenBytes) bytes) "
+                         + "— the frame class that reached live state before the integrity gate.")
+        }
+        if TestCentre.active(.connection), loggedRejectReasons.insert(reason).inserted {
+            state.append(log: "frameReject reason=\(reason.rawValue) type=\(parsed.typeName) "
+                         + "bytes=\(parsed.lenBytes)", domain: .connection)
+        }
+    }
+
+    /// Count an OFFLOAD frame's verdict on this connection (D3).
+    ///
+    /// The BLE seam routes a replayed history frame straight to the Backfiller, so `handle(parsed:frame:)`
+    /// — the only caller of `noteRejectedFrame` — never sees it. Without this the tally, and with it the
+    /// ONE counter the hardware run's abort criterion is read from, stays at zero during exactly the
+    /// traffic in which a wrongly-emptied and then acked section is a permanent loss. The verdict is
+    /// formed once at the seam and handed over here; nothing is parsed twice.
+    ///
+    /// The line reports only what the verifier observed. There is no packet type in it because nothing
+    /// decoded one on this path — naming the offload is what this evidence can attribute.
+    func noteOffloadFrameVerdict(_ check: FrameCheck) {
+        let hadAdmittedClass = rejectTally.payloadCRCOKButEnvelopeRejected > 0
+        let reason = rejectTally.note(check)
+        guard reason != .none else { return }
+        if !hadAdmittedClass && rejectTally.payloadCRCOKButEnvelopeRejected > 0 {
+            state.append(log: "Frame rejected while its payload CRC32 verified "
+                         + "(reason=\(reason.rawValue), during a history offload) "
+                         + "— the frame class that reached live state before the integrity gate.")
+        }
+        if TestCentre.active(.connection), loggedRejectReasons.insert(reason).inserted {
+            state.append(log: "frameReject reason=\(reason.rawValue) offload=true", domain: .connection)
+        }
+    }
+
+    /// Fold the reassembler's monotonic below-minimum drop count into this connection's tally, so a byte
+    /// run dropped before any parser saw it still shows up as a rejection with the reason
+    /// "belowMinimumLength" instead of vanishing. Idempotent — only the growth since the last call is
+    /// added, so the BLE seam can call it after every notification.
+    func noteReassemblerDrops(_ monotonicTotal: Int) {
+        rejectTally.absorbReassemblerDrops(monotonicTotal)
+    }
+
+    /// The same fold for the reassembler's header-checksum drops, which are a DIFFERENT event: a floor
+    /// drop is a malformed frame, this is a read cursor that was not on a frame boundary at all.
+    func noteReassemblerHeaderDrops(_ monotonicTotal: Int) {
+        rejectTally.absorbReassemblerHeaderDrops(monotonicTotal)
     }
 
     /// The one place the strap's own narration reaches the log, so the live and offload paths cannot
@@ -695,16 +817,106 @@ public final class FrameRouter {
         // anyway. Family-aware (WHOOP4 type @[4], 5/MG @[8]).
         guard frameTypeName(frame, family: family) == "EVENT" else { return }
         let parsed = parseFrame(frame, family: family)
-        guard parsed.ok, parsed.crcOK != false else { return }
+        // Same single gate as `handle`: a gesture changes worn state, so it may only come from an
+        // intact frame. `frameTypeName` is a type PEEK and says nothing about integrity.
+        guard parsed.ok else { return }
         guard parsed.typeName == "EVENT", let ev = parsed.parsed["event"]?.stringValue else { return }
         guard let ts = parsed.parsed["event_timestamp"]?.intValue, ts > 0 else { return }   // fail closed
-        guard abs(now - ts) <= FrameRouter.liveGestureWindowSeconds else { return }
-        if ev.hasPrefix("DOUBLE_TAP") {
-            state.onDoubleTap?()
-        } else if ev.hasPrefix("WRIST_ON") {
-            if !state.worn { state.worn = true; state.onWristChange?(true) }
-        } else if ev.hasPrefix("WRIST_OFF") {
-            if state.worn { state.worn = false; state.onWristChange?(false) }
+        let age = now - ts
+        guard abs(age) <= FrameRouter.liveGestureWindowSeconds else {
+            // A recent double-tap reaching us through a sync gets a line, so a tap reported as "did not
+            // register" can be checked: a live dispatch leaves "Double-tap → …" at that moment, and a
+            // tap that only ever came through a sync leaves just this. It asserts only the delivery seen.
+            if ev.hasPrefix("DOUBLE_TAP"), age > 0, age <= FrameRouter.lateGestureLogSeconds {
+                state.append(log: AppModel.stamped(
+                    "Double-tap (strap time \(ts)) arrived \(age) s late during a sync; "
+                    + "not acted on (live window \(FrameRouter.liveGestureWindowSeconds) s)"))
+            }
+            return
         }
+        if ev.hasPrefix("DOUBLE_TAP") {
+            dispatchDoubleTapOnce(eventTimestamp: ts)
+        } else if ev.hasPrefix("WRIST_ON") {
+            handleWrist(on: true, duringSync: true)
+        } else if ev.hasPrefix("WRIST_OFF") {
+            handleWrist(on: false, duringSync: true)
+        }
+    }
+
+    /// A live WRIST_ON / WRIST_OFF, from either route. Each one leaves a line, always on: whether a strap sends them
+    /// live decides how soon the Live HR banner can show the dash — a WHOOP 5.0 does, about two seconds after it
+    /// leaves the wrist (a tester's log, 24 Sep 2026, read from the silence that followed, since nothing named them).
+    private func handleWrist(on: Bool, duringSync: Bool) {
+        let changes = state.worn != on
+        state.append(log: AppModel.stamped("Strap: \(on ? "WRIST_ON" : "WRIST_OFF")"
+                                           + (duringSync ? " during a sync" : "")
+                                           + (changes && !on ? "; live heart rate cleared" : "")))
+        guard changes else { return }
+        state.worn = on
+        if !on { state.clearLiveHeartRate() }   // nothing shown may outlive the strap leaving the wrist
+        state.onWristChange?(on)
+    }
+
+    // MARK: - Double-tap de-duplication
+
+    /// `event_timestamp`s of the DOUBLE_TAPs recently handed to the app.
+    ///
+    /// ONE physical gesture can reach us TWICE. It arrives live through `handle(frame:)`, and then
+    /// again when the strap offloads its banked event log — `dispatchLiveGestureIfFresh` runs over
+    /// every offload frame and accepts any event whose timestamp is within
+    /// `liveGestureWindowSeconds` (45 s) of now, which a gesture from moments ago obviously is.
+    ///
+    /// `AppModel.handleDoubleTap`'s 1.2 s debounce cannot catch that: the replay can land many
+    /// seconds after the tap, by which time the debounce has long expired. The result is a phantom
+    /// second gesture — and with the Lift Log claiming the double-tap, a phantom gesture silently
+    /// advances the session and costs a logged set.
+    ///
+    /// The event's OWN timestamp is what distinguishes the two cases: one gesture replayed carries
+    /// one timestamp, while two genuine taps carry two. Nil fails OPEN (dispatch), because a real
+    /// gesture must never be swallowed by a missing field.
+    ///
+    /// A SET, not a single slot. Remembering only the last dispatched timestamp suppresses a replay
+    /// solely when the replayed event is the most recent one dispatched, and a real offload does not
+    /// oblige. Interleave two taps and each replay looks new again:
+    ///
+    ///     tap A live -> last = A
+    ///     tap B live -> last = B
+    ///     replay A   -> A != B, dispatches
+    ///     replay B   -> B != A, dispatches
+    ///
+    /// Two phantom advances, and a multi-minute offload that re-walks its banked log repeats the
+    /// whole pattern — three taps measured as twelve in `FrameRouterDoubleTapDedupTests`. That is the
+    /// failure this de-duplication exists to prevent, surviving inside it.
+    ///
+    /// BOUNDED two ways, because this lives on the BLE path for the lifetime of a connection: entries
+    /// outside `liveGestureWindowSeconds` of the incoming event are dropped (past that, the freshness
+    /// guard in `dispatchLiveGestureIfFresh` refuses the replay anyway, so remembering it buys
+    /// nothing), and a hard cap covers a strap whose clock jumps rather than advances.
+    private var dispatchedDoubleTapEventTs: [Int] = []
+
+    /// Far above any plausible number of double-taps inside a 45-second window; a backstop against a
+    /// clock that jumps, not a working limit.
+    private static let dispatchedDoubleTapMemory = 32
+
+    private func dispatchDoubleTapOnce(eventTimestamp ts: Int?) {
+        if let ts {
+            guard !dispatchedDoubleTapEventTs.contains(ts) else {
+                // Only a gesture actually held back leaves a line, so a tap reported as missing can be
+                // told apart from a replay being suppressed.
+                state.append(log: AppModel.stamped(
+                    "Double-tap (strap time \(ts)) not dispatched: that event was already handled"))
+                return
+            }
+            // Prune BEFORE appending, so the event just accepted is always the one kept.
+            dispatchedDoubleTapEventTs.removeAll {
+                abs(ts - $0) > FrameRouter.liveGestureWindowSeconds
+            }
+            dispatchedDoubleTapEventTs.append(ts)
+            if dispatchedDoubleTapEventTs.count > FrameRouter.dispatchedDoubleTapMemory {
+                dispatchedDoubleTapEventTs.removeFirst(
+                    dispatchedDoubleTapEventTs.count - FrameRouter.dispatchedDoubleTapMemory)
+            }
+        }
+        state.onDoubleTap?()
     }
 }

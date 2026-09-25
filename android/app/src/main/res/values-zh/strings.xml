@@ -1044,6 +1044,7 @@
     <string name="l10n_workouts_screen_show_more_more_remaining_remaining_d1662e67">展开更多 %1$s 条记录 (还剩 %2$s 条)</string>
     <string name="l10n_workouts_screen_show_more_more_sessions_25bce755">展开更多 %1$s 次运动记录</string>
     <string name="l10n_workouts_screen_started_faa9e7e7">开始时间</string>
+    <string name="l10n_workouts_screen_ended_90303d8d">结束时间</string>
     <string name="l10n_workouts_screen_the_average_above_was_edited_the_0a7881f0">上方的平均值已被手动修改。不过图表、心率区间以及负荷分数仍将沿用实际记录的会话数据。</string>
     <string name="l10n_workouts_screen_these_sessions_have_no_sport_label_53993414">这些运动记录还没有打上项目标签。请为合并后的记录选一个标签吧。</string>
     <string name="l10n_workouts_screen_this_session_s_contribution_to_the_fe40ab3d">本次运动在发生期间积累的负荷，将直接计入您全天的总负荷(Effort)中。</string>
@@ -1341,6 +1342,8 @@
     <string name="l10n_components_glowring_value_ac0e87de">glowring-value</string>
     <string name="l10n_components_increase_accessibility_0949c0e9">增加 %1$s</string>
     <string name="l10n_components_ringfill_59cd4fb9">ringFill</string>
+    <string name="l10n_components_close_bbfa773e">关闭</string>
+    <string name="l10n_components_copy_af74f7c5">复制</string>
     <string name="l10n_connection_help_allow_nearby_devices_f7c74880">允许“附近设备”权限</string>
     <string name="l10n_connection_help_charge_it_and_put_it_on_31b04814">给它充电并佩戴在手腕上</string>
     <string name="l10n_connection_help_close_the_official_whoop_app_768d7d17">从后台彻底关闭 WHOOP 官方 App</string>
@@ -1669,7 +1672,14 @@
     <string name="l10n_today_screen_recovery_ea924f72">恢复分数</string>
     <string name="l10n_today_screen_sync_chip_now_c9bc849a">刚刚</string>
     <string name="l10n_today_screen_sync_chip_live_98aadb37">实时</string>
-    <string name="l10n_today_screen_sync_chip_syncing_desc_bfc290e7">正在同步腕带历史记录，%1$d 个数据块</string>
+    <string name="l10n_today_screen_sync_chip_syncing_desc_92daf60c">正在同步腕带历史记录，%1$s</string>
+    <string name="l10n_today_screen_sync_chip_syncing_pages_desc_ad763b39">正在同步腕带历史记录，%1$s，%2$s</string>
+    <plurals name="sync_chip_chunks_count">
+        <item quantity="other">%1$d 个数据块</item>
+    </plurals>
+    <plurals name="sync_chip_pages_behind_count">
+        <item quantity="other">连接时落后 %1$d 页</item>
+    </plurals>
     <string name="l10n_today_screen_sync_chip_synced_desc_4d255944">手环历史记录已在 %1$s 前同步</string>
     <string name="l10n_today_screen_sync_chip_experimental_desc_3de06a70">已连接；此手环的历史同步功能为实验性功能。</string>
     <string name="l10n_today_screen_recovery_roundtoint_charge_92fbaa5e">%1$s%% 充能(Charge)</string>
@@ -1878,6 +1888,7 @@
     <string name="recording_chip_detail_history_experimental">历史同步在 5.0 上属实验性。</string>
     <string name="recording_chip_detail_connected_no_data">本次连接尚无实时心率或已同步的历史记录。</string>
     <string name="score_state_title_calibrating">校准中</string>
+    <string name="l10n_stress_glance_widget_resumes_in_the_morning_a640b49f">早晨恢复</string>
     <string name="score_state_title_needs_strap">需要手环</string>
     <string name="score_state_title_last_night">昨晚 · %1$s</string>
     <string name="score_state_title_latest_sleep">最近睡眠 · %1$s</string>
@@ -2144,9 +2155,11 @@
     <string name="today_how_score_generic">此分数的计算方式</string>
     <string name="today_strap_battery">手环电量</string>
     <string name="today_strap_battery_percent">手环电量：%1$d%%</string>
+    <string name="today_ring_battery_percent">戒指电量：%1$d%%</string>
     <string name="today_score_solid">可靠</string>
     <string name="today_charge_carried">充能 · %1$s</string>
     <string name="today_recovery_carried">恢复 · %1$s</string>
+    <string name="sleep_carried_metric_caption">携带 · %1$s</string>
     <string name="today_show_fewer_metrics">收起</string>
     <string name="today_show_all_metrics">显示全部指标（%1$d）</string>
     <string name="today_hr_empty_selected_day">当天没有心率数据。请返回到佩戴手环的日期。</string>
@@ -2236,6 +2249,7 @@
     <string name="today_action_how_charge">了解能量的计算方式</string>
     <string name="today_action_reset_hr_zoom">重置心率缩放</string>
     <string name="today_action_see_what_shaped">查看影响 %1$s 的因素</string>
+    <string name="today_action_open_detail">打开%1$s详情</string>
     <string name="today_action_show_sources">查看 NOOP 同步的数据源</string>
     <string name="today_action_show_workout">查看锻炼详情</string>
     <string name="today_contributors">影响因素</string>
@@ -2558,9 +2572,9 @@
     <string name="ground_truth_duration_size">%1$s · IMU %2$s</string>
     <string name="ground_truth_last_exported">上次导出：%1$s · 仍可再次导出</string>
     <string name="ground_truth_coverage">%1$d/%2$d 秒 · %3$.1f%% · 缺少 %4$d 秒%5$s</string>
-    <string name="ground_truth_coverage_startup"> · 启动 %1$d 秒</string>
+    <string name="ground_truth_coverage_startup">" · 启动 %1$d 秒"</string>
     <string name="ground_truth_marker_row">%1$s · %2$s%3$s</string>
-    <string name="ground_truth_marker_note_suffix"> · %1$s</string>
+    <string name="ground_truth_marker_note_suffix">" · %1$s"</string>
     <string name="raw_diag_title">5/MG 协议诊断</string>
     <string name="raw_diag_protocol_probes">协议探测</string>
     <string name="raw_diag_broadcast_hr">从手环广播心率</string>
@@ -2625,7 +2639,13 @@
     <string name="coach_clear_conversation_message">这会从此设备删除已保存的对话。教练记录是你自己的笔记，而非医疗建议。</string>
     <string name="coach_clear_action">清除</string>
     <string name="coach_token_estimate">~%1$d 个 token</string>
-    <string name="coach_token_warning"> · 可能超出小型上下文窗口</string>
+    <string name="coach_token_warning">" · 可能超出小型上下文窗口"</string>
+    <string name="l10n_coach_settings_screen_customised_your_edited_instructions_frame_every_reply_bab91200">已自定义。你编辑的指令会影响每一条回复。</string>
+    <string name="l10n_coach_settings_screen_edit_how_the_coach_thinks_and_talks_takes_5104835d">编辑教练的思考和说话方式。下一条消息起生效。</string>
+    <string name="l10n_coach_settings_screen_collapse_coach_instructions_0933974a">收起教练指令</string>
+    <string name="l10n_coach_settings_screen_edit_coach_instructions_63a38c3a">编辑教练指令</string>
+    <string name="coach_settings">教练设置</string>
+    <string name="coach_settings_subtitle">教练可以读取哪些数据、如何作答，以及何时向你发送消息。</string>
     <string name="coach_morning_brief">晨间简报</string>
     <string name="coach_morning_brief_desc">一条本地通知，包含今天的准备状态和训练计划，每天早晨在设备上生成。</string>
     <string name="coach_morning_brief_off">关闭：不会按计划生成或发送任何内容。</string>
@@ -2686,4 +2706,121 @@
     <string name="sleep_positive_minutes">+%1$d 分钟</string>
     <string name="sleep_negative_minutes">−%1$d 分钟</string>
     <string name="sleep_debt_chart_semantics">每晚睡眠平衡：已记录 14 晚中的 %1$d 晚，刻度为正负 %2$d 分钟，净值 %3$s</string>
+    <string name="widget_stress_name">NOOP 压力</string>
+    <string name="hosted_card_stress_title">全天压力变化</string>
+    <string name="widget_stress_description">以逐小时曲线显示今天的压力。</string>
+    <string name="l10n_today_screen_see_the_charge_trend_9dcbcff7">查看充能趋势</string>
+    <string name="l10n_today_screen_every_day_s_score_over_time_a00ea7c7">每天的分数，随时间变化。</string>
+    <string name="l10n_app_changelog_a_coach_that_keeps_the_thread_2ee52e0c">能接住话头的教练、主屏幕上的心率，以及不再过度断言的图表</string>
+    <string name="charge_legacy_rr_gap_title">早期心跳无法评分</string>
+    <string name="charge_legacy_rr_gap_detail">这一夜是在 NOOP 标记每次心跳来自哪条 WHOOP 5 传输通道之前记录的，因此其间隔混合了两种不同的单位，而且没有保存任何可以区分它们的信息。该夜仍保留在你的历史记录中，从现在起记录的夜晚会正常评分。</string>
+    <string name="coach_key_rejected_hint">粘贴更正后的密钥。你的对话会保留。</string>
+    <string name="coach_key_rejected_placeholder">粘贴你的 %1$s 密钥</string>
+    <string name="coach_key_rejected_action">更新密钥</string>
+    <string name="coach_consent_on">开启：你的充能、休息、HRV 和训练会发送给服务商，每次训练包含运动类型、时长、距离和心率。</string>
+    <string name="coach_consent_off">关闭：教练只作一般性回答，不发送你的任何数据。</string>
+    <string name="l10n_app_changelog_a_today_screen_you_arrange_yourself_6194ccd0">可自行编排的「今天」页面、主屏幕上的压力曲线，以及会自我校验的备份</string>
+    <string name="l10n_stress_screen_scored_through_1_s_later_hours_fbb7d6c7">已评分至 %1$s。较晚的时段需要更多心率采样。</string>
+    <string name="l10n_today_screen_scan_and_connect_40157030">扫描并连接</string>
+    <string name="l10n_health_screen_fitness_age_stops_here_vo_max_383d989a">体能年龄到此为止，VO₂max 仍在变化。</string>
+    <string name="l10n_app_changelog_a_stress_screen_that_keeps_up_f7ec3f36">跟得上的压力页面、以手环实际发送单位读取的 WHOOP 5 数值，以及不再重复上报的指环</string>
+    <string name="l10n_devices_screen_battery_info_probe_592_re_1dbd4c0f">电池信息探测（#592 RE）…</string>
+    <string name="l10n_devices_screen_battery_info_probe_result_592_b97c0bb8">电池信息探测结果（#592）</string>
+    <string name="l10n_devices_screen_body_location_probe_690_re_7def8c39">佩戴位置探测（#690 RE）…</string>
+    <string name="l10n_devices_screen_body_location_probe_result_690_60c5ee79">佩戴位置探测结果（#690）</string>
+    <string name="l10n_devices_screen_body_location_probe_explainer_a9363239">发送只读的佩戴位置命令（0x54），并将手环的完整原始回复转储到手环日志；在 WHOOP 4.0 上会解码该记录（版本／位置／置信度／状态）。不会向手环写入任何内容，也不会改变佩戴检测或评分。</string>
+    <string name="l10n_devices_screen_battery_probe_explainer_2858bb6a">两份独立的协议表对扩展电池操作码存在分歧（98 与 87）。此操作发送经整理的只读 98，并将手环的完整原始回复转储到手环日志。返回电池格式的负载即可确认你的固件使用 98；若只返回简短存根，则仍无法确定。不会向手环写入任何内容。请在之后导出并分享手环日志。</string>
+    <string name="l10n_devices_screen_close_bbfa773e">关闭</string>
+    <string name="l10n_devices_screen_copy_af74f7c5">复制</string>
+    <string name="l10n_devices_screen_pack_voltage_9af3c3ff">%1$.2f V</string>
+    <string name="l10n_devices_screen_send_probe_read_only_36b318bc">发送探测（只读）</string>
+    <string name="l10n_devices_screen_waiting_for_the_straps_reply_5a06e7ac">正在等待手环回复…</string>
+    <string name="l10n_live_workout_screen_cancel_77dfd213">取消</string>
+    <string name="l10n_live_workout_screen_end_this_workout_4869c76a">结束此次运动？</string>
+    <string name="l10n_live_workout_screen_this_stops_recording_and_saves_what_3e17a23e">这将停止记录并保存目前已采集的内容，且无法继续。</string>
+    <string name="l10n_notifications_settings_screen_optimal_strain_reached_2862ec2b">已达到最佳负荷</string>
+    <string name="l10n_app_changelog_optimal_strain_alerts_faster_history_sync_6488a27a">最佳负荷提醒、更快的历史同步，以及一批准确性修复</string>
+    <string name="l10n_workouts_screen_heart_rate_recovery_516">心率恢复</string>
+    <string name="l10n_workouts_screen_after_high_intensity_effort_516">高强度运动之后</string>
+    <string name="l10n_workouts_screen_peak_hr_bpm_516">峰值 %1$d bpm</string>
+    <string name="l10n_workouts_screen_hrr_one_minute_516">1 分钟</string>
+    <string name="l10n_workouts_screen_hrr_two_minutes_516">2 分钟</string>
+    <string name="l10n_workouts_screen_hrr_five_minutes_516">5 分钟</string>
+    <string name="l10n_workouts_screen_hrr_bpm_516">bpm</string>
+    <string name="l10n_workouts_screen_hrr_not_available_516">暂无数据</string>
+    <string name="l10n_workouts_screen_hrr_accessibility_516">%1$s 的心率恢复，每分钟 %2$s 次</string>
+    <string name="l10n_workouts_screen_hrr_explanation_516">相对于运动结束时心率的变化。正值表示心率下降；短横线表示手环在该分钟前后未记录到足够的数据。</string>
+    <string name="l10n_workouts_screen_recovery_trend_516">恢复趋势</string>
+    <string name="l10n_workouts_screen_hrr_range_516">心率恢复 · %1$s</string>
+    <string name="l10n_workouts_screen_hrr_trend_explanation_516">每条线显示运动后心率的变化幅度（每分钟心跳次数）。仅包含记录了运动后心率的高强度运动。</string>
+    <string name="l10n_workouts_screen_hrr_chart_accessibility_516">心率恢复趋势（每分钟心跳次数）</string>
+    <string name="l10n_workouts_screen_hrr_last_7_days_516">最近 7 天</string>
+    <string name="l10n_workouts_screen_hrr_last_30_days_516">最近 30 天</string>
+    <string name="l10n_workouts_screen_hrr_last_90_days_516">最近 90 天</string>
+    <string name="settings_streak_title">连续记录</string>
+    <string name="trends_training_load">训练负荷</string>
+    <string name="trends_tl_legend_ctl">CTL · 体能</string>
+    <string name="trends_tl_legend_atl">ATL · 疲劳</string>
+    <string name="trends_tl_established">42 天体能与 7 天疲劳对比</string>
+    <string name="trends_tl_building">正在建立：%1$d / %2$d 天</string>
+    <string name="trends_tl_unavailable">长期负荷与急性负荷对比</string>
+    <string name="trends_tl_needs">需要连续 %1$d 天以上的负荷记录才能开始。目前 %2$d 天。</string>
+    <string name="trends_tl_form">竞技状态</string>
+    <plurals name="intelligence_days_count">
+        <item quantity="other">%1$d 天</item>
+    </plurals>
+    <plurals name="lab_book_readings_count">
+        <item quantity="other">%1$d 条记录 · 你自己的条目</item>
+    </plurals>
+    <plurals name="trends_weeks_ago">
+        <item quantity="other">%1$d 周前</item>
+    </plurals>
+    <plurals name="explore_n_days">
+        <item quantity="other">%1$d 天</item>
+    </plurals>
+    <plurals name="l10n_workouts_screen_hrr_workout_count_516">
+        <item quantity="other">%1$d 次运动</item>
+    </plurals>
+    <plurals name="settings_streak_run">
+        <item quantity="other">连续 %1$d 天</item>
+    </plurals>
+    <plurals name="settings_streak_longest">
+        <item quantity="other">最长：%1$d 天</item>
+    </plurals>
+    <string name="l10n_settings_screen_ai_coach_130c3eab">AI 教练</string>
+    <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">腕上的健身记录本、可以完全关闭的 Coach，以及一个同步手环的快捷指令</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">重新连接戒指</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">戒指未连接。</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">正在连接戒指…</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">已连接，正在认证…</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">已连接，等待实时心率。</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">实时心率正从戒指传来。</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">重新连接会断开当前连接（如果有）并再次连接戒指。要配对或切换手环，请打开「设备」。</string>
+    <string name="l10n_settings_screen_ring_gauges_on_today_7a532de2">今天页面的环形仪表</string>
+    <string name="l10n_settings_screen_off_returns_the_liquid_vessels_6bb9236e">关闭后恢复为液态仪表。</string>
+    <string name="l10n_sleep_screen_low_confidence_99d4ceae">置信度低</string>
+    <string name="l10n_sleep_screen_this_night_scored_high_efficiency_but_a11d90eb">这一晚睡眠效率很高，但深睡和快速眼动睡眠极少。这更可能是睡眠阶段判定的误差，而非真正的恢复不足。总计数值保持不变，请谨慎解读各阶段占比。</string>
+    <string name="l10n_health_screen_over_reports_r_r_so_no_9d050d53">R-R 间期计数偏多，因此不显示数值</string>
+    <string name="l10n_settings_screen_check_current_name_read_only_acb2f01a">读取当前名称（只读）</string>
+    <string name="l10n_settings_screen_renaming_is_not_supported_on_a_02f7af2c">WHOOP 5.0 或 MG 暂不支持重命名。NOOP 可以向手环查询当前名称，这一步决定重命名是否可行。</string>
+    <string name="l10n_settings_screen_experimental_on_a_whoop_5_0_711d5341">在 WHOOP 5.0 或 MG 上属实验功能：该命令从未在此代手环上得到确认。它可以撤销，若有异常请再次重命名，并用读取当前名称确认是否生效。</string>
+    <string name="l10n_smart_alarm_screen_alarm_in_1_s_688166e3">闹钟将在 %1$s 后响起</string>
+    <string name="l10n_smart_alarm_screen_alarm_in_less_than_a_minute_9821dce0">闹钟将在一分钟内响起</string>
+    <plurals name="alarm_countdown_days">
+        <item quantity="other">%1$d 天</item>
+    </plurals>
+    <plurals name="alarm_countdown_hours">
+        <item quantity="other">%1$d 小时</item>
+    </plurals>
+    <plurals name="alarm_countdown_minutes">
+        <item quantity="other">%1$d 分钟</item>
+    </plurals>
+    <string name="l10n_settings_screen_gauge_numbers_db0d45e3">仪表数字</string>
+    <string name="l10n_settings_screen_bold_19e07430">粗体</string>
+    <string name="l10n_settings_screen_softer_9edfeba1">更柔和</string>
+    <string name="oura_notify_mask_full_title">Oura 通知掩码 ff（实验性）</string>
+    <string name="oura_notify_mask_full_desc">下次连接时发送官方应用的 SetNotification 掩码（1c 01 ff），而不是 NOOP 的 3f。戒指为官方应用把约 10 个数据包打包进一条通知，为 NOOP 只发一个（读取慢 9 倍）；这是第一个候选开关。默认关闭；关闭后的下一次连接恢复为 3f。请在腕带日志中查看“-> notify_all(ff)”，并在原始捕获中比较通知大小。</string>
+    <string name="data_sources_whoop_live_subtitle">通过 Bluetooth 直接连接手环：无需 WHOOP 应用，也无需云端。手环还可以将心率作为标准 Bluetooth 传感器进行广播。</string>
+    <string name="data_sources_band_broadcast_description">通过 Bluetooth 将手环自身的实时心率广播给 Garmin、Zwift 或健身器材。</string>
+    <string name="whoop4_direct_broadcast_explainer">WHOOP 4.0 可以直接广播心率。打开“数据来源”，启用“从手环广播心率”，即可连接 Zwift、Peloton、Garmin 或健身器材。需要时也可以使用“从此手机广播心率”。</string>
 </resources>

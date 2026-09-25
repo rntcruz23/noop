@@ -36,14 +36,33 @@ enum DebugDataDiagnostics {
     /// strap simply not worn for two days would be reported as incapable of motion — the opposite kind of
     /// wrong from the one this line exists to prevent. Over a window of actual wear, delivered and capable
     /// are the same thing; the label keeps that assumption visible instead of implied.
-    /// The label is padded to 13 like every other in this block ("Model:", "Data write:"), and the window
+    /// The label is padded to 13 like every other in this block ("Model:", "Offload:"), and the window
     /// rides the VALUE. "Provides(48h):" is 15 and overhung the column in a report that is aligned by hand
     /// and read by eye.
     /// Byte-identical to the Kotlin `AndroidDiagnostics.strapProvidesLine`.
-    static func strapProvidesLine(hr: Bool, rr: Bool, motion: Bool, steps: Bool) -> String {
+    static func strapProvidesLine(hr: Bool, rr: Bool, motion: Bool, steps: Bool,
+                                  deviceId: String) -> String {
         func mark(_ b: Bool) -> String { b ? "yes" : "NO" }
+        // The DEVICE rides the value beside the window, for the same reason the window does. This asks
+        // ONE id, the active one, while every scorer reads the union of the active, canonical and
+        // computed ids. Those disagree on a re-added strap, an archived spine, or a Health Connect
+        // import, and the line then reads as "this install has no heart rate" when it means "the active
+        // strap id delivered none". That misreading cost real triage time on #2012.
         return "Provides:    HR \(mark(hr)) · R-R \(mark(rr)) · motion \(mark(motion)) · steps \(mark(steps))"
-            + " (last 48h)"
+            + " (\(deviceId), last 48h)"
+    }
+
+    /// The note that says the funnel did NOT analyse the latest night, and which one it skipped.
+    ///
+    /// The funnel deliberately walks back to the most recent night carrying skin temperature, because a
+    /// night without it reports "skin=0" and teaches nothing. That fallback is right; printing its result
+    /// under a heading that says "latest night" is not. On #2012 it reported a night four days older than
+    /// the export with no indication, and reading it as the latest night is what a careful reader does.
+    ///
+    /// Empty when the funnel really did take the newest session, so the common case stays unchanged.
+    /// Byte-identical to the Kotlin `AndroidDiagnostics.funnelFallbackNote`.
+    static func funnelFallbackNote(chosenDay: String, newestDay: String) -> String {
+        chosenDay == newestDay ? "" : " (NOT the latest night: \(newestDay) carried no skin temperature)"
     }
 
     static func strapStateLines() -> [String] {
@@ -85,7 +104,13 @@ enum DebugDataDiagnostics {
         let okAt = d.double(forKey: "sync.lastWriteOkAt")
         let stalledAt = d.double(forKey: "sync.lastWriteStalledAt")
         let restoreAt = d.double(forKey: "backup.lastRestoreAt")
-        lines.append("Data write:  \(okAt > 0 ? "rows last landed \(relTime(now - okAt))" : "no rows ever persisted")")
+        // "Offload:", not "Data write:". The stamp is written ONLY when a backfill session persists
+        // rows, so it says nothing about live streaming, and the old label read as "this app has stored
+        // nothing from your strap" on a strap that offloads nothing but streams happily. Twin of the
+        // Kotlin change.
+        lines.append("Offload:     " + (okAt > 0
+            ? "rows last landed \(relTime(now - okAt))"
+            : "no history rows ever persisted (live HR/R-R are not counted here)"))
         if stalledAt > 0, stalledAt >= okAt {
             lines.append("             ⚠ history NOT persisting — last offload STALLED \(relTime(now - stalledAt)) "
                 + "(if you restored a backup, fully restart the app — #57)")
@@ -101,12 +126,24 @@ enum DebugDataDiagnostics {
         #endif
         #if os(iOS)
         // #52: iOS Backup & Sync folder-picker health. When users report "won't let me pick a folder",
-        // this pins the failure stage: "cancelled"/"never used" ⇒ the picker's Open button never fired
-        // (an iOS-side picker issue — the in-app "Use NOOP's own folder" fallback sidesteps it);
+        // this pins the failure stage: "closed without a folder"/"never used" ⇒ no URL came back;
         // "picked" + a FAILED flag ⇒ a returned folder failed to bookmark HERE (our bug).
+        //
+        // #2356: the no-URL case used to read "cancelled", which asserts an intent UIKit never tells us.
+        // It calls the same delegate method when someone taps Cancel and when someone picks a folder and
+        // taps Open that iOS then declines, and a reporter hit the second while the log claimed the first,
+        // sending the investigation after a disabled Open button that was never the problem. The two facts
+        // below are what let a reader tell them apart: a tap on Cancel closes in a second or two, whereas
+        // navigating into iCloud Drive and choosing a folder takes far longer.
         let pickEvent = d.string(forKey: "backupPicker.lastEvent") ?? "never used"
         let pickAt = d.double(forKey: "backupPicker.lastEventAt")
         lines.append("Folder picker: \(pickEvent)\(pickAt > 0 ? " (\(relTime(now - pickAt)))" : "")")
+        let openFor = d.double(forKey: "backupPicker.lastOpenSeconds")
+        if openFor > 0 {
+            let startedIn = d.string(forKey: "backupPicker.lastStart") ?? ""
+            lines.append("             open for \(String(format: "%.1f", openFor))s"
+                + (startedIn.isEmpty ? "" : ", opened on \(startedIn)"))
+        }
         if pickEvent == "picked" {
             let scoped = d.bool(forKey: "backupPicker.lastScopedOpen")
             let bmOk = d.bool(forKey: "backupPicker.lastBookmarkOk")
@@ -140,7 +177,7 @@ enum DebugDataDiagnostics {
         // EXISTS seeks, not counts — see WhoopStore.streamPresence for why that distinction matters on a
         // table holding ~190k motion rows a night.
         //
-        // HERE and not in strapStateLines() beside `Data write:`, where it belongs by subject: that
+        // HERE and not in strapStateLines() beside `Offload:`, where it belongs by subject: that
         // function is synchronous and holds neither `repo` nor a store handle. The first attempt put it
         // there and would not have compiled — in a file the comment below already notes needs macOS to
         // build, which is exactly why it went unnoticed locally. Appended first so the output order is
@@ -151,7 +188,8 @@ enum DebugDataDiagnostics {
                from: Int(Date().timeIntervalSince1970) - 48 * 3600,
                to: Int(Date().timeIntervalSince1970)) {
             lines.append(strapProvidesLine(hr: present.hr, rr: present.rr,
-                                           motion: present.gravity, steps: present.steps))
+                                           motion: present.gravity, steps: present.steps,
+                                           deviceId: repo.deviceId))
         }
 
         // Data state from the preloaded day spine.
@@ -245,7 +283,10 @@ enum DebugDataDiagnostics {
         let hr = await repo.hrSamples(from: cs.startTs, to: cs.endTs, limit: 200_000)
         let rr = (try? await store.rrIntervals(deviceId: did, from: cs.startTs, to: cs.endTs, limit: 200_000)) ?? []
         let resp = (try? await store.respSamples(deviceId: did, from: cs.startTs, to: cs.endTs, limit: 200_000)) ?? []
-        lines.append("Night \(dayStamp(cs.startTs)): grav=\(grav.count) hr=\(hr.count) rr=\(rr.count) resp=\(resp.count) skin=\(skin.count)")
+        lines.append("Night \(dayStamp(cs.startTs))"
+                     + funnelFallbackNote(chosenDay: dayStamp(cs.startTs),
+                                          newestDay: dayStamp(newest.startTs))
+                     + ": grav=\(grav.count) hr=\(hr.count) rr=\(rr.count) resp=\(resp.count) skin=\(skin.count)")
         if grav.isEmpty && hr.isEmpty {
             // #1617 follow-up: do NOT assert "freshly re-added" without testing the other explanation.
             // Several ids can hold one physical strap's data (#1193/#740), and when the history spine and
@@ -268,7 +309,17 @@ enum DebugDataDiagnostics {
             return lines
         }
         if let rem = SleepStager.remFunnelDiagnostic(start: cs.startTs, end: cs.endTs, grav: grav, hr: hr, rr: rr, resp: resp) {
-            lines.append(rem.summary)
+            // The funnel replays the V1 classifier, but the shipped hypnogram is staged by V2 whenever
+            // the default-on flag says so — name both, or the two totals read as one fact disagreeing.
+            // On a 5/MG the gap is maximal: V1's primary REM gate needs the raw resp channel that
+            // hardware never emits, while V2 recovers respiration from R-R, so the funnel can report
+            // ~46min REM against a 231min screen for the same night.
+            let screenStager = PuffinExperiment.experimentalSleepV2Enabled ? "V2" : "V1"
+            var summary = rem.summary + " · funnel replays V1; screen staged by \(screenStager)"
+            if screenStager != "V1" {
+                summary += " — totals can differ"
+            }
+            lines.append(summary)
         } else {
             lines.append("REM funnel: insufficient motion data (<2 gravity samples)")
         }
@@ -455,9 +506,13 @@ enum DebugDataDiagnostics {
             }
         }
         if let sent = d.object(forKey: "alarm.lastArmSentEpoch") as? Int {
-            var line = "Last arm: sent \(alarmStamp(sent))"
-            if let at = d.object(forKey: "alarm.lastArmAt") as? Double {
-                line += " · \(relTime(Date().timeIntervalSince1970 - at))"
+            // #2322: "for <alarm time> · sent <ago>". The old shape put both clocks on one line as
+            // "sent <alarm time> · <ago>", which reads as "we sent that time, that long ago" — but the
+            // stamp is the FUTURE instant armed and the relative time is when the command went out.
+            var line = "Last arm: for \(alarmStamp(sent))"
+            let armedAt = d.object(forKey: "alarm.lastArmAt") as? Double
+            if let armedAt {
+                line += " · sent \(relTime(Date().timeIntervalSince1970 - armedAt))"
             }
             if !d.bool(forKey: "alarm.lastArmConnected") { line += " · strap NOT connected (queued)" }
             // #34: the strap-clock skew AT ARM. Skew ~0 but the strap still rejects ⇒ a corrupted alarm
@@ -475,12 +530,21 @@ enum DebugDataDiagnostics {
             if let reported = d.object(forKey: "alarm.lastReportedEpoch") as? Int {
                 // #1706: only judge when both halves are known to be the SAME strap, otherwise this
                 // blames a device that was never asked.
+                // #2322: and only when the readback ANSWERED this arm. A readback that failed to decode
+                // leaves the previous one standing, so without the arrival stamps this line compared two
+                // different arms and blamed the strap for the difference.
+                let readAt = d.object(forKey: "alarm.lastReportedAt") as? Double
                 let verdict = AlarmReadback.verdict(
                     sentEpoch: sent,
                     reportedEpoch: reported,
                     sentDeviceId: d.string(forKey: "alarm.lastArmDeviceId"),
-                    reportedDeviceId: d.string(forKey: "alarm.lastReportedDeviceId"))
+                    reportedDeviceId: d.string(forKey: "alarm.lastReportedDeviceId"),
+                    sentAt: armedAt,
+                    reportedAt: readAt)
                 var rline = "Strap reports: \(alarmStamp(reported))" + AlarmReadback.suffix(verdict)
+                // When the readback landed, so a reader can see the provenance of both halves rather than
+                // having to trust that they belong together.
+                if let readAt { rline += " · read \(relTime(Date().timeIntervalSince1970 - readAt))" }
                 // #34: consecutive rejections — a persistent refusal (vs a one-off) points at a strap whose
                 // alarm register needs a reset, and is what SmartAlarmView warns the user about at ≥2.
                 let streak = d.integer(forKey: "alarm.rejectStreak")

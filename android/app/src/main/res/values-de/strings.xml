@@ -1102,6 +1102,7 @@
     <string name="l10n_workouts_screen_show_more_more_remaining_remaining_d1662e67">%1$s mehr anzeigen (%2$s bleibt übrig)</string>
     <string name="l10n_workouts_screen_show_more_more_sessions_25bce755">%1$s weitere Sessions anzeigen</string>
     <string name="l10n_workouts_screen_started_faa9e7e7">Beginn</string>
+    <string name="l10n_workouts_screen_ended_90303d8d">Ende</string>
     <string name="l10n_workouts_screen_the_average_above_was_edited_the_0a7881f0">Der Durchschnitt oben wurde bearbeitet. Graph, Zonen und Anstrengung bleiben aus der aufgezeichneten Sitzung.</string>
     <string name="l10n_workouts_screen_these_sessions_have_no_sport_label_53993414">Diese Sessions haben noch kein Sportlabel. Wähle eine für die fusionierte Sitzung.</string>
     <string name="l10n_workouts_screen_this_session_s_contribution_to_the_fe40ab3d">Der Beitrag dieser Sitzung zur Tages-Anstrengung, wie während des Workouts erfasst.</string>
@@ -1402,6 +1403,8 @@
     <string name="l10n_components_glowring_value_ac0e87de">Glühwert</string>
     <string name="l10n_components_increase_accessibility_0949c0e9">%1$s erhöhen</string>
     <string name="l10n_components_ringfill_59cd4fb9">ringFill</string>
+    <string name="l10n_components_close_bbfa773e">Schließen</string>
+    <string name="l10n_components_copy_af74f7c5">Kopieren</string>
     <string name="l10n_connection_help_allow_nearby_devices_f7c74880">Geräte in der Nähe zulassen</string>
     <string name="l10n_connection_help_charge_it_and_put_it_on_31b04814">Lade es und lege es auf</string>
     <string name="l10n_connection_help_close_the_official_whoop_app_768d7d17">Schließe die offizielle WHOOP App</string>
@@ -1729,7 +1732,16 @@
     <string name="l10n_today_screen_recovery_ea924f72">Erholung</string>
     <string name="l10n_today_screen_sync_chip_now_c9bc849a">jetzt</string>
     <string name="l10n_today_screen_sync_chip_live_98aadb37">Live</string>
-    <string name="l10n_today_screen_sync_chip_syncing_desc_bfc290e7">Verlaufssynchronisierung des Straps läuft, %1$d Chunks</string>
+    <string name="l10n_today_screen_sync_chip_syncing_desc_92daf60c">Verlaufssynchronisierung des Straps läuft, %1$s</string>
+    <string name="l10n_today_screen_sync_chip_syncing_pages_desc_ad763b39">Verlaufssynchronisierung des Straps läuft, %1$s, %2$s</string>
+    <plurals name="sync_chip_chunks_count">
+        <item quantity="one">%1$d Chunk</item>
+        <item quantity="other">%1$d Chunks</item>
+    </plurals>
+    <plurals name="sync_chip_pages_behind_count">
+        <item quantity="one">%1$d Seite Rückstand bei Verbindungsaufbau</item>
+        <item quantity="other">%1$d Seiten Rückstand bei Verbindungsaufbau</item>
+    </plurals>
     <string name="l10n_today_screen_sync_chip_synced_desc_4d255944">Verlauf des Straps vor %1$s synchronisiert</string>
     <string name="l10n_today_screen_sync_chip_experimental_desc_3de06a70">Verbunden; die Verlaufssynchronisierung ist bei diesem Strap experimentell.</string>
     <string name="l10n_today_screen_recovery_roundtoint_charge_92fbaa5e">%1$s%% Ladung</string>
@@ -1986,6 +1998,7 @@
     <string name="recording_chip_detail_history_experimental">Verlaufssynchronisierung ist auf 5.0 experimentell.</string>
     <string name="recording_chip_detail_connected_no_data">Noch keine Live-Herzfrequenz und kein synchronisierter Verlauf in dieser Sitzung.</string>
     <string name="score_state_title_calibrating">Kalibrierung</string>
+    <string name="l10n_stress_glance_widget_resumes_in_the_morning_a640b49f">Wird morgens fortgesetzt</string>
     <string name="score_state_title_needs_strap">Strap erforderlich</string>
     <string name="score_state_title_last_night">Letzte Nacht · %1$s</string>
     <string name="score_state_title_latest_sleep">Letzter Schlaf · %1$s</string>
@@ -2234,9 +2247,11 @@
     <string name="today_how_score_generic">So wird dieser Wert berechnet</string>
     <string name="today_strap_battery">Strap-Akku</string>
     <string name="today_strap_battery_percent">Strap-Akku: %1$d Prozent</string>
+    <string name="today_ring_battery_percent">Ring-Akku: %1$d Prozent</string>
     <string name="today_score_solid">STABIL</string>
     <string name="today_charge_carried">Charge-Wert · %1$s</string>
     <string name="today_recovery_carried">Erholung · %1$s</string>
+    <string name="sleep_carried_metric_caption">Übernommen · %1$s</string>
     <string name="today_show_fewer_metrics">Weniger anzeigen</string>
     <string name="today_show_all_metrics">Alle Messwerte anzeigen (%1$d)</string>
     <string name="today_hr_empty_selected_day">Keine Herzfrequenzdaten für diesen Tag. Gehe zu einem Tag zurück, an dem du den Strap getragen hast.</string>
@@ -2326,6 +2341,7 @@
     <string name="today_action_how_charge">So wird Energie berechnet</string>
     <string name="today_action_reset_hr_zoom">Herzfrequenz-Zoom zurücksetzen</string>
     <string name="today_action_see_what_shaped">Einflüsse auf %1$s anzeigen</string>
+    <string name="today_action_open_detail">%1$s-Details öffnen</string>
     <string name="today_action_show_sources">Synchronisierte NOOP-Quellen anzeigen</string>
     <string name="today_action_show_workout">Workout-Details anzeigen</string>
     <string name="today_contributors">Einflussfaktoren</string>
@@ -2408,7 +2424,7 @@
     <string name="today_hr_a11y_sleep_band">Schlafbereich %1$s</string>
     <string name="today_hr_a11y_charge_at_wake">%1$d Prozent Energie beim Aufwachen</string>
     <string name="today_hr_a11y_effort_now">%1$s Belastung jetzt</string>
-    <string name="today_a11y_separator">, </string>
+    <string name="today_a11y_separator">,</string>
     <string name="today_steps_activity_still">Still</string>
     <string name="today_steps_activity_walking">Gehen</string>
     <string name="today_steps_activity_running">Laufen</string>
@@ -2662,9 +2678,9 @@
     <string name="ground_truth_duration_size">%1$s · IMU %2$s</string>
     <string name="ground_truth_last_exported">Zuletzt exportiert: %1$s · weiterer Export möglich</string>
     <string name="ground_truth_coverage">%1$d/%2$d s · %3$.1f%% · %4$d s fehlen%5$s</string>
-    <string name="ground_truth_coverage_startup"> · %1$d s Anlauf</string>
+    <string name="ground_truth_coverage_startup">" · %1$d s Anlauf"</string>
     <string name="ground_truth_marker_row">%1$s · %2$s%3$s</string>
-    <string name="ground_truth_marker_note_suffix"> · %1$s</string>
+    <string name="ground_truth_marker_note_suffix">" · %1$s"</string>
     <string name="ground_truth_marker_times">Marker %1$s · Jetzt %2$s</string>
     <string name="ground_truth_marker_now_button">0</string>
     <string name="raw_diag_title">5/MG-Protokolldiagnose</string>
@@ -2729,7 +2745,13 @@
     <string name="coach_clear_conversation_message">Dies löscht die gespeicherte Unterhaltung von diesem Gerät. Der Coach-Verlauf sind deine eigenen Notizen, kein medizinischer Rat.</string>
     <string name="coach_clear_action">Löschen</string>
     <string name="coach_token_estimate">~%1$d Token</string>
-    <string name="coach_token_warning"> · kann kleine Kontextfenster überschreiten</string>
+    <string name="coach_token_warning">" · kann kleine Kontextfenster überschreiten"</string>
+    <string name="l10n_coach_settings_screen_customised_your_edited_instructions_frame_every_reply_bab91200">Angepasst. Deine bearbeiteten Anweisungen rahmen jede Antwort.</string>
+    <string name="l10n_coach_settings_screen_edit_how_the_coach_thinks_and_talks_takes_5104835d">Bearbeite, wie der Coach denkt und spricht. Wirkt ab deiner nächsten Nachricht.</string>
+    <string name="l10n_coach_settings_screen_collapse_coach_instructions_0933974a">Coach-Anweisungen einklappen</string>
+    <string name="l10n_coach_settings_screen_edit_coach_instructions_63a38c3a">Coach-Anweisungen bearbeiten</string>
+    <string name="coach_settings">Coach-Einstellungen</string>
+    <string name="coach_settings_subtitle">Worauf der Coach zugreifen darf, wie er antworten soll und wann er dir schreibt.</string>
     <string name="coach_morning_brief">Morgenbrief</string>
     <string name="coach_morning_brief_desc">Eine lokale Benachrichtigung mit heutiger Bereitschaft + Trainingsplan, jeden Morgen auf dem Gerät erstellt.</string>
     <string name="coach_morning_brief_off">Aus: Es wird nichts generiert oder nach Zeitplan gesendet.</string>
@@ -2786,4 +2808,61 @@
     <string name="sleep_positive_minutes">+%1$d Min.</string>
     <string name="sleep_negative_minutes">−%1$d Min.</string>
     <string name="sleep_debt_chart_semantics">Schlafbilanz pro Nacht: %1$d von 14 Nächten erfasst, Skala plus/minus %2$d Minuten, netto %3$s</string>
+    <string name="widget_stress_name">NOOP Stress</string>
+    <string name="hosted_card_stress_title">Stress im Tagesverlauf</string>
+    <string name="widget_stress_description">Der heutige Stress als Stundenverlauf.</string>
+    <string name="l10n_today_screen_see_the_charge_trend_9dcbcff7">Ladungs-Trend ansehen</string>
+    <string name="l10n_today_screen_every_day_s_score_over_time_a00ea7c7">Jeder Tageswert im Zeitverlauf.</string>
+    <string name="l10n_app_changelog_a_coach_that_keeps_the_thread_2ee52e0c">Ein Coach, der den Faden behält, deine Herzfrequenz auf dem Homescreen und Diagramme, die weniger behaupten</string>
+    <string name="charge_legacy_rr_gap_title">Frühere Herzschläge nicht auswertbar</string>
+    <string name="charge_legacy_rr_gap_detail">Diese Nacht wurde aufgezeichnet, bevor NOOP festhielt, über welchen WHOOP-5-Übertragungsweg jeder Herzschlag kam. Ihre Intervalle mischen deshalb zwei verschiedene Einheiten, und es ist nichts gespeichert, was sie unterscheidbar macht. Die Nacht bleibt in deinem Verlauf, und ab jetzt aufgezeichnete Nächte werden normal bewertet.</string>
+    <string name="coach_key_rejected_hint">Füge den korrigierten Schlüssel ein. Deine Unterhaltung bleibt erhalten.</string>
+    <string name="coach_key_rejected_placeholder">%1$s-Schlüssel einfügen</string>
+    <string name="coach_key_rejected_action">Schlüssel aktualisieren</string>
+    <string name="coach_consent_on">An: Ladung, Erholung, HRV und Workouts gehen an den Anbieter, jedes Workout mit Sportart, Dauer, Distanz und Herzfrequenz.</string>
+    <string name="coach_consent_off">Aus: Der Coach antwortet allgemein und sendet keine deiner Werte.</string>
+    <string name="l10n_app_changelog_a_today_screen_you_arrange_yourself_6194ccd0">Ein Heute-Bildschirm, den du selbst zusammenstellst, Stress auf dem Homescreen und Backups, die sich selbst prüfen</string>
+    <string name="l10n_stress_screen_scored_through_1_s_later_hours_fbb7d6c7">Bewertet bis %1$s. Spätere Stunden brauchen mehr Herzfrequenz-Messwerte.</string>
+    <string name="l10n_today_screen_scan_and_connect_40157030">Suchen und verbinden</string>
+    <string name="l10n_health_screen_fitness_age_stops_here_vo_max_383d989a">Das Fitnessalter endet hier. VO₂max nicht.</string>
+    <string name="l10n_app_changelog_a_stress_screen_that_keeps_up_f7ec3f36">Ein Stress-Bildschirm, der mitkommt, WHOOP-5-Werte in den Einheiten, die das Band sendet, und ein Ring, der sich nicht mehr wiederholt</string>
+    <string name="l10n_settings_screen_ai_coach_130c3eab">KI-Coach</string>
+    <string name="l10n_app_changelog_a_gym_log_book_on_your_e0f00272">Ein Trainingstagebuch am Handgelenk, ein Coach, den du abschalten kannst, und ein Kurzbefehl zum Synchronisieren</string>
+    <string name="l10n_live_screen_reconnect_ring_3111ab8f">Ring neu verbinden</string>
+    <string name="l10n_live_screen_ring_not_connected_c2418ea8">Ring nicht verbunden.</string>
+    <string name="l10n_live_screen_connecting_to_the_ring_af2900ea">Verbindung mit dem Ring wird hergestellt …</string>
+    <string name="l10n_live_screen_connected_authenticating_fa9da040">Verbunden, Authentifizierung läuft …</string>
+    <string name="l10n_live_screen_connected_waiting_for_live_heart_rate_01d216bb">Verbunden, warte auf Live-Herzfrequenz.</string>
+    <string name="l10n_live_screen_live_heart_rate_is_flowing_from_f7f6c4fe">Live-Herzfrequenz kommt vom Ring.</string>
+    <string name="l10n_live_screen_reconnect_drops_the_current_link_if_afc27801">„Neu verbinden“ trennt die aktuelle Verbindung, falls vorhanden, und verbindet den Ring erneut. Zum Koppeln oder Wechseln von Bändern öffne „Geräte“.</string>
+    <string name="l10n_settings_screen_ring_gauges_on_today_7a532de2">Ring-Anzeigen auf Heute</string>
+    <string name="l10n_settings_screen_off_returns_the_liquid_vessels_6bb9236e">Aus zeigt wieder die Liquid-Anzeigen.</string>
+    <string name="l10n_sleep_screen_low_confidence_99d4ceae">Geringe Konfidenz</string>
+    <string name="l10n_sleep_screen_this_night_scored_high_efficiency_but_a11d90eb">Diese Nacht erreichte eine hohe Effizienz, aber sehr wenig Tief- oder REM-Schlaf. Das ist eher ein Schätzfehler der Schlafphasen als ein echtes Erholungsdefizit. Die Werte bleiben unverändert, lies die Aufteilung mit Bedacht.</string>
+    <string name="l10n_health_screen_over_reports_r_r_so_no_9d050d53">Meldet zu viele RR-Intervalle, daher kein Wert</string>
+    <string name="l10n_settings_screen_check_current_name_read_only_acb2f01a">Aktuellen Namen abfragen (nur lesen)</string>
+    <string name="l10n_settings_screen_renaming_is_not_supported_on_a_02f7af2c">Umbenennen wird bei einer WHOOP 5.0 oder MG noch nicht unterstützt. NOOP kann das Band nach seinem aktuellen Namen fragen. Das entscheidet, ob Umbenennen überhaupt möglich ist.</string>
+    <string name="l10n_settings_screen_experimental_on_a_whoop_5_0_711d5341">Experimentell bei WHOOP 5.0 oder MG: Dieser Befehl wurde für diese Strap-Generation nie bestätigt. Er ist umkehrbar, benenne also erneut um, falls etwas schiefgeht, und prüfe mit Aktuellen Namen abfragen, ob es gewirkt hat.</string>
+    <string name="l10n_smart_alarm_screen_alarm_in_1_s_688166e3">Wecker in %1$s</string>
+    <string name="l10n_smart_alarm_screen_alarm_in_less_than_a_minute_9821dce0">Wecker in weniger als einer Minute</string>
+    <plurals name="alarm_countdown_days">
+        <item quantity="one">%1$d Tag</item>
+        <item quantity="other">%1$d Tage</item>
+    </plurals>
+    <plurals name="alarm_countdown_hours">
+        <item quantity="one">%1$d Stunde</item>
+        <item quantity="other">%1$d Stunden</item>
+    </plurals>
+    <plurals name="alarm_countdown_minutes">
+        <item quantity="one">%1$d Minute</item>
+        <item quantity="other">%1$d Minuten</item>
+    </plurals>
+    <string name="l10n_settings_screen_gauge_numbers_db0d45e3">Zahlen auf den Anzeigen</string>
+    <string name="l10n_settings_screen_bold_19e07430">Fett</string>
+    <string name="l10n_settings_screen_softer_9edfeba1">Weicher</string>
+    <string name="oura_notify_mask_full_title">Oura-Benachrichtigungsmaske ff (experimentell)</string>
+    <string name="oura_notify_mask_full_desc">Sendet beim nächsten Verbinden die SetNotification-Maske der offiziellen App (1c 01 ff) statt NOOPs 3f. Der Ring packt für die offizielle App ~10 Pakete in eine Benachrichtigung, für NOOP nur eines (9× langsameres Auslesen); das ist der erste Kandidat für den Schalter. Standardmäßig aus; die erste Verbindung nach dem Ausschalten läuft wieder mit 3f. Im Strap-Protokoll auf „-> notify_all(ff)“ achten und die Benachrichtigungsgrößen in der Rohaufzeichnung vergleichen.</string>
+    <string name="data_sources_whoop_live_subtitle">Koppelt sich direkt über Bluetooth mit deinem Strap: keine WHOOP-App, keine Cloud. Der Strap kann seine Herzfrequenz außerdem als Standard-Bluetooth-Sensor senden.</string>
+    <string name="data_sources_band_broadcast_description">Sendet die eigene Live-Herzfrequenz des Straps über Bluetooth für Garmin, Zwift oder Fitnessgeräte.</string>
+    <string name="whoop4_direct_broadcast_explainer">Dein WHOOP 4.0 kann die Herzfrequenz direkt übertragen. Öffne Datenquellen und verwende „Herzfrequenz vom Band übertragen“ für Zwift, Peloton, Garmin oder Fitnessgeräte. Bei Bedarf kannst du alternativ „HF von diesem Telefon übertragen“ verwenden.</string>
 </resources>

@@ -12,7 +12,14 @@ import com.noop.data.DailyMetric
 import com.noop.data.JournalEntry
 import com.noop.data.LabMarkerRow
 import com.noop.data.WhoopRepository
+import com.noop.ingest.ActivityFileImporter
+import com.noop.ingest.LiftingImporter
 import com.noop.ui.NoopPrefs
+import com.noop.data.WorkoutRow
+import com.noop.ui.UnitFormatter
+import com.noop.ui.UnitSystem
+import com.noop.ui.UnitPrefs
+import com.noop.ui.WorkoutEditing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -117,8 +124,13 @@ class AiCoach(
             // strongest on-device patterns + Lab Book markers. Summary text only, no raw rows, no
             // per-day series, so the anonymity / no-raw-egress posture holds. Best-effort; never blocks.
             val signals = if (includeSignals) runCatching { buildSignalsContext() }.getOrNull() else null
+            // #2033: per-session workout detail, so the coach can tell a run from a lift. Best-effort
+            // like the blocks around it; a read that throws leaves the day table standing rather than
+            // failing the send. Matches where Swift appends it in `buildFullContext`.
+            val workouts = runCatching { recentWorkoutsBlock(ctx) }.getOrNull()
             val full = buildString {
                 append(buildContext(days))
+                if (!workouts.isNullOrBlank()) append("\n\n").append(workouts)
                 if (!stress.isNullOrBlank()) append("\n\n").append(stress)
                 if (!signals.isNullOrBlank()) append("\n\n").append(signals)
             }
@@ -194,8 +206,13 @@ class AiCoach(
             val days = runCatching { repo.daysMerged(activeStrapId()) }.getOrDefault(emptyList())
             val stress = runCatching { stressLineToday() }.getOrNull()
             val signals = if (includeSignals) runCatching { buildSignalsContext() }.getOrNull() else null
+            // #2033: per-session workout detail, so the coach can tell a run from a lift. Best-effort
+            // like the blocks around it; a read that throws leaves the day table standing rather than
+            // failing the send. Matches where Swift appends it in `buildFullContext`.
+            val workouts = runCatching { recentWorkoutsBlock(ctx) }.getOrNull()
             val full = buildString {
                 append(buildContext(days))
+                if (!workouts.isNullOrBlank()) append("\n\n").append(workouts)
                 if (!stress.isNullOrBlank()) append("\n\n").append(stress)
                 if (!signals.isNullOrBlank()) append("\n\n").append(signals)
             }
@@ -460,6 +477,105 @@ class AiCoach(
 
         return sb.toString().trim()
     }
+
+    /**
+     * Recent workouts, one line PER SESSION rather than a per-day count.
+     *
+     * The day table above says a wearer did two workouts on a day and what the day's effort was. It
+     * cannot say what they did, for how long, how far, or how hard their heart worked, so the coach
+     * could not tell a run from a lift and could not help plan training around either (#2033). This is
+     * the Kotlin twin of Swift `AICoachEngine.recentWorkoutsBlock`, which has emitted exactly these
+     * fields in exactly this order since it was written; Android simply never had it.
+     *
+     * SCOPE, deliberately the wearer's own words on the issue, "all information of your workouts, that
+     * are visible to yourself". So this mirrors what the Workouts screen actually lists, which
+     * `AppViewModel` assembles: the strap union, Apple Health, Health Connect, auto-detected sessions,
+     * imported activity files and imported lifting, with dismissed sessions filtered OUT and the rest
+     * deduped cross-source so a live recording and its thin import collapse to the richer row.
+     *
+     * The dismissal filter is the part that matters and the part a first pass here got wrong. Detected
+     * sessions were dropped wholesale on the reasoning that a wearer can dismiss them, which confused
+     * the category with the act: the screen shows detected sessions and hides DISMISSED ones, of any
+     * source. Dropping the category hid a strap-only wearer's auto-detected training from the coach
+     * entirely, while still sending a dismissed import. Both halves are now the screen's behaviour.
+     *
+     * One thing the screen does that this does not: `fillWorkoutHrFromStrap`, which borrows the strap's
+     * samples to fill an imported session's missing average HR. Skipped deliberately. It needs the
+     * profile and the effort method, and its absence costs a field that is simply omitted rather than a
+     * field that is wrong, which is the rule this block already follows everywhere else.
+     *
+     * Six sessions, thirty days. This rides inside a prompt payload, so it is a summary and not an
+     * export; the day table above still carries the fourteen-day shape.
+     *
+     * PRIVACY: only reached under the same `consent` gate as every other figure here, and it widens
+     * what that consent covers. Aggregate counts become where and how someone exercises. That is the
+     * disclosure the Apple build has always made, and the consent copy should say so plainly.
+     */
+    internal suspend fun recentWorkoutsBlock(ctx: Context, limit: Int = 6): String {
+        val now = System.currentTimeMillis() / 1000L
+        val from = now - 30L * 86_400L
+        val rows = runCatching { visibleWorkoutRows(from, now) }.getOrDefault(emptyList())
+        return formatWorkoutsBlock(rows, UnitPrefs.distanceSystem(ctx), limit)
+    }
+
+    /**
+     * The sessions a wearer can see, newest first. Split out from the formatter and from the unit
+     * lookup so it has a test: the only other way in reads SharedPreferences, and this half is where the
+     * decisions live. It is also where the bug was, twice over, which is the argument for the seam.
+     *
+     * Mirrors the assembly `AppViewModel` runs for the Workouts screen. If that list gains a source,
+     * this one has to as well, or the coach quietly reasons about less than the wearer is looking at.
+     */
+    internal suspend fun visibleWorkoutRows(from: Long, to: Long): List<WorkoutRow> {
+        val id = activeStrapId()
+        val all = repo.workoutsUnion(id, from, to) +
+            repo.workouts("apple-health", from, to) +
+            repo.workouts("health-connect", from, to) +
+            repo.detectedWorkoutsUnion(id, from, to) +
+            repo.workouts(ActivityFileImporter.SOURCE_ID, from, to) +
+            repo.workouts(LiftingImporter.SOURCE_ID, from, to)
+        // Dismissed first, then dedup: the same order the screen uses, so a dismissed row cannot be the
+        // one a cross-source collapse decides to keep.
+        return WorkoutEditing.dedupCrossSource(
+            WorkoutEditing.filterDismissed(all, repo.dismissedDetected(id)),
+        ).sortedByDescending { it.startTs }
+    }
+
+    /**
+     * The emitted text, given rows and a resolved unit system. Pure, and `internal` for the same reason
+     * Swift's `dayLine` is: without a seam the formatter has no test, because the only way in reads
+     * SharedPreferences and these run on the JVM with no Context. The reading half above is a union and
+     * a sort; every decision a reviewer would want pinned is in here.
+     *
+     * Field order and separators mirror Swift's `recentWorkoutsBlock` exactly, since both feed the same
+     * model and a wearer comparing platforms would otherwise get differently-shaped advice from
+     * identical data. A field the row does not carry is OMITTED rather than emitted as a dash: this is
+     * a prompt, and a dash invites the model to reason about a gap that is only a missing sensor.
+     */
+    internal fun formatWorkoutsBlock(
+        rows: List<WorkoutRow>,
+        distanceSystem: UnitSystem,
+        limit: Int = 6,
+    ): String {
+        if (rows.isEmpty()) return "Recent workouts: none recorded in the last 30 days."
+        val sb = StringBuilder("Recent workouts (newest first):")
+        for (w in rows.take(limit)) {
+            val parts = mutableListOf("  ${workoutDay(w.startTs)} ${w.sport}")
+            w.durationS?.let { parts.add("${(it / 60.0).roundToInt()} min") }
+            w.strain?.let { parts.add("effort ${fmt1(it)}") }
+            w.avgHr?.let { parts.add("avg HR $it") }
+            w.energyKcal?.let { parts.add("${it.roundToInt()} kcal") }
+            w.distanceM?.let { parts.add(UnitFormatter.distanceFromMeters(it, distanceSystem)) }
+            sb.append("\n").append(parts.joinToString(", "))
+        }
+        return sb.toString()
+    }
+
+    /** `yyyy-MM-dd` in the wearer's own zone, matching Swift's `dateString` for the same line. */
+    private fun workoutDay(startTs: Long): String =
+        java.time.LocalDate.ofInstant(
+            java.time.Instant.ofEpochSecond(startTs), java.time.ZoneId.systemDefault(),
+        ).toString()
 
     /**
      * SUMMARY-ONLY on-device signals context (v5): the user's strongest associations (from the same
@@ -994,7 +1110,12 @@ class AiCoach(
         }
     }
 
-    /** Map a non-2xx response to a clear, user-facing message (key, rate-limit, server). */
+    /** Map a non-2xx response to a clear, user-facing message (key, rate-limit, server).
+     *
+     *  A key rejection returns [AiKeyRejectedException] rather than a bare one, so the UI can offer the
+     *  wearer the field the message tells them to check. The message alone cannot carry that: matching
+     *  on its text would break the moment the copy is localized, which is every locale but English.
+     *  The status-to-type decision itself lives in [isKeyRejection], where a test can pin it. */
     private fun httpError(provider: AiProvider, code: Int, body: String): Exception {
         val detail = extractApiErrorMessage(body)
         val base = when (code) {
@@ -1004,7 +1125,8 @@ class AiCoach(
             400 -> "The request was rejected by ${provider.displayName} (HTTP 400)."
             else -> "${provider.displayName} returned an error (HTTP $code)."
         }
-        return Exception(if (detail != null) "$base ($detail)" else base)
+        val message = if (detail != null) "$base ($detail)" else base
+        return if (isKeyRejection(code)) AiKeyRejectedException(message) else Exception(message)
     }
 
     /** Pull the provider's error message out of an error JSON body, if present. */
@@ -1049,9 +1171,14 @@ class AiCoach(
         return "${(e * 100).roundToInt()}%"
     }
 
+    /** `Locale.US` is load-bearing, not tidiness. This text is a PROMPT, read by a model, not a label
+     *  read by a person: on a German or French device the default locale emits `12,4`, which Swift never
+     *  does, so the two platforms would hand the same effort figure to the same model in two notations
+     *  and one of them invites parsing as two numbers. `oneDecimal` beside it in `Units` already pins
+     *  the locale for exactly this reason. */
     private fun fmt1(v: Double): String =
         if (v == v.roundToInt().toDouble()) v.roundToInt().toString()
-        else String.format("%.1f", v)
+        else String.format(java.util.Locale.US, "%.1f", v)
 
     private inline fun avgInt(days: List<DailyMetric>, sel: (DailyMetric) -> Double?): String {
         val vals = days.mapNotNull(sel)
@@ -1065,6 +1192,18 @@ class AiCoach(
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
+
+        /**
+         * Whether an HTTP status means the stored key itself was turned away, as opposed to the
+         * provider being busy, broken, or asked for something it does not have.
+         *
+         * Named rather than left as two literals because it is the hinge the key-repair affordance
+         * hangs on, and it decides what the wearer is told to go and do. Widen it and a rate limit
+         * starts demanding a new key; narrow it and the trap this exists to remove comes straight
+         * back. Byte-identical twin of Swift `AICoachError.isKeyRejection`, which the two response
+         * switches in `AIProvider.swift` read.
+         */
+        internal fun isKeyRejection(code: Int): Boolean = code == 401 || code == 403
 
         /**
          * Normalise a user-entered Custom base URL: trim, drop a trailing slash, and tolerate a pasted

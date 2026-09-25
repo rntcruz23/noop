@@ -279,9 +279,10 @@ final class HealthKitBridge: ObservableObject {
 
     // MARK: - Live delivery (continuous ingestion)
 
-    /// The scored read types we want a live observer + hourly background delivery on. This is the
-    /// subset of `quantityReadIds` (plus sleep) that actually feeds Charge/Rest/Effort/Fitness Age, so
-    /// a watch-only user's numbers refresh on their own rather than only when the app is foregrounded.
+    /// The QUANTITY types we want a live observer + hourly background delivery on. This is the subset of
+    /// `quantityReadIds` that actually feeds Charge/Rest/Effort/Fitness Age, so a watch-only user's numbers
+    /// refresh on their own rather than only when the app is foregrounded. `enableLiveDelivery` observes
+    /// these plus sleep and workouts; this list is not the whole observed set.
     /// We deliberately do NOT observe the body-composition reads (weight/BMI/etc.) — those don't move a
     /// score and a manual weigh-in shouldn't wake the app every hour.
     private static let liveQuantityIds: [HKQuantityTypeIdentifier] = [
@@ -305,6 +306,24 @@ final class HealthKitBridge: ObservableObject {
             if let t = HKObjectType.quantityType(forIdentifier: id) { types.append(t) }
         }
         if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) { types.append(sleep) }
+        // Workouts, for the same reason the scored reads are here: without an observer a Watch workout
+        // reached NOOP only at the next foreground open, or whenever an unrelated type happened to wake
+        // the app, so up to an hour late and sometimes longer (#2265).
+        //
+        // The lag is not only cosmetic. A strap offload can score, detect a bout and write it to Apple
+        // Health entirely in the background while the Watch workout covering the same session is still
+        // unknown here, so the overlap check that would have suppressed that bout has nothing to compare
+        // against, and the wearer is asked to confirm a session the Watch already recorded.
+        //
+        // Nothing else needs widening: the loop below is already over `HKSampleType`, and
+        // `collectWorkouts` already filters on `notNoopAuthored`, so a workout THIS app wrote cannot wake
+        // it into re-importing its own row.
+        //
+        // This NARROWS the race rather than closing it. An observer wake is not instantaneous, so an
+        // offload that completes inside the wake latency still sees no Apple workout. Whether HealthKit
+        // honours background delivery on `workoutType` at the quantity-type cadence is also unverified,
+        // and unverifiable off-device: HealthKit has no simulator support.
+        types.append(HKObjectType.workoutType())
 
         for type in types {
             let key = type.identifier
@@ -369,7 +388,8 @@ final class HealthKitBridge: ObservableObject {
         let window = max(1, min(31, daysBack + 1))
         // A sync completed moments ago and covered at least this wake's window, so a second full pass
         // would burn ~15 HealthKit aggregate queries and a write-back to re-derive rows that sync just
-        // wrote. Stand down. This is what collapses the hourly burst of six observers into one sync.
+        // wrote. Stand down. This is what collapses the hourly burst of observers into one sync (seven of
+        // them since workouts joined the set, #2265 — a count worth not restating as a literal again).
         // FOREGROUND catch-up deliberately does not consult this: an explicit resume should always read.
         // `age >= 0` is not defensive noise. This is WALL-CLOCK time, and it can move backwards — an NTP
         // correction, or a user changing the date. A negative age satisfies `< window`, so every wake would
@@ -768,7 +788,18 @@ final class HealthKitBridge: ObservableObject {
         var sleepsByStart: [Int: CachedSleepSession] = [:]
         for s in computedSleeps { sleepsByStart[s.startTs] = s }
         for s in importedSleeps { sleepsByStart[s.startTs] = s }
-        let sessions = sleepsByStart.keys.sorted().map { sleepsByStart[$0]! }
+        // A night the strap may still be recording is held back, with its day's vitals, until it closes
+        // (`HealthWriteback.nightIsStillOpen`).
+        // The strap's own heart rate, the same stream the HR write reads, so an Apple Watch still recording
+        // cannot make a strap night that stopped at its sync frontier look finished.
+        let newestHeartRateTs = (try? await whoopStore.hrFingerprint(deviceId: noopDeviceId, from: nowTs - 2 * 86_400,
+                                                                     to: nowTs).maxTs) ?? 0
+        let openStarts = Set(computedSleeps.filter {
+            HealthWriteback.nightIsStillOpen(endTs: $0.endTs, newestHeartRateTs: newestHeartRateTs, now: nowTs)
+        }.map(\.startTs))
+        let sessions = sleepsByStart.keys.sorted().filter { !openStarts.contains($0) }.map { sleepsByStart[$0]! }
+        let openDays = Set(computedSleeps.filter { openStarts.contains($0.startTs) }
+            .map { HealthKitBridge.dayString(Date(timeIntervalSince1970: TimeInterval($0.endTs))) })
 
         var firstError: Error?
         func attempt(_ op: () async throws -> Void) async {
@@ -782,7 +813,7 @@ final class HealthKitBridge: ObservableObject {
         // the HR path uses), then the normal writes re-add them under the new keys. Runs once,
         // gated by a UserDefaults flag, BEFORE the new-key writes so nothing is lost.
         await attempt { try await migrateStrandedHealthRecords(fromTs: fromTs, nowTs: nowTs) }
-        await attempt { try await writeVitals(whoopStore: whoopStore, days: days, sessions: sessions) }
+        await attempt { try await writeVitals(whoopStore: whoopStore, days: days, sessions: sessions, holdingDays: openDays) }
         await attempt { try await writeSleep(sessions: sessions) }
         await attempt { try await writeHeartRate(whoopStore: whoopStore, fromTs: fromTs, nowTs: nowTs) }
         await attempt { try await writeWorkouts(whoopStore: whoopStore, fromTs: fromTs, toTs: nowTs) }
@@ -861,7 +892,8 @@ final class HealthKitBridge: ObservableObject {
     /// The nightly vitals write (the original write-back), now stamped at the day's wake time when
     /// that day has a sleep session — a real timestamp inside the night the value describes, instead
     /// of a fabricated noon. Keys are unchanged, so re-stamped samples replace their noon ancestors.
-    private func writeVitals(whoopStore: WhoopStore, days: Int, sessions: [CachedSleepSession]) async throws {
+    private func writeVitals(whoopStore: WhoopStore, days: Int, sessions: [CachedSleepSession],
+                             holdingDays: Set<String> = []) async throws {
         let cal = Calendar.current
         let to = HealthKitBridge.dayString(Date())
         guard let fromDate = cal.date(byAdding: .day, value: -days, to: Date()) else { return }
@@ -882,8 +914,13 @@ final class HealthKitBridge: ObservableObject {
         let imported = (try? await whoopStore.dailyMetrics(deviceId: noopDeviceId, from: from, to: to)) ?? []
         var byDay: [String: DailyMetric] = [:]
         for r in computed { byDay[r.day] = r }   // computed first
-        for r in imported { byDay[r.day] = r }   // imported overrides
-        let rows = byDay.keys.sorted().map { byDay[$0]! }
+        // Imported overrides, EXCEPT for a field the importer cannot populate. See HealthExportMerge: a
+        // CSV carries no raw R-R, so an imported row never has `avgSdnn`, and replacing the row wholesale
+        // threw away a computed SDNN that was already correct. The export then fell back to `avgHrv`
+        // (RMSSD for a strap row) under the SDNN type, turning a right value into a wrong one on every day
+        // an import happened to cover (#2264).
+        for r in imported { byDay[r.day] = HealthExportMerge.merged(computed: byDay[r.day], imported: r) }
+        let rows = byDay.keys.sorted().filter { !holdingDays.contains($0) }.map { byDay[$0]! }
 
         struct Candidate { let type: HKQuantityType; let key: String; let sample: HKQuantitySample }
         var candidates: [Candidate] = []
@@ -903,6 +940,14 @@ final class HealthKitBridge: ObservableObject {
             )
             candidates.append(Candidate(type: type, key: key, sample: sample))
         }
+        // Keys of OUR earlier samples to delete with no replacement: a value this build no longer writes
+        // must not survive from a build that did.
+        var retracted: [HKQuantityType: [String]] = [:]
+        func retract(_ id: HKQuantityTypeIdentifier, _ day: String) {
+            guard let type = HKQuantityType.quantityType(forIdentifier: id),
+                  store.authorizationStatus(for: type) == .sharingAuthorized else { return }
+            retracted[type, default: []].append(HealthWriteback.appleHealthVitalKey(metricId: id.rawValue, day: day))
+        }
 
         for row in rows {
             guard let date = HealthKitBridge.date(from: row.day) else { continue }
@@ -911,16 +956,21 @@ final class HealthKitBridge: ObservableObject {
             if let rhr = row.restingHr {
                 add(.restingHeartRate, HKUnit.count().unitDivided(by: .minute()), Double(rhr), row.day, at)
             }
-            // Export the GENUINE SDNN (v31) when present — the strap's `avgHrv` is RMSSD, which HealthKit
-            // has no field for, so writing it under `.heartRateVariabilitySDNN` mislabels it. `avgSdnn` is the
-            // 5-min SDNN index, deliberately window-matched to Apple's own short-window SDNN samples so the
-            // written values sit consistently in the user's Health SDNN history (a whole-night SD would land
-            // 2-3× high). WHOOP rows backfill `avgSdnn` from stored raw R-R on the next re-score; Apple rows'
-            // `avgHrv` already IS SDNN. The `avgHrv` fallback fires for those two before re-scoring, and
-            // permanently for summary-only sources (Oura) that give RMSSD with no raw R-R to derive SDNN from
-            // — HealthKit's single HRV type leaves no better label there.
-            if let sdnn = row.avgSdnn ?? row.avgHrv {
+            // Export only the GENUINE SDNN (v31). `avgSdnn` is the 5-min SDNN index, deliberately
+            // window-matched to Apple's own short-window SDNN samples so the written values sit consistently
+            // in the user's Health SDNN history (a whole-night SD would land 2-3× high).
+            //
+            // No `avgHrv` fallback (#2264). Every row here is a strap-computed or WHOOP-imported daily (rows
+            // imported FROM Apple Health live under `appleDeviceId` and are never read back out), so `avgHrv` is always
+            // RMSSD — a different magnitude that HealthKit has no type for. Writing it under
+            // `.heartRateVariabilitySDNN` put a step into the series that no physiology produced, and a
+            // Health reader that scores off SDNN took it at face value. A night without an SDNN (not yet
+            // re-scored from raw R-R, or a summary-only source such as Oura) exports no HRV instead, and any
+            // mislabelled sample an earlier build wrote for that day is retracted.
+            if let sdnn = row.avgSdnn {
                 add(.heartRateVariabilitySDNN, .secondUnit(with: .milli), sdnn, row.day, at)
+            } else {
+                retract(.heartRateVariabilitySDNN, row.day)
             }
             if let spo2 = row.spo2Pct {
                 add(.oxygenSaturation, .percent(), spo2 / 100, row.day, at)
@@ -929,21 +979,23 @@ final class HealthKitBridge: ObservableObject {
                 add(.respiratoryRate, HKUnit.count().unitDivided(by: .minute()), rr, row.day, at)
             }
         }
-        guard !candidates.isEmpty else { return }
+        guard !candidates.isEmpty || !retracted.isEmpty else { return }
 
         // Delete any of OUR prior samples that carry the same metadata keys, then write the fresh
         // batch. Scoped to HKSource.default() so we never touch a sample written by another app
         // that happens to use the same external UUID. Delete failures are non-fatal (e.g., nothing
         // to delete on first run) — only the save throws.
         let bySource = HKQuery.predicateForObjects(from: HKSource.default())
-        let grouped = Dictionary(grouping: candidates, by: { $0.type })
-        for (type, items) in grouped {
-            let keys = Array(Set(items.map { $0.key }))
+        var keysByType = Dictionary(grouping: candidates, by: { $0.type }).mapValues { $0.map { $0.key } }
+        for (type, keys) in retracted { keysByType[type, default: []] += keys }
+        for (type, allKeys) in keysByType {
+            let keys = Array(Set(allKeys))
             let byKey = HKQuery.predicateForObjects(withMetadataKey: HKMetadataKeyExternalUUID,
                                                     allowedValues: keys)
             let pred = NSCompoundPredicate(andPredicateWithSubpredicates: [bySource, byKey])
             _ = try? await self.store.deleteObjects(of: type, predicate: pred)
         }
+        guard !candidates.isEmpty else { return }
         try await self.store.save(candidates.map { $0.sample })
     }
 
@@ -1079,18 +1131,111 @@ final class HealthKitBridge: ObservableObject {
     /// carries NO device-id segment (#1503): the active strap id is not durable, and embedding it
     /// stranded every prior workout as unreachable duplicates after a re-pair. Matches the Android
     /// twin's `noop-workout-<startTs>` `clientRecordId`.
+    /// How many workout rows each write-back read asks the store for, per source.
+    ///
+    /// Named rather than inline because [deleteOrphanedWorkouts] has to compare against it: a read that
+    /// comes back holding exactly this many rows may have been truncated, and a truncated read cannot be
+    /// used to decide that a Health workout has no counterpart. (#2210)
+    private static let workoutReadLimit = 500
+
+    /// Delete the workouts we wrote into [fromTs, toTs] whose key is no longer among [keeping].
+    ///
+    /// Reads the window back from Health and deletes only objects that are ours by source AND carry a
+    /// `noop:workout:` external UUID, so a workout written by another app, or by us under some future
+    /// scheme, is never touched. Everything removed was observed first; nothing is deleted by range.
+    ///
+    /// A workout of ours with no external UUID at all is LEFT ALONE. It cannot be matched against the
+    /// store, so deleting it would be guessing, and the #1503 sweep already exists for that class.
+    ///
+    /// ONE assumption this rests on, and it is newly load-bearing: that deleting an `HKWorkout` also
+    /// removes the energy and distance samples `writeWorkouts` attached through its `HKWorkoutBuilder`.
+    /// The key-based delete already assumed it, but harmlessly, because every delete there is followed
+    /// immediately by a rewrite of the same key, so a surviving child is replaced rather than stranded.
+    /// An orphan is deleted and NOT rewritten, so if the assumption is wrong its children are left in
+    /// Health attributed to us with no workout above them, and nothing here will ever collect them.
+    ///
+    /// There is no fallback handle. `builder.addMetadata` puts the external UUID on the WORKOUT; the
+    /// samples go through `builder.addSamples` carrying no metadata at all, so they cannot be found by
+    /// key. Finding them by type and range instead would sweep `activeEnergyBurned` written by our own
+    /// vitals path and by every other source, which is precisely the blind range delete this function
+    /// exists to avoid. Verifying the assumption needs a device (#2210).
+    ///
+    /// Note also that this reads. `authorizationStatus` reports SHARE permission only, and HealthKit
+    /// does not let an app ask whether it may read. With write granted and read withheld the query
+    /// returns nothing rather than failing, so reconciliation quietly does nothing and the duplicates
+    /// stay. That fails safe, but it fails silent.
+    private func deleteOrphanedWorkouts(fromTs: Int, toTs: Int, keeping: Set<String>) async {
+        let pred = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            HKQuery.predicateForObjects(from: HKSource.default()),
+            // `.strictStartDate`, and it is load-bearing. A workout is an INTERVAL, and the default
+            // options match anything overlapping the window, while the store read this is compared
+            // against filters `startTs >= from AND startTs <= to`. Without strict matching, a workout
+            // that began before `fromTs` and was still running at it is matched here, is absent from the
+            // store read, and would therefore be deleted as an orphan. `fromTs` is a rolling 14-day
+            // boundary recomputed on every write-back, so it lands mid-workout sooner or later.
+            //
+            // The heart-rate writer this reconciliation is modelled on uses the default options, and is
+            // right to: its samples are instantaneous, so overlapping the window and starting inside it
+            // are the same question. For an interval type they are not.
+            HKQuery.predicateForSamples(withStart: Date(timeIntervalSince1970: TimeInterval(fromTs)),
+                                        end: Date(timeIntervalSince1970: TimeInterval(toTs)),
+                                        options: [.strictStartDate]),
+        ])
+        let orphans: [HKWorkout] = await withCheckedContinuation { (cont: CheckedContinuation<[HKWorkout], Never>) in
+            let q = HKSampleQuery(sampleType: HKObjectType.workoutType(), predicate: pred,
+                                  limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, _ in
+                var out: [HKWorkout] = []
+                for case let workout as HKWorkout in samples ?? [] {
+                    guard let uuid = workout.metadata?[HKMetadataKeyExternalUUID] as? String,
+                          uuid.hasPrefix(HealthWriteback.appleHealthWorkoutKeyPrefix) else { continue }
+                    if !keeping.contains(uuid) { out.append(workout) }
+                }
+                cont.resume(returning: out)
+            }
+            store.execute(q)
+        }
+        guard !orphans.isEmpty else { return }
+        _ = try? await store.delete(orphans)
+    }
+
     private func writeWorkouts(whoopStore: WhoopStore, fromTs: Int, toTs: Int) async throws {
         guard store.authorizationStatus(for: .workoutType()) == .sharingAuthorized else { return }
-        let mine = (try? await whoopStore.workouts(deviceId: noopDeviceId, from: fromTs, to: toTs, limit: 500)) ?? []
-        let computed = (try? await whoopStore.workouts(deviceId: computedDeviceId, from: fromTs, to: toTs, limit: 500)) ?? []
+        // Read result kept OPTIONAL rather than collapsed with `?? []`, because the reconciliation below
+        // has to tell "the store holds no workouts here" apart from "the read failed". Collapsed, a
+        // transient read error would look like an empty window and delete every workout we had written
+        // into it. (#2210)
+        let mineRead = try? await whoopStore.workouts(deviceId: noopDeviceId, from: fromTs, to: toTs,
+                                                      limit: Self.workoutReadLimit)
+        let computedRead = try? await whoopStore.workouts(deviceId: computedDeviceId, from: fromTs, to: toTs,
+                                                         limit: Self.workoutReadLimit)
+        let mine = mineRead ?? []
+        let computed = computedRead ?? []
         var byKey: [String: WorkoutRow] = [:]
         for w in computed + mine where w.source != HealthKitBridge.appleWorkoutSource {
             byKey["\(w.startTs):\(w.sport)"] = w
         }
         let rows = byKey.values.sorted { $0.startTs < $1.startTs }
-        guard !rows.isEmpty else { return }
 
         func key(_ row: WorkoutRow) -> String { HealthWriteback.appleHealthWorkoutKey(startTs: row.startTs) }
+
+        // #2210: remove workouts we wrote that the store no longer holds. The delete below only ever
+        // names the keys it is about to rewrite, so a row that LEFT the store keeps its Health copy for
+        // good: a detected bout dropped for overlapping an Apple workout, a bout whose startTs drifted
+        // and was rewritten under a new key, or a workout deleted, dismissed or merged in the app.
+        //
+        // Deliberately NOT a range delete. This reads the window back, keeps only what carries our own
+        // key, and deletes the ones absent from `rows`, so nothing is removed that was not first
+        // observed and identified as ours. A blind range delete would also have to trust that the store
+        // read returned everything, and the two guards below are exactly the cases where it did not.
+        //
+        // Runs BEFORE the empty-rows return: a window whose last workout was deleted in the app is the
+        // case where every Health copy is an orphan, and returning early would leave all of them.
+        if mineRead != nil, computedRead != nil,
+           mine.count < Self.workoutReadLimit, computed.count < Self.workoutReadLimit {
+            await deleteOrphanedWorkouts(fromTs: fromTs, toTs: toTs, keeping: Set(rows.map(key)))
+        }
+
+        guard !rows.isEmpty else { return }
         let pred = NSCompoundPredicate(andPredicateWithSubpredicates: [
             HKQuery.predicateForObjects(from: HKSource.default()),
             HKQuery.predicateForObjects(withMetadataKey: HKMetadataKeyExternalUUID,

@@ -103,6 +103,56 @@ public enum ChartSemantic {
     }
 }
 
+private struct WorkoutTimeAxisModifier: ViewModifier {
+    let range: ClosedRange<Date>?
+
+    init(_ range: ClosedRange<Date>?) { self.range = range }
+
+    func body(content: Content) -> some View {
+        if let range {
+            content
+                .chartXScale(domain: range)
+                .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                    AxisGridLine().foregroundStyle(StrandPalette.hairline.opacity(0.4))
+                    AxisValueLabel {
+                        if let date = value.as(Date.self) {
+                            Text(elapsedLabel(date, start: range.lowerBound))
+                        }
+                    }
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .font(StrandFont.footnote)
+                }
+            }
+        } else {
+            content
+        }
+    }
+
+    private func elapsedLabel(_ date: Date, start: Date) -> String {
+        let elapsed = max(0, Int(date.timeIntervalSince(start)))
+        let minutes = elapsed / 60
+        if minutes >= 60 { return String(format: "%d:%02d", minutes / 60, minutes % 60) }
+        return String(format: String(localized: "%lld minutes"), Int64(minutes))
+    }
+}
+
+/// Find a reading in the date-sorted, full-resolution series retained by both chart initializers.
+/// Binary search avoids scanning every reading on each drag or hover event. Drawing may omit points,
+/// but selection must still return the original reading; an equal-distance tie chooses the earlier one.
+func nearestTrendPoint(to date: Date, in points: [TrendPoint]) -> TrendPoint? {
+    guard !points.isEmpty else { return nil }
+    var lower = 0, upper = points.count
+    while lower < upper {
+        let middle = (lower + upper) / 2
+        if points[middle].date < date { lower = middle + 1 } else { upper = middle }
+    }
+    if lower == 0 { return points[0] }
+    if lower == points.count { return points[lower - 1] }
+    let before = points[lower - 1], after = points[lower]
+    return date.timeIntervalSince(before.date) <= after.date.timeIntervalSince(date) ? before : after
+}
+
 public struct TrendChart: View {
 
     public var points: [TrendPoint]
@@ -166,6 +216,8 @@ public struct TrendChart: View {
     public var onSelectionChange: ((TrendPoint?) -> Void)?
     /// Optional card-level semantics including period, context, and coverage.
     public var accessibilityValue: String?
+    /// Optional elapsed time window for a workout trace, with workout-relative tick labels.
+    public var workoutTimeAxis: ClosedRange<Date>?
 
     /// Mean of all point values, computed once in `init` so the area fill's gradient
     /// stop doesn't run an O(n) reduce for every mark on every render.
@@ -200,6 +252,7 @@ public struct TrendChart: View {
         calendar: Calendar = .current,
         onSelectionChange: ((TrendPoint?) -> Void)? = nil,
         accessibilityValue: String? = nil,
+        workoutTimeAxis: ClosedRange<Date>? = nil,
         yAxisStep: Double? = nil,
         showsBarValues: Bool = false,
         largeSelection: Bool = false
@@ -232,6 +285,7 @@ public struct TrendChart: View {
         self.calendar = calendar
         self.onSelectionChange = onSelectionChange
         self.accessibilityValue = accessibilityValue
+        self.workoutTimeAxis = workoutTimeAxis
         self.yAxisStep = yAxisStep
         self.showsBarValues = showsBarValues
         self.largeSelection = largeSelection
@@ -286,16 +340,17 @@ public struct TrendChart: View {
         sharedDateFormatter.string(from: date)
     }
 
+    private static func axisNumberLabel(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0)))
+    }
+
     /// The point nearest a given chart-local x, using the proxy to map back.
     private func nearestPoint(toX x: CGFloat, proxy: ChartProxy, plot: CGRect) -> TrendPoint? {
         guard !points.isEmpty else { return nil }
         // Map the cursor x (relative to the plot area) back to a Date.
         let relX = x - plot.minX
         guard let date: Date = proxy.value(atX: relX) else { return nil }
-        // Find the TrendPoint whose date is closest.
-        return points.min(by: {
-            abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date))
-        })
+        return nearestTrendPoint(to: date, in: points)
     }
 
     /// The days the x-axis marks, so the marks and their label format agree about which days are shown.
@@ -372,6 +427,13 @@ public struct TrendChart: View {
     public var body: some View {
         // Resolve against current data so the marker and readout never refer to a removed date.
         let currentSelection = selectedPoint.flatMap { selected in points.first { $0.date == selected.date } }
+        // All marks share these styles. Resolve them once per chart update instead of rebuilding
+        // the same gradient for every vertex; segment identities and full-resolution data stay intact.
+        let stops = gradient.toStops()
+        let areaFill = LinearGradient(
+            colors: [StrandPalette.sample(stops: stops, at: unit(averageValue)).opacity(0.28), .clear],
+            startPoint: .top, endPoint: .bottom)
+        let lineStroke = valueGradient
         VStack(alignment: .leading, spacing: 8) {
         if largeSelection {
             let point = currentSelection ?? points.last
@@ -467,15 +529,7 @@ public struct TrendChart: View {
                             series: .value("Segment", p.segment)
                         )
                         .interpolationMethod(.catmullRom)
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [
-                                    StrandPalette.sample(stops: gradient.toStops(), at: unit(averageValue)).opacity(0.28),
-                                    Color.clear
-                                ],
-                                startPoint: .top, endPoint: .bottom
-                            )
-                        )
+                        .foregroundStyle(areaFill)
                     }
                 }
                 ForEach(displayPoints) { p in
@@ -486,7 +540,7 @@ public struct TrendChart: View {
                     )
                     .interpolationMethod(.catmullRom)
                     .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                    .foregroundStyle(valueGradient)
+                    .foregroundStyle(lineStroke)
                 }
                 // 18pt dots are invisible on dense series (e.g. a 365-day year) but still cost the
                 // GPU a mark each — hide them past a threshold; the line carries the data there. The gate
@@ -498,7 +552,7 @@ public struct TrendChart: View {
                             y: .value("Value", p.value)
                         )
                         .symbolSize(18)
-                        .foregroundStyle(StrandPalette.sample(stops: gradient.toStops(), at: unit(p.value)))
+                        .foregroundStyle(StrandPalette.sample(stops: stops, at: unit(p.value)))
                     }
                 }
                 // Summary and compact charts retain a dot for each isolated run: without it a valid
@@ -559,6 +613,7 @@ public struct TrendChart: View {
                 }
             }
         }
+        .modifier(WorkoutTimeAxisModifier(workoutTimeAxis))
         .chartYAxis {
             if rendersPersistentYAxis {
                 if let step = yAxisStep, step > 0 {
@@ -569,7 +624,7 @@ public struct TrendChart: View {
                         }
                         AxisValueLabel {
                             if let number = value.as(Double.self) {
-                                Text(number.formatted(.number.precision(.fractionLength(0))))
+                                Text(TrendChart.axisNumberLabel(number))
                                     .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
                             }
                         }

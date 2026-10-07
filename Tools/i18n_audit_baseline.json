@@ -1632,7 +1632,15 @@
     ],
     [
       "Strand/Screens/TestCentreView.swift",
+      "Backfill skin-temp absolutes"
+    ],
+    [
+      "Strand/Screens/TestCentreView.swift",
       "Backfilling…"
+    ],
+    [
+      "Strand/Screens/TestCentreView.swift",
+      "Clear legacy R22 flags on strap"
     ],
     [
       "Strand/Screens/TestCentreView.swift",
@@ -1641,6 +1649,14 @@
     [
       "Strand/Screens/TestCentreView.swift",
       "Connected live"
+    ],
+    [
+      "Strand/Screens/TestCentreView.swift",
+      "Gate off"
+    ],
+    [
+      "Strand/Screens/TestCentreView.swift",
+      "Gate on"
     ],
     [
       "Strand/Screens/TestCentreView.swift",
@@ -1669,6 +1685,10 @@
     [
       "Strand/Screens/TestCentreView.swift",
       "Rows drained (session)"
+    ],
+    [
+      "Strand/Screens/TestCentreView.swift",
+      "Send legacy R22 enable sequence"
     ],
     [
       "Strand/Screens/TestCentreView.swift",

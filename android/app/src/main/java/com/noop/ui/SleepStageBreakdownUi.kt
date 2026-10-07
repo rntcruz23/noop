@@ -61,8 +61,8 @@ internal fun stageSelectionAlpha(stage: String, selectedStage: String?): Float =
  * The four WHOOP-style stage rows that replace the old "label · value" footer grid, read like WHOOP's
  * sleep detail: a colour swatch, the UPPERCASE stage name, the share-of-night % in the stage colour, a
  * segmented [PipBar] (the NOOP signature) tinted in the stage colour, and the right-aligned duration.
- * Same data as the prior footer (rem / deep / light / awake over total) — no new numbers. Mirrors the
- * macOS SleepView.stageBreakdownRows. (PipBar)
+ * Ordered by chart depth (awake / REM / light / deep); the values and colours stay attached to their
+ * stage. Mirrors macOS SleepView.stageBreakdownRows. (PipBar)
  */
 @Composable
 internal fun StageBreakdownRows(
@@ -72,7 +72,7 @@ internal fun StageBreakdownRows(
     onStageSelected: ((String?) -> Unit)? = null,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
-        listOf("REM" to s.rem, "Deep" to s.deep, "Light" to s.light, "Awake" to s.awake).forEach { (stage, minutes) ->
+        listOf("Awake" to s.awake, "REM" to s.rem, "Light" to s.light, "Deep" to s.deep).forEach { (stage, minutes) ->
             StageBreakdownRow(
                 stage, minutes, s.total, stageColorForRamp(stage, palette), stageSharePercent(stage, s),
                 stageSelectionVisual(stage, selectedStage),

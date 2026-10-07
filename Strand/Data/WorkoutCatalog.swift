@@ -59,7 +59,9 @@ enum WorkoutCatalog {
         // Martial arts stays the generic catch-all (#768); the named disciplines below let people who
         // train several of them tell sessions apart. All mat/ring sports: no route, GPS off.
         Sport(name: "Martial arts", isDistanceSport: false),
-        Sport(name: "Jiu-Jitsu", isDistanceSport: false),
+        // Spelled "Jiu jitsu" to match upstream's WHOOP-parity entry (KnownWorkoutType / Android), so
+        // the two catalogues do not offer the same discipline twice under two spellings.
+        Sport(name: "Jiu jitsu", isDistanceSport: false),
         Sport(name: "MMA", isDistanceSport: false),
         Sport(name: "Judo", isDistanceSport: false),
         Sport(name: "Karate", isDistanceSport: false),
@@ -106,7 +108,7 @@ enum WorkoutCatalog {
         Sport(name: "Lacrosse", isDistanceSport: false),
         Sport(name: "Field hockey", isDistanceSport: false),
         Sport(name: "CrossFit", isDistanceSport: false),
-        Sport(name: "Kickboxing", isDistanceSport: false),
+        // Kickboxing sits with the martial-arts disciplines above.
         Sport(name: "Mountain biking", isDistanceSport: false),
         Sport(name: "Skateboarding", isDistanceSport: false),
         Sport(name: "Stand-up paddleboard", isDistanceSport: false),
@@ -143,11 +145,9 @@ enum WorkoutCatalog {
         Sport(name: "Darts", isDistanceSport: false),
         Sport(name: "Disc golf", isDistanceSport: false),
         Sport(name: "Hurling/Camogie", isDistanceSport: false),
-        Sport(name: "Jiu jitsu", isDistanceSport: false),
-        Sport(name: "Judo", isDistanceSport: false),
+        // Jiu jitsu, Judo and Muay Thai sit with the martial-arts disciplines above.
         Sport(name: "Kiteboarding", isDistanceSport: false),
         Sport(name: "Motocross", isDistanceSport: false),
-        Sport(name: "Muay Thai", isDistanceSport: false),
         Sport(name: "Paintball", isDistanceSport: false),
         Sport(name: "Parkour", isDistanceSport: false),
         Sport(name: "Polo", isDistanceSport: false),

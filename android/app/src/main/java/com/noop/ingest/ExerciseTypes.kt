@@ -96,7 +96,9 @@ object ExerciseTypes {
         // Named martial-arts disciplines, so people who train several can tell sessions apart.
         // HC only enumerates the generic MARTIAL_ARTS (plus BOXING, already in NAMES), so these ride
         // on MARTIAL_ARTS for writeback while keeping their own NOOP label. No route → GPS off.
-        "Jiu-Jitsu" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        // Spelled "Jiu jitsu" to match upstream's WHOOP-parity entry, so the picker does not offer
+        // the same discipline twice under two spellings.
+        "Jiu jitsu" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
         "MMA" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
         "Judo" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
         "Karate" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
@@ -150,12 +152,10 @@ object ExerciseTypes {
         "Disc golf" to EX.EXERCISE_TYPE_FRISBEE_DISC,
         // Hurling/Camogie: one entry for both codes, as WHOOP lists them.
         "Hurling/Camogie" to EX.EXERCISE_TYPE_OTHER_WORKOUT,
-        "Jiu jitsu" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
-        "Judo" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
+        // Jiu jitsu, Judo and Muay Thai sit with the martial-arts disciplines above.
         // Kiteboarding: board on water; the nearest HC has.
         "Kiteboarding" to EX.EXERCISE_TYPE_SURFING,
         "Motocross" to EX.EXERCISE_TYPE_OTHER_WORKOUT,
-        "Muay Thai" to EX.EXERCISE_TYPE_MARTIAL_ARTS,
         "Paintball" to EX.EXERCISE_TYPE_OTHER_WORKOUT,
         // Parkour: no close HC type; calisthenics would overstate it.
         "Parkour" to EX.EXERCISE_TYPE_OTHER_WORKOUT,

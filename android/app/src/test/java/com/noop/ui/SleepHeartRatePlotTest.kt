@@ -6,14 +6,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SleepHeartRatePlotTest {
+    /** A bucket whose min and max equal its mean; the plot only reads the mean. */
+    private fun bucket(ts: Long, bpm: Double) = HrBucket(ts, bpm, bpm, bpm)
+
     @Test fun positionsUseTheWholeNightRatherThanSampleIndices() {
-        val plot = sleepHeartRatePlot(listOf(HrBucket(120, 60.0), HrBucket(240, 65.0)), 0, 600)
+        val plot = sleepHeartRatePlot(listOf(bucket(120, 60.0), bucket(240, 65.0)), 0, 600)
         assertEquals(listOf(0.2f, 0.4f), plot.points.map { it.x })
     }
 
     @Test fun missingMinutesBreakTheLineWithoutCompressingTime() {
         val plot = sleepHeartRatePlot(
-            listOf(HrBucket(0, 60.0), HrBucket(60, 62.0), HrBucket(240, 65.0)), 0, 600,
+            listOf(bucket(0, 60.0), bucket(60, 62.0), bucket(240, 65.0)), 0, 600,
         )
         assertEquals(listOf(0, 0, 1), plot.points.map { it.run })
         assertEquals(0.4f, plot.points.last().x, 0f)
@@ -21,8 +24,8 @@ class SleepHeartRatePlotTest {
 
     @Test fun sortsFiltersAndClipsOnlyTheOverlappingFirstBucket() {
         val plot = sleepHeartRatePlot(
-            listOf(HrBucket(180, 65.0), HrBucket(60, 60.0), HrBucket(120, Double.NaN),
-                HrBucket(240, 0.0), HrBucket(300, 70.0), HrBucket(0, 55.0)), 90, 300,
+            listOf(bucket(180, 65.0), bucket(60, 60.0), bucket(120, Double.NaN),
+                bucket(240, 0.0), bucket(300, 70.0), bucket(0, 55.0)), 90, 300,
         )
         assertEquals(listOf(90L, 180L), plot.points.map { it.timestamp })
         assertEquals(0f, plot.points.first().x, 0f)
@@ -50,9 +53,9 @@ class SleepHeartRatePlotTest {
     }
 
     @Test fun invalidWindowIsEmptyAndConstantHeartRateHasAUsableDomain() {
-        assertTrue(sleepHeartRatePlot(listOf(HrBucket(60, 60.0)), 60, 60).points.isEmpty())
+        assertTrue(sleepHeartRatePlot(listOf(bucket(60, 60.0)), 60, 60).points.isEmpty())
         assertTrue(sleepStageHighlights(listOf(PersistedSegment(0, 60, "deep")), "deep", 60, 0).isEmpty())
-        val plot = sleepHeartRatePlot(listOf(HrBucket(0, 60.0), HrBucket(60, 60.0)), 0, 120)
+        val plot = sleepHeartRatePlot(listOf(bucket(0, 60.0), bucket(60, 60.0)), 0, 120)
         assertTrue(plot.domain.start < 60.0)
         assertTrue(plot.domain.endInclusive > 60.0)
     }

@@ -104,7 +104,7 @@ class WorkoutSportTest {
     @Test fun martialArtsDisciplines_areExtras_fallBackToMartialArts() {
         val names = WorkoutSport.all.map { it.name }
         listOf(
-            "Jiu-Jitsu", "MMA", "Judo", "Karate", "Kickboxing",
+            "Jiu jitsu", "MMA", "Judo", "Karate", "Kickboxing",
             "Muay Thai", "Taekwondo", "Wrestling",
         ).forEach { name ->
             val sport = WorkoutSport.all.firstOrNull { it.name == name }

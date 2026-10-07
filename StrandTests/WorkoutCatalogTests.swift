@@ -80,7 +80,7 @@ final class WorkoutCatalogTests: XCTestCase {
     /// them, and default GPS off (mat/ring sports have no route). "Martial arts" stays as the
     /// generic catch-all, and every discipline carries a reference MET for the manual-sheet pre-fill.
     func testMartialArtsDisciplinesExistWithGpsOff() {
-        let disciplines = ["Jiu-Jitsu", "MMA", "Judo", "Karate", "Kickboxing",
+        let disciplines = ["Jiu jitsu", "MMA", "Judo", "Karate", "Kickboxing",
                            "Muay Thai", "Taekwondo", "Wrestling"]
         for name in disciplines {
             let s = WorkoutCatalog.sport(named: name)

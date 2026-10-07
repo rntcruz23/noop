@@ -495,8 +495,8 @@ final class AppModel: ObservableObject {
             // flag → no-op on every subsequent launch; idempotent on a clean DB.
             await self.intelligence.runTimestampHealIfNeeded()
             // One-shot on-upgrade Effort rescore (#313): recompute strain from source across the FULL
-            // history once, so any deep-history rows an older build left on the 0–21 axis regenerate on
-            // the 0–100 axis. Guarded by a persisted flag, so this is a no-op on every subsequent launch.
+            // history and repair sleep rejected by unmatched WRIST_OFF in one pass. Both persisted flags
+            // describe that shared pass; either pending flag triggers it.
             await self.intelligence.runEffortRescoreIfNeeded()
             while !Task.isCancelled {
                 // #547 RE-POLLUTION: a sync since the last tick may have armed a re-heal (its ingest gate
@@ -646,7 +646,8 @@ final class AppModel: ObservableObject {
             // path. Timestamp matches BLEManager.log()'s "HH:mm:ss" so the lines read consistently.
             straplog: { [weak self] line in
                 self?.live.append(log: "[\(AppModel.logTimeFormatter.string(from: Date()))] \(line)")
-            })
+            },
+            ouraNightBand: { [weak self] in self?.ouraNightBand() })   // item 27
         coordinator.start()
         self.deviceRegistry = registry
         // #1303: adoption re-points the strap onto its stable `whoop-<serial>` id inside BLEManager (which
@@ -714,6 +715,7 @@ final class AppModel: ObservableObject {
     /// so that it cannot mark unscored data as scored — so gating on the fingerprint here would be asking
     /// a question whose answer is already known to be "yes, there is work".
     func runDeferredRescoreIfOwed() async {
+        await intelligence.runSleepWearRescoreIfNeeded()
         // A pass already running here holds the owed mark itself and settles it when it finishes; forcing
         // another would only queue a second full pass behind it.
         guard RescoreBackgroundScheduler.isRescoreOwed, !intelligence.computing else { return }
@@ -883,9 +885,10 @@ final class AppModel: ObservableObject {
     }
 
     /// Persist the in-flight manual workout to `UserDefaults` so it survives the app being killed mid-
-    /// session (#529). Called on start + each captured sample. A no-op when nothing is running. Apple has
-    /// no GPS-route session, so every manual workout is the "non-GPS" case and gets this durability ,
-    /// the Apple analogue of Android's `persistNonGpsWorkout`.
+    /// session (#529). Called on start + each captured sample. A no-op when nothing is running. The Apple
+    /// analogue of Android's `persistNonGpsWorkout`. A distance workout records a route as well, and its
+    /// fixes are banked separately by `ActiveRouteStore`: keeping them out of here is what lets this stay
+    /// a small per-sample write instead of rewriting a growing route on every beat.
     private func persistActiveWorkout() {
         guard let w = activeWorkout else { return }
         ActiveWorkoutPersistence.store(
@@ -1669,6 +1672,27 @@ final class AppModel: ObservableObject {
     /// alarm backup took a single time plus a day set, so the control on the alarm screen silently moved
     /// only the evening reminder. Mirrors Android's `reconcileStrapAlarm` which passes `dayOverrides`
     /// to `nextSmartAlarmEpochSec`, and `SmartAlarmScheduler.arm` which reads `targetOverrides`.
+    /// Warn about a strap last seen LOW that has not been heard from since (#2556).
+    ///
+    /// The crossings wired into `live.onBatteryUpdate` only run when a reading ARRIVES, so a strap that
+    /// drains out of range is never judged by them. This reads the last BANKED reading instead, so it works
+    /// precisely when the link does not.
+    ///
+    /// `connected: false` is passed deliberately and is sound rather than a shortcut: a connected strap
+    /// banks a reading about every minute, so its last banked value can never be old enough to clear the
+    /// staleness window. The window is its own connectivity test. Kotlin twin: `StaleBatteryWorker`.
+    @MainActor
+    func checkStrapNotSeen() async {
+        guard let last = await repo.latestBattery() else { return }
+        BatteryNotifier.onStrapNotSeen(
+            lastSocPct: last.soc.map { Int($0.rounded()) },
+            lastTsSec: last.ts,
+            lastCharging: last.charging,
+            nowSec: Int(Date().timeIntervalSince1970),
+            connected: false,
+            enabled: behavior.batteryAlerts)
+    }
+
     func applySmartAlarm() {
         let overrides = WindDownNudge.perDayWakeOverrides
         guard behavior.smartAlarmEnabled else {
@@ -1917,7 +1941,8 @@ final class AppModel: ObservableObject {
     }
 
     private func evaluateIllness(_ days: [DailyMetric]) {
-        guard behavior.illnessWatch, days.count >= 14 else {
+        guard behavior.illnessWatch, days.count >= 14,
+              let latestDay = days.last?.day, latestDay == repo.today?.day else {
             healthAlert = nil; illnessSignal = nil; illnessDistance = nil; return
         }
         Task { [weak self] in
@@ -1953,8 +1978,12 @@ final class AppModel: ObservableObject {
     /// publish the result + the semantic `healthAlert` banner payload.
     private func applyIllnessSignal(_ days: [DailyMetric], alcohol: Bool,
                                     hardOrLateWorkout: Bool, alreadyUnwell: Bool) {
+        // A newer day can arrive while the journal read is in flight. Never publish the older
+        // task's alert over that day's result.
+        guard days.last?.day == repo.days.last?.day, days.last?.day == repo.today?.day else { return }
         let previous = healthAlert
         let recent = Array(days.suffix(2))
+        let latest = days[days.count - 1]
         let base = Array(days.suffix(31).dropLast(3))    // ~28 days ending 3 days ago
         func mean(_ vals: [Double]) -> Double? { vals.isEmpty ? nil : vals.reduce(0, +) / Double(vals.count) }
         func rm(_ kp: (DailyMetric) -> Double?) -> Double? { mean(recent.compactMap(kp)) }
@@ -1964,11 +1993,15 @@ final class AppModel: ObservableObject {
         // engine's gate for actually raising. Skin-temp is already a stored DEVIATION (°C), so it's
         // z-scored against a zero-centred personal spread; the others z-score the raw column.
         func signal(_ kp: (DailyMetric) -> Double?, cfgKey: String, illnessUp: Bool) -> (IllnessSignalEngine.SignalReading, Bool)? {
-            guard let cfg = Baselines.metricCfg[cfgKey], let recentMean = rm(kp) else { return nil }
+            guard let cfg = Baselines.metricCfg[cfgKey], let recentMean = rm(kp),
+                  let latestValue = kp(latest) else { return nil }
             let state = Baselines.foldHistory(base.map(kp), cfg: cfg)
             guard state.usable else { return (IllnessSignalEngine.SignalReading(zIllnessward: 0, present: false), false) }
             let dev = Baselines.deviation(recentMean, state: state)
-            let z = illnessUp ? dev.z : -dev.z   // HRV drop is illness-ward → negate
+            let latestDev = Baselines.deviation(latestValue, state: state)
+            // Keep the two-night smoothing, but only count a signal while the newest night
+            // independently clears the same illness-ward threshold (#2533).
+            let z = illnessUp ? min(dev.z, latestDev.z) : min(-dev.z, -latestDev.z)
             return (IllnessSignalEngine.SignalReading(zIllnessward: z), state.trusted)
         }
 
@@ -1978,8 +2011,8 @@ final class AppModel: ObservableObject {
         // Skin-temp deviation: a stored °C delta. Build a small zero-centred state from its own recent
         // spread so a +0.6 °C reads as a meaningful z without needing a separate baseline column.
         var skin: (IllnessSignalEngine.SignalReading, Bool)? = nil
-        if let recentSkin = rm({ $0.skinTempDevC }) {
-            let z = recentSkin / 0.3     // ~0.3 °C ≈ one personal spread (matches skin_temp floorSpread)
+        if let recentSkin = rm({ $0.skinTempDevC }), let latestSkin = latest.skinTempDevC {
+            let z = min(recentSkin, latestSkin) / 0.3 // ~0.3 °C ≈ one personal spread
             skin = (IllnessSignalEngine.SignalReading(zIllnessward: z), true)
         }
 
@@ -2010,15 +2043,15 @@ final class AppModel: ObservableObject {
 
         // Caller-rendered phrases for the signals that fire (the engine surfaces only the firing ones).
         var labels: [String: String] = [:]
-        if let r = rm({ $0.restingHr.map(Double.init) }), let b = mean(base.compactMap { $0.restingHr.map(Double.init) }), r > b {
+        if let r = latest.restingHr.map(Double.init), let b = mean(base.compactMap { $0.restingHr.map(Double.init) }), r > b {
             let delta = Int((r - b).rounded())
             labels["restingHR"] = String(localized: "RHR +\(delta)")
         }
-        if let r = rm({ $0.avgHrv }), let b = mean(base.compactMap { $0.avgHrv }), b > 0, r < b {
+        if let r = latest.avgHrv, let b = mean(base.compactMap { $0.avgHrv }), b > 0, r < b {
             let percent = Int(((1 - r / b) * 100).rounded())
             labels["hrv"] = String(localized: "HRV −\(percent)%")
         }
-        if let r = rm({ $0.skinTempDevC }), r > 0 {
+        if let r = latest.skinTempDevC, r > 0 {
             // The value is STORED in °C but must be SHOWN in the reader's unit: this label welded "°C"
             // into the translated string, so a Fahrenheit user got "+0.7 °C" from the banner while every
             // other surface rendered the same night as "+1.3 Δ°F".
@@ -2035,7 +2068,7 @@ final class AppModel: ObservableObject {
                 locale: AppLanguage.activeLocale)
             labels["skinTemp"] = String(localized: "Skin temperature \(temperature)")
         }
-        if let r = rm({ $0.respRateBpm }), let b = mean(base.compactMap { $0.respRateBpm }), r > b {
+        if let r = latest.respRateBpm, let b = mean(base.compactMap { $0.respRateBpm }), r > b {
             labels["respiration"] = String(localized: "Respiration up")
         }
 
@@ -2137,6 +2170,28 @@ final class AppModel: ObservableObject {
     var ouraNotifyMaskFull: Bool {
         get { UserDefaults.standard.bool(forKey: Self.ouraNotifyMaskFullKey) }
         set { UserDefaults.standard.set(newValue, forKey: Self.ouraNotifyMaskFullKey) }
+    }
+
+    /// Item 27 (EXPERIMENTAL, default OFF): keep the Oura ring in its daytime-HR mode while the phone's screen
+    /// is off during the DAY, standing it down only for the learned night band (`NightStandDown`), instead
+    /// of on every screen-off. The ring emits daytime heart rate — and the beats behind windowed rMSSD —
+    /// only while a client holds that mode, so with the screen-keyed suspend a pocketed phone empties the
+    /// day. ON costs ring battery (its own daytime PPG); OFF is today's behaviour, and the night is
+    /// unchanged either way. No effect without an Oura ring; cold start (no learned schedule) keeps OFF's rule.
+    static let ouraAllDayLiveHRKey = "noopOuraAllDayLiveHR"
+    var ouraAllDayLiveHR: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.ouraAllDayLiveHRKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.ouraAllDayLiveHRKey) }
+    }
+
+    /// Item 27: the learned night band for the all-day HR stand-down — the SAME midsleep + typical-night
+    /// inputs the battery night-guard reads (`refreshHabitualMidsleep`, hourly), so the two policies share
+    /// one notion of the user's night. nil at cold start.
+    func ouraNightBand() -> NightStandDown.Band? {
+        NightStandDown.band(
+            habitualMidsleepSec: habitualMidsleepCache,
+            typicalSleepHours: BatteryEstimator.typicalSleepHours(
+                nightlyHours: repo.days.compactMap { $0.totalSleepMin.map { $0 / 60.0 } }))
     }
 
     /// Recompute the v5 skin-temp suite snapshots (cycle phase + body clock) from the current history.

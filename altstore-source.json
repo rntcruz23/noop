@@ -38,6 +38,15 @@
           "minOSVersion": "17.0"
         },
         {
+          "version": "12.0.0",
+          "buildVersion": "435",
+          "date": "2026-10-04",
+          "localizedDescription": "NOOP 12.0.0. See the release notes for what changed.",
+          "downloadURL": "https://github.com/ryanbr/noop/releases/download/v12.0.0/NOOP-ios-unsigned-v12.0.0.ipa",
+          "size": 21936724,
+          "minOSVersion": "17.0"
+        },
+        {
           "version": "11.8.0",
           "buildVersion": "400",
           "date": "2026-09-17",

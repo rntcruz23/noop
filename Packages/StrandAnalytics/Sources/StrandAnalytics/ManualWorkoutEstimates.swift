@@ -56,6 +56,8 @@ public enum ManualWorkoutEstimates {
         // The martial-arts family shares the Compendium's 10.3 (judo/jujitsu/karate/kick boxing/
         // tae kwan do code); wrestling has its own lower match-play code.
         "martial arts": 10.3,
+        "jiu jitsu": 10.3,
+        // The fork's earlier catalogue spelling, kept so a workout logged under it still pre-fills.
         "jiu-jitsu": 10.3,
         "mma": 10.3,
         "judo": 10.3,
@@ -121,6 +123,22 @@ public enum ManualWorkoutEstimates {
         "wheelchair": 3.5,
         "gaming": 1.5,
         "motor racing": 2.5,
+        "nordic walking": 4.8,
+        // WHOOP-parity batch 2. Compendium codes where one exists (ballet, billiards, darts, disc
+        // golf, motocross, polo, skydiving); the closest general code otherwise.
+        "ballet": 5.0,
+        "billiards": 2.5,
+        "breakdancing": 7.0,
+        "cheerleading": 6.0,
+        "darts": 2.5,
+        "disc golf": 3.0,
+        "hurling/camogie": 8.0,
+        "kiteboarding": 6.0,
+        "motocross": 4.0,
+        "paintball": 5.0,
+        "parkour": 8.0,
+        "polo": 8.0,
+        "skydiving": 3.5,
     ]
 
     /// The MET for a (possibly free-typed) sport label, or nil for an off-catalogue sport / "Other".

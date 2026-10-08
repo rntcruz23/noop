@@ -117,6 +117,12 @@ public enum KnownWorkoutType: String, CaseIterable, Sendable {
     case wheelchair = "Wheelchair"
     case gaming = "Gaming"
     case motorRacing = "Motor racing"
+    // Named martial-arts disciplines this fork adds beside upstream's Jiu jitsu / Judo / Muay Thai /
+    // Kickboxing (raw values byte-identical to WorkoutCatalog / Android WorkoutSport).
+    case mma = "MMA"
+    case karate = "Karate"
+    case taekwondo = "Taekwondo"
+    case wrestling = "Wrestling"
     case other = "Other"
 
     /// Case-insensitive exact match against a stored/free-typed sport label.
@@ -389,6 +395,17 @@ public enum WorkoutTypeIconography {
         case .wheelchair:           return .system("figure.roll")
         case .gaming:               return .system("gamecontroller.fill")
         case .motorRacing:          return .system("steeringwheel")
+        // The fork's martial-arts disciplines. The obvious martial symbols are taken (martial arts,
+        // kickboxing, boxing, jiu jitsu, judo, muay thai), so these are approximations, each with a
+        // fallback for an OS without the preferred symbol.
+        case .mma:
+            return systemOrCustom("flame.fill", fallbackSystem: "figure.martial.arts")
+        case .karate:
+            return systemOrCustom("hand.point.up.fill", fallbackSystem: "figure.martial.arts")
+        case .taekwondo:
+            return systemOrCustom("figure.cooldown", fallbackSystem: "figure.martial.arts")
+        case .wrestling:
+            return systemOrCustom("figure.2.arms.open", fallbackSystem: "figure.martial.arts")
         case .other:
             return .system("figure.mixed.cardio")
         }
@@ -497,6 +514,10 @@ public enum WorkoutTypeIconography {
         case .wheelchair:           return "system:figure.roll"
         case .gaming:               return "system:gamecontroller.fill"
         case .motorRacing:          return "system:steeringwheel"
+        case .mma:                  return "system:flame.fill"
+        case .karate:               return "system:hand.point.up.fill"
+        case .taekwondo:            return "system:figure.cooldown"
+        case .wrestling:            return "system:figure.2.arms.open"
         case .other:            return "system:figure.mixed.cardio"
         }
     }

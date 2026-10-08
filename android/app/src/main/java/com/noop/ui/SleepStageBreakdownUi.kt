@@ -71,14 +71,19 @@ internal fun StageBreakdownRows(
     selectedStage: String? = null,
     onStageSelected: ((String?) -> Unit)? = null,
 ) {
+    // Tapping a row selects its stage; tapping the selected one again clears the selection.
+    // One line on purpose: SleepStageRowOrderTest ends this function at the first 4-space closing brace.
+    val toggle: (String) -> (() -> Unit)? = { stage -> onStageSelected?.let { select -> { select(if (canonicalStage(selectedStage ?: "") == canonicalStage(stage)) null else stage) } } }
+    // Written out as four literal calls, not a loop: SleepStageRowOrderTest reads this sequence from source.
     Column(verticalArrangement = Arrangement.spacedBy(Metrics.space12)) {
-        listOf("Awake" to s.awake, "REM" to s.rem, "Light" to s.light, "Deep" to s.deep).forEach { (stage, minutes) ->
-            StageBreakdownRow(
-                stage, minutes, s.total, stageColorForRamp(stage, palette), stageSharePercent(stage, s),
-                stageSelectionVisual(stage, selectedStage),
-                onStageSelected?.let { select -> { select(if (canonicalStage(selectedStage ?: "") == canonicalStage(stage)) null else stage) } },
-            )
-        }
+        StageBreakdownRow("Awake", s.awake, s.total, stageColorForRamp("Awake", palette), stageSharePercent("Awake", s),
+            stageSelectionVisual("Awake", selectedStage), toggle("Awake"))
+        StageBreakdownRow("REM", s.rem, s.total, stageColorForRamp("REM", palette), stageSharePercent("REM", s),
+            stageSelectionVisual("REM", selectedStage), toggle("REM"))
+        StageBreakdownRow("Light", s.light, s.total, stageColorForRamp("Light", palette), stageSharePercent("Light", s),
+            stageSelectionVisual("Light", selectedStage), toggle("Light"))
+        StageBreakdownRow("Deep", s.deep, s.total, stageColorForRamp("Deep", palette), stageSharePercent("Deep", s),
+            stageSelectionVisual("Deep", selectedStage), toggle("Deep"))
     }
 }
 
